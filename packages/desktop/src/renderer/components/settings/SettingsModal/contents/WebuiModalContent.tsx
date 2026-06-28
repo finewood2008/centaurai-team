@@ -5,7 +5,7 @@
  */
 
 import { WEBUI_DEFAULT_PORT } from '@/common/config/constants';
-import { dialog, shell, webui, type IWebUIStatus } from '@/common/adapter/ipcBridge';
+import { dialog, shell, webui, type IWebUIStatus, type IWebUIConnectivity } from '@/common/adapter/ipcBridge';
 import { isBackendHttpError } from '@/common/adapter/httpBridge';
 import { configService } from '@/common/config/configService';
 import AionModal from '@/renderer/components/base/AionModal';
@@ -82,6 +82,8 @@ const WebuiModalContent: React.FC = () => {
   const [status, setStatus] = useState<IWebUIStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [startLoading, setStartLoading] = useState(false);
+  const [repairing, setRepairing] = useState(false);
+  const [connectivity, setConnectivity] = useState<IWebUIConnectivity | null>(null);
   const port = WEBUI_DEFAULT_PORT;
   const [webuiEnabled, setWebuiEnabled] = useState(false);
   const [allowRemotePreference, setAllowRemotePreference] = useState(false);
@@ -423,6 +425,49 @@ const WebuiModalContent: React.FC = () => {
     Message.success(t('common.copySuccess'));
   };
 
+  // 修复连接 / Repair connection — force a re-check + heal of the WebUI entry
+  // page so LAN users never get stranded on a blank page, then refresh status.
+  const handleRepairConnection = useCallback(async () => {
+    if (!status?.running) {
+      Message.info(t('settings.webui.repairNoServer'));
+      return;
+    }
+    setRepairing(true);
+    try {
+      const result = await webui.repairConnection.invoke();
+      const health = result?.entryHealth ?? null;
+      const conn = result?.connectivity ?? null;
+      setConnectivity(conn);
+      // Reflect the freshly-computed entry health in the panel.
+      setStatus((prev) => (prev ? { ...prev, entryHealth: health } : prev));
+
+      // Surface the MOST actionable problem first — these are what actually
+      // break "the LAN address won't open", not a corrupt entry page.
+      if (conn && !conn.backendReachable) {
+        Message.error(t('settings.webui.diagBackendDown'));
+      } else if (conn && !conn.allowRemote) {
+        Message.warning(t('settings.webui.diagLoopbackOnly'));
+      } else if (conn && !conn.lanIP) {
+        Message.warning(t('settings.webui.diagNoLanIp'));
+      } else if (conn?.proxy.detected) {
+        Message.warning(t('settings.webui.diagProxyDetected'));
+      } else if (health?.status === 'unavailable') {
+        Message.warning(t('settings.webui.repairUnavailable'));
+      } else if (health?.status === 'healed') {
+        Message.success(t('settings.webui.repairHealed'));
+      } else if (!health && !conn) {
+        Message.error(t('settings.webui.repairFailed'));
+      } else {
+        Message.success(t('settings.webui.repairSucceeded'));
+      }
+    } catch (error) {
+      console.error('[WebuiModal] repair connection failed:', error);
+      Message.error(t('settings.webui.repairFailed'));
+    } finally {
+      setRepairing(false);
+    }
+  }, [status?.running, t]);
+
   // 打开设置新密码弹窗 / Open set new password modal
   const handleResetPassword = () => {
     form.resetFields();
@@ -687,6 +732,92 @@ const WebuiModalContent: React.FC = () => {
                 </Tooltip>
               </div>
             </PreferenceRow>
+          )}
+
+          {/* 连接健康 + 一键修复 / Connection health + one-click repair.
+              entryHealth only exists while the server is running. */}
+          {status?.running && (
+            <PreferenceRow
+              label={t('settings.webui.connectionHealth')}
+              description={<span className='text-t-secondary'>{t('settings.webui.connectionHealthDesc')}</span>}
+            >
+              <div className='flex items-center gap-10px'>
+                {(() => {
+                  const health = status.entryHealth;
+                  const st = health?.status;
+                  const color =
+                    st === 'healthy'
+                      ? 'rgb(var(--success-6))'
+                      : st === 'healed'
+                        ? 'rgb(var(--warning-6))'
+                        : st === 'unavailable'
+                          ? 'rgb(var(--danger-6))'
+                          : 'rgb(var(--primary-6))';
+                  const label =
+                    st === 'healthy'
+                      ? t('settings.webui.connectionHealthy')
+                      : st === 'healed'
+                        ? health && health.healedCount > 0
+                          ? t('settings.webui.connectionHealed', { count: health.healedCount })
+                          : t('settings.webui.connectionHealthy')
+                        : st === 'unavailable'
+                          ? t('settings.webui.connectionUnavailable')
+                          : t('settings.webui.connectionUnknown');
+                  return (
+                    <span className='inline-flex items-center gap-6px text-12px text-t-secondary whitespace-nowrap'>
+                      <span className='inline-block w-8px h-8px rd-50%' style={{ backgroundColor: color }} />
+                      {label}
+                    </span>
+                  );
+                })()}
+                <Button
+                  size='small'
+                  className='rd-100px'
+                  loading={repairing}
+                  onClick={() => void handleRepairConnection()}
+                >
+                  {repairing ? t('settings.webui.repairing') : t('settings.webui.repairConnection')}
+                </Button>
+              </div>
+            </PreferenceRow>
+          )}
+
+          {/* 连通性自检结果 / Connectivity diagnostics from the last repair run. */}
+          {status?.running && connectivity && (
+            <div className='mt-4px mb-12px px-12px py-10px rd-8px bg-fill-2 flex flex-col gap-6px text-12px'>
+              {connectivity.accessUrl && (
+                <div className='flex items-center gap-6px'>
+                  <span className='text-t-secondary'>{t('settings.webui.diagAccessUrl')}</span>
+                  <span className='text-t-primary font-500'>{connectivity.accessUrl}</span>
+                  <button
+                    className='text-primary hover:underline cursor-pointer bg-transparent border-none p-0'
+                    onClick={() => handleCopy(connectivity.accessUrl ?? '')}
+                  >
+                    {t('common.copy', { defaultValue: '复制' })}
+                  </button>
+                </div>
+              )}
+              <div className='flex items-center gap-6px text-t-secondary'>
+                <span
+                  className='inline-block w-8px h-8px rd-50%'
+                  style={{ backgroundColor: connectivity.backendReachable ? 'rgb(var(--success-6))' : 'rgb(var(--danger-6))' }}
+                />
+                {connectivity.backendReachable ? t('settings.webui.diagBackendOk') : t('settings.webui.diagBackendDown')}
+              </div>
+              {!connectivity.allowRemote && (
+                <div className='text-[color:rgb(var(--warning-6))]'>{t('settings.webui.diagLoopbackOnly')}</div>
+              )}
+              {connectivity.proxy.detected && (
+                <div className='text-[color:rgb(var(--warning-6))]'>
+                  {t('settings.webui.diagProxyHint', { ifaces: connectivity.proxy.interfaces.join(', ') })}
+                </div>
+              )}
+              {connectivity.lanIPCandidates.length > 1 && (
+                <div className='text-t-tertiary'>
+                  {t('settings.webui.diagOtherIps', { ips: connectivity.lanIPCandidates.slice(1).join(', ') })}
+                </div>
+              )}
+            </div>
           )}
 
           {/* 允许局域网访问 / Allow LAN Access */}
