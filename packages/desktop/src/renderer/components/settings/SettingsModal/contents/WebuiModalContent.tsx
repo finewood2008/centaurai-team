@@ -785,6 +785,21 @@ const WebuiModalContent: React.FC = () => {
           {/* 连通性自检结果 / Connectivity diagnostics from the last repair run. */}
           {status?.running && connectivity && (
             <div className='mt-4px mb-12px px-12px py-10px rd-8px bg-fill-2 flex flex-col gap-6px text-12px'>
+              {/* Tailscale 优先:从任何地方可达 / Tailscale first — reachable from anywhere. */}
+              {connectivity.tailscale.accessUrl && (
+                <div className='flex items-center gap-6px'>
+                  <span className='text-[color:rgb(var(--success-6))] font-500'>
+                    {t('settings.webui.diagTailscaleUrl')}
+                  </span>
+                  <span className='text-t-primary font-500'>{connectivity.tailscale.accessUrl}</span>
+                  <button
+                    className='text-primary hover:underline cursor-pointer bg-transparent border-none p-0'
+                    onClick={() => handleCopy(connectivity.tailscale.accessUrl ?? '')}
+                  >
+                    {t('common.copy', { defaultValue: '复制' })}
+                  </button>
+                </div>
+              )}
               {connectivity.accessUrl && (
                 <div className='flex items-center gap-6px'>
                   <span className='text-t-secondary'>{t('settings.webui.diagAccessUrl')}</span>
@@ -800,9 +815,13 @@ const WebuiModalContent: React.FC = () => {
               <div className='flex items-center gap-6px text-t-secondary'>
                 <span
                   className='inline-block w-8px h-8px rd-50%'
-                  style={{ backgroundColor: connectivity.backendReachable ? 'rgb(var(--success-6))' : 'rgb(var(--danger-6))' }}
+                  style={{
+                    backgroundColor: connectivity.backendReachable ? 'rgb(var(--success-6))' : 'rgb(var(--danger-6))',
+                  }}
                 />
-                {connectivity.backendReachable ? t('settings.webui.diagBackendOk') : t('settings.webui.diagBackendDown')}
+                {connectivity.backendReachable
+                  ? t('settings.webui.diagBackendOk')
+                  : t('settings.webui.diagBackendDown')}
               </div>
               {!connectivity.allowRemote && (
                 <div className='text-[color:rgb(var(--warning-6))]'>{t('settings.webui.diagLoopbackOnly')}</div>
