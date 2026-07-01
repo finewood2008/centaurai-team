@@ -13,6 +13,7 @@ import { getAgentDisplayName } from '@/renderer/utils/model/agentTypes';
 import { resolveExtensionAssetUrl } from '@/renderer/utils/platform';
 
 type DetectedAgent = {
+  id: string;
   agent_type: string;
   backend?: string;
   icon?: string;
@@ -20,6 +21,7 @@ type DetectedAgent = {
   custom_agent_id?: string;
   isExtension?: boolean;
   avatar?: string;
+  enabled: boolean;
 };
 
 /** Minimal custom-agent fields consumed by the 'custom' card variant. */
@@ -40,6 +42,7 @@ type AgentCardProps =
       type: 'detected';
       agent: DetectedAgent;
       onGoToChat: () => void;
+      onToggle?: (enabled: boolean) => void;
     }
   | {
       type: 'custom';
@@ -55,7 +58,7 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
   const goToChatButtonClassName = '!w-full !justify-center !rounded-10px !text-12px';
 
   if (props.type === 'detected') {
-    const { agent, onGoToChat } = props;
+    const { agent, onGoToChat, onToggle } = props;
     const displayName = getAgentDisplayName(agent);
     const extensionAvatar = resolveExtensionAssetUrl(agent.isExtension ? agent.avatar : undefined);
     const logo =
@@ -84,9 +87,25 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
           </Typography.Text>
         </div>
 
-        <Button size='small' type='secondary' onClick={onGoToChat} className={goToChatButtonClassName}>
-          {t('settings.agentManagement.goToChat')}
-        </Button>
+        <div className='flex flex-col gap-6px'>
+          {onToggle && (
+            <div className='flex items-center justify-center gap-6px'>
+              <Switch size='small' checked={agent.enabled !== false} onChange={onToggle} />
+              <Typography.Text className='text-11px text-t-tertiary'>
+                {agent.enabled !== false ? t('common.enable', { defaultValue: '已启用' }) : t('common.disable', { defaultValue: '已禁用' })}
+              </Typography.Text>
+            </div>
+          )}
+          <Button
+            size='small'
+            type='secondary'
+            onClick={onGoToChat}
+            disabled={agent.enabled === false}
+            className={goToChatButtonClassName}
+          >
+            {t('settings.agentManagement.goToChat')}
+          </Button>
+        </div>
       </div>
     );
   }

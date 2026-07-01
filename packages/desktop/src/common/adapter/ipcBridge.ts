@@ -963,6 +963,8 @@ export const acpConversation = {
     (p) => `/api/agents/${p.id}/enabled`,
     (p) => ({ enabled: p.enabled })
   ),
+  /** Read ALL agent_metadata rows directly from SQLite (bypasses API filter). */
+  getAllAgentsFromDb: bridge.buildProvider<AgentMetadata[], void>('agents.getAllFromDb'),
   checkAgentHealth: httpPost<{ available: boolean; latency?: number; error?: string }, { backend: string }>(
     '/api/agents/health-check'
   ),

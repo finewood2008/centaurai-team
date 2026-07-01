@@ -1,4 +1,4 @@
-# TEAM edition (团队版) build variant.
+# 半人马AI战队版 build variant.
 # Differs from electron-builder.yml ONLY by branding (appId / productName /
 # executableName / linux launcher name). Same full payload as the base (keeps the
 # bundled aioncore backend — the team box is the multi-user LAN server).
@@ -200,7 +200,7 @@ linux:
   description: ${description}
   desktop:
     entry:
-      Name: CentaurAI 团队版
+      Name: CentaurAI 战队版
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;

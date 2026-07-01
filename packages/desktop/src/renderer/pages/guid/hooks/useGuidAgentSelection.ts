@@ -287,28 +287,32 @@ export const useGuidAgentSelection = ({
   }, [selectedAgentKey, availableAgents, assistants, presetEngineOverride]);
   const is_presetAgent = Boolean(selectedAgentInfo?.is_preset);
 
-  // --- SWR: Fetch detected execution engines (shared cache) ---
-  const { data: availableAgentsData } = useSWR<AvailableAgent[]>(DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents);
+  // --- SWR: Fetch detected execution engines (enabled only; disabled merged from cache) ---
+  const { data: availableAgentsData } = useSWR<AgentMetadata[]>(
+    DETECTED_AGENTS_SWR_KEY,
+    fetchDetectedAgents
+  );
 
   // Fetch remote agents from DB and merge into available agents
   const { data: remoteAgentsData } = useSWR('remote-agents.list', () => ipcBridge.remoteAgent.list.invoke());
 
   useEffect(() => {
     if (!availableAgentsData) return;
+
     // Normalise backend /api/agents rows into AvailableAgent shape.
-    // `id` is the canonical row identifier; `custom_agent_id` is a legacy
-    // alias still read by a few downstream consumers (send hook / mention
-    // tokens / preset resolver). Custom-row `icon` is a user-picked emoji,
-    // exposed as `avatar` so AgentPillBar renders the glyph directly
-    // instead of mistaking it for a logo URL.
     const normalisedDetected: AvailableAgent[] = availableAgentsData.map((a) => {
       const asAgent = a as AgentMetadata;
       const isCustomRow = asAgent.agent_source === 'custom';
       return {
-        ...a,
+        agent_type: asAgent.agent_type,
+        agent_source: asAgent.agent_source,
+        backend: asAgent.backend,
+        icon: asAgent.icon,
+        name: asAgent.name,
         id: asAgent.id,
-        custom_agent_id: isCustomRow ? asAgent.id : (a as AvailableAgent).custom_agent_id,
-        avatar: isCustomRow ? asAgent.icon : (a as AvailableAgent).avatar,
+        custom_agent_id: isCustomRow ? asAgent.id : (a as unknown as AvailableAgent).custom_agent_id,
+        avatar: isCustomRow ? asAgent.icon : (a as unknown as AvailableAgent).avatar,
+        enabled: asAgent.enabled,
       };
     });
     const remoteAsAvailable: AvailableAgent[] = (remoteAgentsData || []).map((ra) => ({

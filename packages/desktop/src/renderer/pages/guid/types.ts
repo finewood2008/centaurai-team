@@ -38,6 +38,8 @@ export type AvailableAgent = {
   presetAgentType?: string;
   isExtension?: boolean;
   extensionName?: string;
+  /** Whether the agent is enabled (visible in frontend selector). */
+  enabled?: boolean;
 };
 
 /**

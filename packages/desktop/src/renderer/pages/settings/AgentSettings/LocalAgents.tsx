@@ -6,22 +6,77 @@
 
 import { ipcBridge } from '@/common';
 import type { AgentMetadata } from '@/renderer/utils/model/agentTypes';
+import { DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents } from '@/renderer/utils/model/agentTypes';
 import AionModal from '@/renderer/components/base/AionModal';
-import { useAgents } from '@/renderer/hooks/agent/useAgents';
 import { Button, Typography } from '@arco-design/web-react';
 import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import useSWR, { mutate } from 'swr';
 import AgentCard from './AgentCard';
 import InlineAgentEditor, { type CustomAgentDraft } from './InlineAgentEditor';
 import { getAgentKey } from '@/renderer/pages/guid/hooks/agentSelectionUtils';
+
+/** Local storage key for caching full agent metadata (including disabled agents). */
+const AGENT_CACHE_KEY = 'centaurai.agents.cache';
+
+function loadCachedAgents(): AgentMetadata[] {
+  try {
+    const raw = localStorage.getItem(AGENT_CACHE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedAgents(agents: AgentMetadata[]): void {
+  try {
+    localStorage.setItem(AGENT_CACHE_KEY, JSON.stringify(agents));
+  } catch { /* storage full - silent */ }
+}
 
 const LocalAgents: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  // Single fetch for all agents; both detected and custom lists are derived from it.
-  const { agents: allAgents, revalidate: mutateAgents } = useAgents();
+  // Fetch detected agents (enabled+available only). Disabled agents come from local cache.
+  const { data: apiAgents = [], mutate: mutateApi } = useSWR<AgentMetadata[]>(
+    DETECTED_AGENTS_SWR_KEY,
+    fetchDetectedAgents
+  );
+
+  // On first mount, populate cache from DB so ALL agents (even disabled ones) are known
+  React.useEffect(() => {
+    const cached = loadCachedAgents();
+    if (cached.length === 0) {
+      ipcBridge.acpConversation.getAllAgentsFromDb.invoke().then((all) => {
+        if (all && all.length > 0) {
+          saveCachedAgents(all);
+          mutateApi();
+          mutate(DETECTED_AGENTS_SWR_KEY);
+        }
+      }).catch(() => {});
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Merge API agents with cached disabled agents
+  const allAgents = React.useMemo(() => {
+    const apiIds = new Set(apiAgents.map((a) => a.id));
+    const cached = loadCachedAgents();
+    // API agents always win (they have fresh enabled state)
+    const merged = [...apiAgents];
+    for (const cachedAgent of cached) {
+      if (!apiIds.has(cachedAgent.id)) {
+        // Agent is not in API response → it's disabled
+        merged.push({ ...cachedAgent, enabled: false });
+      }
+    }
+    // Save merged list for next time
+    if (apiAgents.length > 0) {
+      saveCachedAgents(merged);
+    }
+    return merged;
+  }, [apiAgents]);
 
   const detectedAgents = allAgents.filter((a) => a.agent_type !== 'remote' && a.agent_source !== 'custom');
 
@@ -29,6 +84,12 @@ const LocalAgents: React.FC = () => {
 
   const [editorVisible, setEditorVisible] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentMetadata | null>(null);
+
+  const refreshAll = useCallback(async () => {
+    await mutateApi();
+    await mutate(DETECTED_AGENTS_SWR_KEY);
+    await mutate('agents.detected.all');
+  }, [mutateApi]);
 
   const handleSaveCustomAgent = useCallback(
     async (draft: CustomAgentDraft) => {
@@ -46,39 +107,50 @@ const LocalAgents: React.FC = () => {
         } else {
           await ipcBridge.acpConversation.createCustomAgent.invoke(body);
         }
-        await mutateAgents();
+        await refreshAll();
         setEditorVisible(false);
         setEditingAgent(null);
       } catch (err) {
-        // Surface backend rejection (e.g. cli_not_found / acp_init_failed) without crashing.
         console.error('save custom agent failed:', err);
       }
     },
-    [editingAgent, mutateAgents]
+    [editingAgent, refreshAll]
   );
 
   const handleDeleteCustomAgent = useCallback(
     async (agentId: string) => {
       try {
         await ipcBridge.acpConversation.deleteCustomAgent.invoke({ id: agentId });
-        await mutateAgents();
+        await refreshAll();
       } catch (err) {
         console.error('delete custom agent failed:', err);
       }
     },
-    [mutateAgents]
+    [refreshAll]
   );
 
   const handleToggleCustomAgent = useCallback(
     async (agentId: string, enabled: boolean) => {
       try {
         await ipcBridge.acpConversation.setAgentEnabled.invoke({ id: agentId, enabled });
-        await mutateAgents();
+        await refreshAll();
       } catch (err) {
         console.error('toggle custom agent failed:', err);
       }
     },
-    [mutateAgents]
+    [refreshAll]
+  );
+
+  const handleToggleDetectedAgent = useCallback(
+    async (agentId: string, enabled: boolean) => {
+      try {
+        await ipcBridge.acpConversation.setAgentEnabled.invoke({ id: agentId, enabled });
+        await refreshAll();
+      } catch (err) {
+        console.error('toggle detected agent failed:', err);
+      }
+    },
+    [refreshAll]
   );
 
   // 直连模型 first among detected agents
@@ -119,7 +191,12 @@ const LocalAgents: React.FC = () => {
       </div>
       <div className='grid grid-cols-2 gap-10px px-16px md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'>
         {aionrsAgent && (
-          <AgentCard type='detected' agent={aionrsAgent} onGoToChat={() => goToChatWithAgent(aionrsAgent)} />
+          <AgentCard
+            type='detected'
+            agent={aionrsAgent}
+            onGoToChat={() => goToChatWithAgent(aionrsAgent)}
+            onToggle={(enabled) => void handleToggleDetectedAgent(aionrsAgent.id, enabled)}
+          />
         )}
         {otherDetected.map((agent) => (
           <AgentCard
@@ -127,6 +204,7 @@ const LocalAgents: React.FC = () => {
             type='detected'
             agent={agent}
             onGoToChat={() => goToChatWithAgent(agent)}
+            onToggle={(enabled) => void handleToggleDetectedAgent(agent.id, enabled)}
           />
         ))}
       </div>
@@ -166,11 +244,6 @@ const LocalAgents: React.FC = () => {
           overflow: 'auto',
         }}
       >
-        {/* Conditional mount + key unmounts the editor on close so the
-            next `创建自定义 Agent` click always starts from a blank form.
-            The inner useEffect([agent]) only resets when the `agent`
-            reference changes; two consecutive `null` values would not
-            retrigger it. */}
         {editorVisible && (
           <InlineAgentEditor
             key={editingAgent?.id ?? 'new'}
