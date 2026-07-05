@@ -743,9 +743,15 @@ const ToolsModalContent: React.FC = () => {
           </div>
           {/* 图像生成 */}
           <div className='px-[12px] md:px-[32px] py-[24px] bg-2 rd-12px md:rd-16px border border-border-2'>
-            <div className='flex items-center justify-between mb-16px'>
-              <span className='text-14px text-t-primary'>{t('settings.imageGeneration')}</span>
+            <div className='flex items-start justify-between gap-16px mb-16px'>
+              <div className='min-w-0'>
+                <span className='text-14px text-t-primary'>{t('settings.imageGeneration')}</span>
+                <p className='mt-4px mb-0 text-12px leading-18px text-t-secondary'>
+                  {t('settings.imageGenerationDescription')}
+                </p>
+              </div>
               <Switch
+                className='shrink-0'
                 disabled={
                   isUpdatingImageGeneration ||
                   isImageGenerationServerLoading ||

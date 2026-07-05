@@ -354,7 +354,9 @@ const Layout: React.FC<{
                   <img src={appLogo} alt='CentaurAI' className='absolute inset-0 size-full object-contain' />
                 </div>
                 <div className='collapsed-hidden flex flex-col justify-center leading-tight'>
-                  <span className='text-12px text-t-secondary'>半人马AI{IS_DECISION ? '-决策版' : IS_TEAM ? '战队版' : ''}</span>
+                  <span className='text-12px text-t-secondary'>
+                    半人马AI{IS_DECISION ? '-超级参谋' : IS_TEAM ? '超级工作台' : ''}
+                  </span>
                   <span className='text-16px text-t-primary font-semibold'>CentaurAI</span>
                 </div>
                 {isMobile && !collapsed && (

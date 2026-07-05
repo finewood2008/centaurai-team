@@ -82,7 +82,7 @@ export function initAppstoreBridge(): void {
           category: manifest.category,
           type: manifest.type,
           enabled: records[manifest.id]?.enabled ?? false,
-          installed: records[manifest.id]?.installed ?? false,
+          installed: manifest.type === 'local-service' ? true : (records[manifest.id]?.installed ?? false),
           artifacts: manifest.distribution?.artifacts ?? [],
         })),
       };

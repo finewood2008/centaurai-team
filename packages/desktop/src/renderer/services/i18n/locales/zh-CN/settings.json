@@ -487,7 +487,7 @@
   "appearancePanel": "外观",
   "imageGeneration": "图像生成",
   "imageGenerationToggle": "启用图像生成工具",
-  "imageGenerationDescription": "选择默认用于图像工具的已配置模型。",
+  "imageGenerationDescription": "选择默认用于图像工具和图片生成工作台的已配置模型，工作台会复用该模型对应的 API Key。",
   "speechToText": "语音转文字",
   "speechToTextDescription": "配置桌面端和 WebUI 聊天输入框使用的语音转写服务。",
   "speechToTextProvider": "提供商",

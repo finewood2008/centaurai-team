@@ -5,6 +5,7 @@
  */
 
 import { ipcBridge } from '@/common';
+import { emitter } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 
 /**
@@ -49,6 +50,7 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
   }, [onChange]);
 
   useEffect(() => {
+    const handleGeneratedFilesChanged = () => throttled();
     const handleResponse = (data: { type: string; data?: unknown }) => {
       if (data.type === 'acp_tool_call') {
         const acpData = data.data as { update?: { kind?: string; status?: string; title?: string } } | undefined;
@@ -61,8 +63,10 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
         if (toolData?.status === 'completed' && !isNonFileSystemTool(toolData?.name)) throttled();
       }
     };
+    emitter.on('generated-files.changed', handleGeneratedFilesChanged);
     const unsubscribe = ipcBridge.acpConversation.responseStream.on(handleResponse);
     return () => {
+      emitter.off('generated-files.changed', handleGeneratedFilesChanged);
       unsubscribe();
       if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
     };

@@ -81,10 +81,16 @@ export const ToolForm: React.FC<ToolFormProps> = ({ tool, agents, running, disab
     });
   }, [agents, tool.agents]);
 
-  // Default the agent selection to the first eligible agent.
+  // Default the agent selection and repair stale selections when switching tools.
   useEffect(() => {
-    if (!agentKey && eligibleAgents.length > 0) setAgentKey(eligibleAgents[0].id);
-  }, [agentKey, eligibleAgents]);
+    if (usesImageModel) {
+      setAgentKey('');
+      return;
+    }
+    const currentStillEligible = agentKey && eligibleAgents.some((agent) => agent.id === agentKey);
+    if (currentStillEligible) return;
+    setAgentKey(eligibleAgents[0]?.id ?? '');
+  }, [agentKey, eligibleAgents, usesImageModel]);
 
   const handleChange = (name: string, value: string | number | string[]) => {
     setValues((prev) => ({ ...prev, [name]: value }));

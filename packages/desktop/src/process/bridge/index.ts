@@ -16,7 +16,6 @@ import { initImageGenBridge } from './imageGenBridge';
 import { initUserManagementBridge } from './userManagementBridge';
 import { initSharedDriveBridge } from './sharedDriveBridge';
 import { initNasDriveBridge } from './nasDriveBridge';
-import { initVideostudioBridge } from './videostudioBridge';
 import { initAppstoreBridge } from './appstoreBridge';
 import { initLocalModelManagerBridge } from './localModelManagerBridge';
 import { initAgentDbBridge } from './agentDbBridge';
@@ -39,7 +38,6 @@ export function initAllBridges(_deps: BridgeDependencies = {}): void {
   if (MULTI_USER_ENABLED) initUserManagementBridge();
   initSharedDriveBridge();
   initNasDriveBridge();
-  initVideostudioBridge();
   initAppstoreBridge();
   initLocalModelManagerBridge();
   initAgentDbBridge();
@@ -58,7 +56,6 @@ export {
   initUserManagementBridge,
   initSharedDriveBridge,
   initNasDriveBridge,
-  initVideostudioBridge,
   initAppstoreBridge,
   initLocalModelManagerBridge,
 };

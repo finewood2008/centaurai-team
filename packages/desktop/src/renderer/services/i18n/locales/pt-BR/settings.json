@@ -442,7 +442,7 @@
   "appearancePanel": "Aparência",
   "imageGeneration": "Geração de Imagens",
   "imageGenerationToggle": "Habilitar ferramenta de geração de imagens",
-  "imageGenerationDescription": "Escolha qual modelo configurado capaz de gerar imagens a ferramenta deve usar por padrão.",
+  "imageGenerationDescription": "Escolha o modelo configurado com suporte a imagens usado pelas ferramentas de imagem e pela bancada de geração. A bancada reutiliza a API Key desse modelo.",
   "speechToText": "Voz para Texto",
   "speechToTextDescription": "Configure o provedor de entrada de voz usado pela caixa de bate-papo no desktop e WebUI.",
   "speechToTextProvider": "Provedor",

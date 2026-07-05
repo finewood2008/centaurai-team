@@ -62,7 +62,8 @@ const AppCard: React.FC<{
 }> = ({ app, lang, t, desktop, busy, onInstall, onLaunch }) => {
   const tone = toneFor(app.id);
   const artifacts: IAppStoreArtifact[] = app.artifacts || [];
-  const comingSoon = artifacts.length === 0;
+  const localService = isVideoApp(app);
+  const comingSoon = artifacts.length === 0 && !(desktop && localService);
 
   return (
     <div

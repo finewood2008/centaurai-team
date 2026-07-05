@@ -117,6 +117,15 @@ export type ToolDef = {
    * skills). Empty/undefined means a pure MCP/prompt run.
    */
   injectSkills?: string[];
+  /**
+   * When present, text output is written into the created conversation
+   * workspace as a Markdown artifact, so it appears in the temporary workspace
+   * panel and Content Hub automatically.
+   */
+  persistTextOutput?: {
+    fileNameSuffix: string;
+    title: string;
+  };
 };
 
 /** Form values keyed by `ToolField.name`. */
@@ -130,11 +139,34 @@ export type ToolImageResult = {
   dataUrl: string;
 };
 
+/** Coarse-grained progress for fixed workbench/tool workflows. */
+export type ToolRunProgress = {
+  percent: number;
+  label: string;
+  step?: number;
+  total?: number;
+};
+
+/** Timeline event emitted while a tool/workbench run is executing. */
+export type ToolRunLogEvent = {
+  id: string;
+  at: number;
+  kind: 'info' | 'success' | 'warning' | 'error' | 'agent' | 'tool' | 'file';
+  title: string;
+  detail?: string;
+};
+
 /** Result of a completed tool run. */
 export type ToolRunResult = {
   conversation_id: string;
+  /** True when the backing conversation is internal to a workbench. */
+  hiddenConversation?: boolean;
+  /** Conversation workspace used by the run, when one exists. */
+  workspace?: string;
   /** Final assistant text (for text tools, or status text for image tools). */
   text: string;
   /** Generated images (for image tools). */
   images: ToolImageResult[];
+  /** Text/document artifacts saved into the workspace for Content Hub. */
+  files?: string[];
 };

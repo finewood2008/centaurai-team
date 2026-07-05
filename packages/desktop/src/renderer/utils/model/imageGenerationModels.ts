@@ -10,7 +10,7 @@ import { configService } from '@/common/config/configService';
 import type { ConfigKeyMap } from '@/common/config/configKeys';
 import { removeImageGenerationEnvKeys, resolveImageGenerationMcpEnv } from '@/common/config/imageGenerationMcpEnv';
 import { BUILTIN_IMAGE_GEN_ID, BUILTIN_IMAGE_GEN_NAME, type IProvider } from '@/common/config/storage';
-import { isImageGenSupported } from '@/common/utils/imageModelAllowlist';
+import { buildSelectableImageGenerationModels } from '@/common/utils/imageModelAllowlist';
 
 export type ImageModelRegistry = NonNullable<ConfigKeyMap['tools.imageGenerationModels']>;
 export type ImageGenerationModelSelection = ConfigKeyMap['tools.imageGenerationModel'];
@@ -63,13 +63,10 @@ export const buildImageGenerationModelProviders = (
   return (providers ?? [])
     .map((provider) => {
       const explicitModels = registry?.[provider.id] ?? [];
-      const detectedModels = (provider.models ?? []).filter(
-        (modelName) => isImageGenSupported(provider, modelName) || explicitModels.includes(modelName)
-      );
-      const selectedModel = selected?.id === provider.id && selected.use_model ? [selected.use_model] : [];
+      const selectedModel = selected?.id === provider.id ? selected.use_model : undefined;
       return {
         ...provider,
-        models: uniqueModels([...detectedModels, ...explicitModels, ...selectedModel]),
+        models: buildSelectableImageGenerationModels(provider, explicitModels, selectedModel),
       };
     })
     .filter((provider) => provider.models.length > 0);

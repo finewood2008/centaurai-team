@@ -677,24 +677,16 @@ const ElectronWebviewHost: React.FC<WebviewHostProps> = ({
  * caller can fall back to the raw URL.
  *
  * Image workbench: `centaur-image-workbench://app/index.html?...` →
- * `<origin>/workbench/image/index.html?...`. Provider configuration stays inside
- * the workbench; users bring their own API endpoint and key.
+ * `<origin>/workbench/image/index.html?...`. Provider configuration comes from
+ * Settings > Tools on the server; the workbench receives only a managed profile.
  *
- * Video workbench: `http://localhost:3000/workbench/video/...` (the host opencut,
- * run with basePath) → `<origin>/workbench/video/...`, served same-origin by the
- * WebUI reverse proxy (localhost:3000 would be the browser's OWN machine).
  */
 export function adaptWorkbenchUrlForBrowser(rawUrl: string): string | null {
   if (rawUrl.startsWith('centaur-image-workbench://')) {
-    const origin = window.location.origin;
-    const qIndex = rawUrl.indexOf('?');
-    const params = new URLSearchParams(qIndex >= 0 ? rawUrl.slice(qIndex + 1) : '');
-    const query = params.toString();
-    return `${origin}/workbench/image/index.html${query ? `?${query}` : ''}`;
-  }
-  if (rawUrl.startsWith('http://localhost:3000/workbench/video')) {
     const u = new URL(rawUrl);
-    return `${window.location.origin}${u.pathname}${u.search}`;
+    const filePath = u.pathname.replace(/^\/+/, '') || 'index.html';
+    const origin = window.location.origin;
+    return `${origin}/workbench/image/${filePath}${u.search}`;
   }
   return null;
 }

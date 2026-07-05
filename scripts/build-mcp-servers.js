@@ -31,18 +31,11 @@ const SHARED_OPTIONS = {
 };
 
 async function main() {
-  await Promise.all([
-    esbuild.build({
-      ...SHARED_OPTIONS,
-      entryPoints: [path.join(ROOT, 'packages/desktop/src/process/resources/builtinMcp/imageGenServer.ts')],
-      outfile: path.join(ROOT, 'out/main/builtin-mcp-image-gen.js'),
-    }),
-    esbuild.build({
-      ...SHARED_OPTIONS,
-      entryPoints: [path.join(ROOT, 'packages/desktop/src/process/resources/builtinMcp/videoEditorServer.ts')],
-      outfile: path.join(ROOT, 'out/main/builtin-mcp-video-editor.js'),
-    }),
-  ]);
+  await esbuild.build({
+    ...SHARED_OPTIONS,
+    entryPoints: [path.join(ROOT, 'packages/desktop/src/process/resources/builtinMcp/imageGenServer.ts')],
+    outfile: path.join(ROOT, 'out/main/builtin-mcp-image-gen.js'),
+  });
 }
 
 main().catch((err) => {

@@ -5,7 +5,11 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ADMIN_FRONTEND_USER_ID, CHANNEL_BINDINGS_STORAGE_KEY } from '@/common/utils/frontendUserScope';
+import {
+  ADMIN_FRONTEND_USER_ID,
+  CHANNEL_BINDINGS_STORAGE_KEY,
+  setCurrentFrontendUserId,
+} from '@/common/utils/frontendUserScope';
 
 const mocks = vi.hoisted(() => ({
   httpRequest: vi.fn(),
@@ -66,15 +70,27 @@ const rawChannelUser = (id: string, platformUserId = id) => ({
 });
 
 const mockCurrentUser = (userId: string) => {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ success: true, user: { id: userId, username: userId } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
-  );
+  Object.defineProperty(window, 'electronAPI', {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(window, '__backendPort', {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(window, '__backendHost', {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(window, '__clientMode', {
+    value: undefined,
+    configurable: true,
+    writable: true,
+  });
+  setCurrentFrontendUserId(userId);
 };
 
 describe('channel frontend bindings', () => {
@@ -82,7 +98,11 @@ describe('channel frontend bindings', () => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
     window.localStorage.clear();
-    delete (window as Window & { electronAPI?: unknown }).electronAPI;
+    Object.defineProperty(window, 'electronAPI', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
   });
 
   afterEach(() => {

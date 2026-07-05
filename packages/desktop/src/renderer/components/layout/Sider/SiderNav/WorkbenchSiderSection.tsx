@@ -15,7 +15,6 @@ import { blurActiveElement } from '@renderer/utils/ui/focus';
 import SiderItem from '../SiderItem';
 import SiderWorkbenchEntry from './SiderWorkbenchEntry';
 
-/** Opens the embedded 半人马 AI 图形工作台 (centaurai-image) directly, not the hub. */
 const WORKBENCH_ROUTE = '/workbench?app=image';
 
 type SiderTooltipProps = React.ComponentProps<typeof Tooltip>;
@@ -31,8 +30,7 @@ interface WorkbenchSiderSectionProps {
 /**
  * 「AI工作台」sider section — sits just below the 智囊团 (TeamSiderSection). The
  * section header carries a ➕ that opens the embedded 半人马 AI 图形工作台; the
- * single listed entry is the same workbench. Both desktop and LAN/WebUI browsers
- * use it (the page falls back to an <iframe> in a browser).
+ * listed entries open the native workbenches.
  */
 const WorkbenchSiderSection: React.FC<WorkbenchSiderSectionProps> = ({
   isMobile,
@@ -106,12 +104,14 @@ const WorkbenchSiderSection: React.FC<WorkbenchSiderSectionProps> = ({
         </Tooltip>
       </div>
       {expanded && (
-        <SiderItem
-          icon={<Picture theme='outline' size='16' fill='currentColor' />}
-          name={t('toolbox.imageWorkbench.title')}
-          selected={isActive}
-          onClick={openWorkbench}
-        />
+        <>
+          <SiderItem
+            icon={<Picture theme='outline' size='16' fill='currentColor' />}
+            name={t('toolbox.imageWorkbench.title')}
+            selected={isActive}
+            onClick={openWorkbench}
+          />
+        </>
       )}
     </div>
   );

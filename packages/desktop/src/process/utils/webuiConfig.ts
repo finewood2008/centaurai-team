@@ -13,6 +13,10 @@ import { httpRequest } from '@/common/adapter/httpBridge';
 import { startWebHost, type WebHostHandle, type EntryHealth } from '@aionui/web-host';
 import { getDataPath } from './utils';
 import { IS_TEAM, MULTI_USER_ENABLED } from '@/common/config/constants';
+import type { IProvider } from '@/common/config/storage';
+import type { ConfigKeyMap } from '@/common/config/configKeys';
+import { resolveImageGenerationMcpEnv } from '@/common/config/imageGenerationMcpEnv';
+import { findFirstSelectableImageGenerationModel } from '@/common/utils/imageModelAllowlist';
 
 const WEBUI_CONFIG_FILE = 'webui.config.json';
 
@@ -33,6 +37,50 @@ const DESKTOP_WEBUI_ENABLED_KEY = 'webui.desktop.enabled';
 const DESKTOP_WEBUI_ALLOW_REMOTE_KEY = 'webui.desktop.allowRemote';
 const DESKTOP_WEBUI_PORT_KEY = 'webui.desktop.port';
 const DESKTOP_NAS_ROOT_KEY = 'webui.desktop.nasRootDir';
+
+type LanImageWorkbenchConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  profileName?: string;
+  model?: string;
+  apiMode?: 'images' | 'responses';
+  streamImages?: boolean;
+  streamPartialImages?: number;
+};
+
+type ImageModelRegistry = NonNullable<ConfigKeyMap['tools.imageGenerationModels']>;
+
+function buildImageWorkbenchConfigFromProvider(
+  provider: IProvider,
+  model: string,
+  overrides: { apiKey?: string; baseUrl?: string; model?: string }
+): LanImageWorkbenchConfig | undefined {
+  const key = overrides.apiKey || provider.api_key?.trim();
+  if (!key) return undefined;
+  return {
+    apiKey: key,
+    baseUrl: overrides.baseUrl || provider.base_url?.trim(),
+    profileName: provider.name?.trim(),
+    model: overrides.model || model,
+    apiMode: 'images',
+    streamImages: false,
+    streamPartialImages: 0,
+  };
+}
+
+function findAutoImageWorkbenchConfig(
+  providers: IProvider[],
+  registry: ImageModelRegistry | undefined,
+  overrides: { apiKey?: string; baseUrl?: string; model?: string }
+): LanImageWorkbenchConfig | undefined {
+  for (const provider of providers) {
+    const model = findFirstSelectableImageGenerationModel(provider, registry?.[provider.id]);
+    if (!model) continue;
+    const config = buildImageWorkbenchConfigFromProvider(provider, model, overrides);
+    if (config) return config;
+  }
+  return undefined;
+}
 
 /**
  * Resolve the enterprise network-drive root browsed read-only at /api/nas/*.
@@ -65,26 +113,53 @@ export async function resolveNasRootDir(): Promise<string | undefined> {
 }
 
 /**
- * Resolve the server-held image workbench API key for browser/LAN users.
+ * Resolve the server-held image workbench config for browser/LAN users.
  *
- * Best-effort: an explicit `AIONUI_IMAGE_WORKBENCH_KEY` env wins, else we reuse
- * the configured image-generation model's key. Undefined → the /workbench/image
- * proxy passes the client's own Authorization through (the desktop behavior), so
- * the feature still works; injecting a shared key just spares each LAN user from
- * pasting one and keeps the key off the wire.
+ * Priority:
+ * 1. explicit env key/base URL for headless installs/tests;
+ * 2. Settings > Tools > image-generation model resolved against providers;
+ * 3. first available image-generation model detected from configured providers.
+ *
+ * The returned key is only injected by the WebHost proxy. LAN browsers receive a
+ * placeholder key so the workbench UI treats the profile as configured, but the
+ * real key never leaves this process.
  */
-async function resolveImageWorkbenchKey(): Promise<string | undefined> {
+export async function resolveImageWorkbenchConfig(): Promise<LanImageWorkbenchConfig | undefined> {
   const fromEnv = process.env.AIONUI_IMAGE_WORKBENCH_KEY?.trim();
-  if (fromEnv) return fromEnv;
+  const envBaseUrl = process.env.AIONUI_IMAGE_UPSTREAM_URL?.trim();
+  const envModel = process.env.AIONUI_IMAGE_WORKBENCH_MODEL?.trim();
+
   try {
     const settings = await httpRequest<Record<string, unknown>>('GET', '/api/settings/client');
-    const model = settings?.['tools.imageGenerationModel'] as { api_key?: string } | undefined;
-    const key = model?.api_key?.trim();
-    if (key) return key;
+    const selected = settings?.['tools.imageGenerationModel'] as
+      | Partial<ConfigKeyMap['tools.imageGenerationModel']>
+      | undefined;
+    const registry = settings?.['tools.imageGenerationModels'] as ImageModelRegistry | undefined;
+    const providers = (await httpRequest<IProvider[]>('GET', '/api/providers')) || [];
+
+    if (selected?.id && selected.use_model) {
+      const resolution = resolveImageGenerationMcpEnv(selected, providers);
+      if (resolution.ok === true) {
+        const selectedConfig = buildImageWorkbenchConfigFromProvider(resolution.provider, resolution.model, {
+          apiKey: fromEnv,
+          baseUrl: envBaseUrl,
+          model: envModel,
+        });
+        if (selectedConfig) return selectedConfig;
+      } else if (resolution.ok === false) {
+        console.error('[WebUI] Failed to resolve image workbench provider:', resolution.message);
+      }
+    }
+
+    return (
+      findAutoImageWorkbenchConfig(providers, registry, { apiKey: fromEnv, baseUrl: envBaseUrl, model: envModel }) ??
+      (fromEnv ? { apiKey: fromEnv, baseUrl: envBaseUrl, model: envModel } : undefined)
+    );
   } catch (error) {
-    console.error('[WebUI] Failed to read image workbench key from backend:', error);
+    console.error('[WebUI] Failed to read image workbench config from backend:', error);
   }
-  return undefined;
+
+  return fromEnv ? { apiKey: fromEnv, baseUrl: envBaseUrl, model: envModel } : undefined;
 }
 
 type WebUIDesktopPreferences = {
@@ -452,7 +527,8 @@ export async function startDesktopWebUI(opts: { port?: number; allowRemote?: boo
     imageWorkbenchDir: app.isPackaged
       ? path.join(__dirname, '../renderer/centaur-image-workbench')
       : path.resolve(process.cwd(), 'public/centaur-image-workbench'),
-    imageKey: await resolveImageWorkbenchKey(),
+    imageWorkbenchConfig: await resolveImageWorkbenchConfig(),
+    imageWorkbenchConfigResolver: resolveImageWorkbenchConfig,
     // Must align with the desktop IPC path's backend dataDir (src/index.ts), otherwise
     // users see divergent SQLite state between desktop app and bundled WebUI.
     dataDir: getDataPath(),

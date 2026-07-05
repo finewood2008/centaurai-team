@@ -451,6 +451,14 @@ export const application = {
     })
   ),
   getPath: bridge.buildProvider<string, { name: 'desktop' | 'home' | 'downloads' }>('app.get-path'),
+  indexKnowledgeFolder: bridge.buildProvider<
+    { jobId: string },
+    { path: string; endpoint?: string; includeVideo?: boolean }
+  >('app.index-knowledge-folder'),
+  knowledgeIndexStatus: bridge.buildProvider<NasIndexProgressDTO | null, { jobId: string }>(
+    'app.knowledge-index-status'
+  ),
+  knowledgeIndexCancel: bridge.buildProvider<boolean, { jobId: string }>('app.knowledge-index-cancel'),
   // Write a base64-decoded binary file to disk (Electron main has Node fs; the
   // aioncore /api/fs/write is text-only). Used to save generated .docx etc.
   saveBinaryFile: bridge.buildProvider<
@@ -752,6 +760,7 @@ export type NasIndexProgressDTO = {
   pruned: number;
   current?: string;
   error?: string;
+  cancelled?: boolean;
 };
 
 export type NasTrashEntryDTO = {
@@ -1436,27 +1445,6 @@ export const webui = {
   generateQRToken: httpPost<{ token: string; expires_at_ms: number }, void>('/api/webui/generate-qr-token'),
 };
 
-// ---------------------------------------------------------------------------
-// Centaur Video Workbench (opencut-classic / Next.js). The main process spawns
-// the local dev server on demand so the embedded webview has a backing origin;
-// an already-running healthy server on the port is reused instead of spawned.
-// ---------------------------------------------------------------------------
-export type IVideoStudioStatus = {
-  running: boolean;
-  port?: number;
-  url?: string;
-  /** True when an already-running server was reused instead of spawned. */
-  reused?: boolean;
-  error?: string;
-};
-
-export const videostudio = {
-  getStatus: bridge.buildProvider<IVideoStudioStatus, void>('videostudio.get-status'),
-  start: bridge.buildProvider<IVideoStudioStatus, void>('videostudio.start'),
-  stop: bridge.buildProvider<void, void>('videostudio.stop'),
-  statusChanged: bridge.buildEmitter<IVideoStudioStatus>('videostudio.status-changed'),
-};
-
 /** A per-OS downloadable standalone build, as exposed to the renderer. */
 export interface IAppStoreArtifact {
   os: string;
@@ -1764,6 +1752,11 @@ export interface ICreateConversationParams {
     remote_agent_id?: string;
     extra_skill_paths?: string[];
     team_id?: string;
+    /** Internal workbench runs are persisted for files but hidden from chat history. */
+    hidden_from_sidebar?: boolean;
+    workbench_id?: string;
+    workbench_title?: string;
+    workbench_kind?: string;
   };
 }
 

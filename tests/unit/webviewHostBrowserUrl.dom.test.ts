@@ -29,29 +29,18 @@ describe('adaptWorkbenchUrlForBrowser — image workbench', () => {
     expect(u.searchParams.get('profileName')).toBeNull();
     expect(u.searchParams.get('apiKey')).toBeNull();
   });
-});
 
-describe('adaptWorkbenchUrlForBrowser — video workbench', () => {
-  it('maps the host opencut localhost URL to the same-origin reverse-proxy route, preserving path + query', () => {
-    const out = adaptWorkbenchUrlForBrowser('http://localhost:3000/workbench/video/editor/abc?x=1');
-    expect(out).not.toBeNull();
-    const u = new URL(out!);
-    // Same-origin (the WebUI server), NOT the browser's own localhost:3000.
-    expect(u.origin).toBe(ORIGIN);
-    expect(u.pathname).toBe('/workbench/video/editor/abc');
-    expect(u.search).toBe('?x=1');
-  });
-
-  it('maps the default projects URL', () => {
-    const out = adaptWorkbenchUrlForBrowser('http://localhost:3000/workbench/video/projects');
-    expect(out).toBe(`${ORIGIN}/workbench/video/projects`);
+  it('preserves custom-protocol HTML entry filenames for sibling workbenches', () => {
+    expect(adaptWorkbenchUrlForBrowser('centaur-image-workbench://app/comfyui-simple.html')).toBe(
+      `${ORIGIN}/workbench/image/comfyui-simple.html`
+    );
   });
 });
 
 describe('adaptWorkbenchUrlForBrowser — no browser equivalent', () => {
   it('returns null so the caller falls back to the raw URL', () => {
     expect(adaptWorkbenchUrlForBrowser('https://example.com/foo')).toBeNull();
-    // A non-basePath localhost video URL has no mapping (only /workbench/video does).
+    expect(adaptWorkbenchUrlForBrowser('http://localhost:5173/workbench')).toBeNull();
     expect(adaptWorkbenchUrlForBrowser('http://localhost:3000/projects')).toBeNull();
   });
 });

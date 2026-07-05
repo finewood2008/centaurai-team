@@ -99,7 +99,6 @@ extraResources:
     to: app.png
   - from: resources/client-mode.flag
     to: client-mode.flag
-
 win:
   target:
     - nsis

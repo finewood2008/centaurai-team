@@ -487,7 +487,7 @@
   "appearancePanel": "Appearance",
   "imageGeneration": "Image Generation",
   "imageGenerationToggle": "Enable image generation tool",
-  "imageGenerationDescription": "Choose which configured image-capable model the tool should use by default.",
+  "imageGenerationDescription": "Choose the configured image-capable model used by image tools and the image workbench. The workbench reuses that model's API key.",
   "speechToText": "Speech to Text",
   "speechToTextDescription": "Configure the voice input provider used by the chat box on desktop and WebUI.",
   "speechToTextProvider": "Provider",

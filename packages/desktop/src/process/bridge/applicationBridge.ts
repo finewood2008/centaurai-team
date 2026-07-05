@@ -6,18 +6,26 @@
 
 import type { BrowserWindow } from 'electron';
 import { app } from 'electron';
+import crypto from 'node:crypto';
+import { existsSync, statSync } from 'node:fs';
+import path from 'node:path';
+import { indexNasFolder } from '@aionui/web-host';
 import { ipcBridge } from '@/common';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { getZoomFactor, setZoomFactor } from '@process/utils/zoom';
 import { getCdpStatus, updateCdpConfig } from '@process/utils/configureChromium';
 import { getGpuStatus, setGpuUserOverride } from '@process/utils/gpuRecovery';
 import { initApplicationBridgeCore } from './applicationBridgeCore';
-import type { IStartOnBootStatus } from '@/common/adapter/ipcBridge';
+import type { IStartOnBootStatus, NasIndexProgressDTO } from '@/common/adapter/ipcBridge';
 
 let mainWindowRef: BrowserWindow | null = null;
 
 const START_ON_BOOT_UNSUPPORTED_MESSAGE = 'Start on boot is only available in packaged macOS and Windows apps.';
 export const START_ON_BOOT_WINDOWS_ARG = '--start-on-boot';
+type KnowledgeIndexJob = NasIndexProgressDTO & { cancelled?: boolean };
+const knowledgeIndexJobs = new Map<string, KnowledgeIndexJob>();
+const activeKnowledgeIndexByRoot = new Map<string, string>();
+const isTerminalKnowledgeIndex = (job?: KnowledgeIndexJob): boolean => job?.phase === 'done' || job?.phase === 'error';
 
 const isStartOnBootSupported = (): boolean => {
   return app.isPackaged && (process.platform === 'darwin' || process.platform === 'win32');
@@ -98,6 +106,69 @@ export function initApplicationBridge(): void {
   // Platform-agnostic handlers: systemInfo, updateSystemInfo, getPath
   initApplicationBridgeCore();
 
+  ipcBridge.application.indexKnowledgeFolder.provider(async ({ path: folderPath, endpoint, includeVideo }) => {
+    const jobId = crypto.randomUUID();
+    const root = path.resolve(folderPath || '');
+    const fail = (error: string) => {
+      knowledgeIndexJobs.set(jobId, {
+        phase: 'error',
+        total: 0,
+        done: 0,
+        failed: 0,
+        skipped: 0,
+        pruned: 0,
+        error,
+      });
+      return { jobId };
+    };
+    try {
+      if (!folderPath || !existsSync(root) || !statSync(root).isDirectory()) return fail('INVALID_FOLDER');
+    } catch {
+      return fail('INVALID_FOLDER');
+    }
+
+    const running = activeKnowledgeIndexByRoot.get(root);
+    if (running && !isTerminalKnowledgeIndex(knowledgeIndexJobs.get(running))) return { jobId: running };
+
+    activeKnowledgeIndexByRoot.set(root, jobId);
+    knowledgeIndexJobs.set(jobId, { phase: 'walking', total: 0, done: 0, failed: 0, skipped: 0, pruned: 0 });
+    void indexNasFolder(root, '', {
+      endpoint: endpoint || 'http://127.0.0.1:8618',
+      includeVideo,
+      onProgress: (progress) => {
+        const cancelled = knowledgeIndexJobs.get(jobId)?.cancelled;
+        knowledgeIndexJobs.set(jobId, { ...progress, cancelled });
+      },
+      isCancelled: () => knowledgeIndexJobs.get(jobId)?.cancelled === true,
+    })
+      .catch((error) => {
+        const prev = knowledgeIndexJobs.get(jobId);
+        knowledgeIndexJobs.set(jobId, {
+          phase: 'error',
+          total: prev?.total ?? 0,
+          done: prev?.done ?? 0,
+          failed: prev?.failed ?? 0,
+          skipped: prev?.skipped ?? 0,
+          pruned: prev?.pruned ?? 0,
+          error: String((error as Error)?.message ?? error),
+        });
+      })
+      .finally(() => {
+        if (activeKnowledgeIndexByRoot.get(root) === jobId) activeKnowledgeIndexByRoot.delete(root);
+        setTimeout(() => knowledgeIndexJobs.delete(jobId), 60_000);
+      });
+    return { jobId };
+  });
+
+  ipcBridge.application.knowledgeIndexStatus.provider(async ({ jobId }) => knowledgeIndexJobs.get(jobId) ?? null);
+
+  ipcBridge.application.knowledgeIndexCancel.provider(async ({ jobId }) => {
+    const job = knowledgeIndexJobs.get(jobId);
+    if (!job) return false;
+    job.cancelled = true;
+    return true;
+  });
+
   ipcBridge.application.restart.provider(async () => {
     // Backend subprocess shutdown is handled by backendManager.stop() in the
     // main window's before-quit hook; agent children are killed transitively
@@ -148,7 +219,6 @@ export function initApplicationBridge(): void {
   ipcBridge.application.saveBinaryFile.provider(async ({ dir, fileName, base64 }) => {
     try {
       const fs = await import('node:fs');
-      const path = await import('node:path');
       fs.mkdirSync(dir, { recursive: true });
       const safeName = fileName.replace(/[\\/]+/g, '_');
       const target = path.join(dir, safeName);

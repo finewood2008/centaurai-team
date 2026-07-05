@@ -44,6 +44,9 @@ interface EventTypes {
   'chat.history.refresh': void;
   // 智囊团产出列表变化（新增一份方案书）/ Meeting outputs list changed
   'meeting.outputs.changed': void;
+  // Generated files changed outside an agent tool stream, e.g. toolbox output
+  // archived into a workspace after the assistant turn completes.
+  'generated-files.changed': void;
   // 从工作区侧栏的「会议产出」点开某场方案书 / Reopen a meeting record's 方案书
   'meeting.open.record': [{ teamId: string; recordId: string }];
   // 会话删除事件 / Conversation deletion event

@@ -442,7 +442,7 @@
   "appearancePanel": "Görünüm",
   "imageGeneration": "Görüntü Oluşturma",
   "imageGenerationToggle": "Görüntü oluşturma aracını etkinleştir",
-  "imageGenerationDescription": "Aracın varsayılan olarak hangi yapılandırılmış görüntü yetenekli modeli kullanacağını seçin.",
+  "imageGenerationDescription": "Görüntü araçları ve görüntü oluşturma çalışma alanı için kullanılacak yapılandırılmış görüntü modelini seçin. Çalışma alanı bu modelin API Key değerini kullanır.",
   "speechToText": "Konuşmadan Yazıya",
   "speechToTextDescription": "Masaüstü ve WebUI sohbet kutusunda kullanılacak konuşmadan yazıya servisini yapılandırın.",
   "speechToTextProvider": "Sağlayıcı",

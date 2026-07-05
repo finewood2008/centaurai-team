@@ -442,7 +442,7 @@
   "appearancePanel": "外観",
   "imageGeneration": "画像生成",
   "imageGenerationToggle": "画像生成ツールを有効にする",
-  "imageGenerationDescription": "画像ツールで使用する既存の画像対応モデルを選択します。",
+  "imageGenerationDescription": "画像ツールと画像生成ワークベンチで使用する設定済みの画像対応モデルを選択します。ワークベンチはそのモデルの API Key を再利用します。",
   "speechToText": "音声文字起こし",
   "speechToTextDescription": "デスクトップ版と WebUI のチャット入力欄で使う音声文字起こしサービスを設定します。",
   "speechToTextProvider": "プロバイダー",

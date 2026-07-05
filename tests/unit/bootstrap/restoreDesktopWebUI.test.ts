@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { restoreDesktopWebUIFromPreferences } from '@/process/utils/webuiConfig';
+import { resolveImageWorkbenchConfig, restoreDesktopWebUIFromPreferences } from '@/process/utils/webuiConfig';
 
 const { httpRequestMock, startWebHostMock } = vi.hoisted(() => ({
   httpRequestMock: vi.fn(),
@@ -101,9 +101,9 @@ describe('restoreDesktopWebUIFromPreferences', () => {
     await done;
 
     // 3 preference reads (2 refused + 1 success) prove the retry-not-disable
-    // behavior; startDesktopWebUI then makes 2 more /api/settings/client reads
-    // (resolveNasRootDir + resolveImageWorkbenchKey) on the start path → 5 total.
-    expect(httpRequestMock).toHaveBeenCalledTimes(5);
+    // behavior; startDesktopWebUI then makes 3 more reads
+    // (resolveNasRootDir + resolveImageWorkbenchConfig settings + providers) → 6 total.
+    expect(httpRequestMock).toHaveBeenCalledTimes(6);
     expect(startWebHostMock).toHaveBeenCalledTimes(1);
     expect(startWebHostMock.mock.calls[0][0]).toMatchObject({ allowRemote: true });
   });
@@ -114,5 +114,138 @@ describe('restoreDesktopWebUIFromPreferences', () => {
     await restoreDesktopWebUIFromPreferences();
 
     expect(startWebHostMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveImageWorkbenchConfig', () => {
+  const prevImageWorkbenchKey = process.env.AIONUI_IMAGE_WORKBENCH_KEY;
+  const prevImageUpstreamUrl = process.env.AIONUI_IMAGE_UPSTREAM_URL;
+  const prevImageWorkbenchModel = process.env.AIONUI_IMAGE_WORKBENCH_MODEL;
+
+  beforeEach(() => {
+    httpRequestMock.mockReset();
+    delete process.env.AIONUI_IMAGE_WORKBENCH_KEY;
+    delete process.env.AIONUI_IMAGE_UPSTREAM_URL;
+    delete process.env.AIONUI_IMAGE_WORKBENCH_MODEL;
+  });
+
+  afterEach(() => {
+    if (prevImageWorkbenchKey === undefined) delete process.env.AIONUI_IMAGE_WORKBENCH_KEY;
+    else process.env.AIONUI_IMAGE_WORKBENCH_KEY = prevImageWorkbenchKey;
+    if (prevImageUpstreamUrl === undefined) delete process.env.AIONUI_IMAGE_UPSTREAM_URL;
+    else process.env.AIONUI_IMAGE_UPSTREAM_URL = prevImageUpstreamUrl;
+    if (prevImageWorkbenchModel === undefined) delete process.env.AIONUI_IMAGE_WORKBENCH_MODEL;
+    else process.env.AIONUI_IMAGE_WORKBENCH_MODEL = prevImageWorkbenchModel;
+  });
+
+  it('uses the Settings > Tools image generation model provider for the workbench key', async () => {
+    httpRequestMock.mockImplementation(async (_method: string, path: string) => {
+      if (path === '/api/settings/client') {
+        return {
+          'tools.imageGenerationModel': {
+            id: 'provider-1',
+            name: 'Stored label',
+            platform: 'custom',
+            use_model: 'gpt-image-2',
+          },
+        };
+      }
+      if (path === '/api/providers') {
+        return [
+          {
+            id: 'provider-1',
+            name: 'System Image Provider',
+            platform: 'custom',
+            base_url: 'https://api.example.com/v1',
+            api_key: 'SYSTEM_KEY',
+            models: ['gpt-image-2'],
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    await expect(resolveImageWorkbenchConfig()).resolves.toMatchObject({
+      apiKey: 'SYSTEM_KEY',
+      baseUrl: 'https://api.example.com/v1',
+      profileName: 'System Image Provider',
+      model: 'gpt-image-2',
+    });
+  });
+
+  it('ignores the retired standalone image workbench profile setting', async () => {
+    httpRequestMock.mockResolvedValueOnce({
+      'webui.imageWorkbenchConfig': {
+        activeProfileId: 'legacy',
+        profiles: [{ id: 'legacy', apiKey: 'LEGACY_KEY', model: 'legacy-model' }],
+      },
+    });
+
+    await expect(resolveImageWorkbenchConfig()).resolves.toBeUndefined();
+  });
+
+  it('auto-selects the first supported provider image model when no model is configured', async () => {
+    httpRequestMock.mockImplementation(async (_method: string, path: string) => {
+      if (path === '/api/settings/client') return {};
+      if (path === '/api/providers') {
+        return [
+          {
+            id: 'text-provider',
+            name: 'Text Provider',
+            platform: 'custom',
+            base_url: 'https://text.example.com/v1',
+            api_key: 'TEXT_KEY',
+            models: ['gpt-4o'],
+          },
+          {
+            id: 'gemini-provider',
+            name: 'Gemini Provider',
+            platform: 'gemini',
+            base_url: '',
+            api_key: 'GEMINI_KEY',
+            models: ['gemini-2.5-pro'],
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    await expect(resolveImageWorkbenchConfig()).resolves.toMatchObject({
+      apiKey: 'GEMINI_KEY',
+      profileName: 'Gemini Provider',
+      model: 'gemini-2.5-flash-image-preview',
+    });
+  });
+
+  it('auto-selects an explicitly registered image model from settings', async () => {
+    httpRequestMock.mockImplementation(async (_method: string, path: string) => {
+      if (path === '/api/settings/client') {
+        return {
+          'tools.imageGenerationModels': {
+            'custom-provider': ['custom-art-model'],
+          },
+        };
+      }
+      if (path === '/api/providers') {
+        return [
+          {
+            id: 'custom-provider',
+            name: 'Custom Image Provider',
+            platform: 'custom',
+            base_url: 'https://custom.example.com/v1',
+            api_key: 'CUSTOM_KEY',
+            models: ['custom-art-model'],
+          },
+        ];
+      }
+      return undefined;
+    });
+
+    await expect(resolveImageWorkbenchConfig()).resolves.toMatchObject({
+      apiKey: 'CUSTOM_KEY',
+      baseUrl: 'https://custom.example.com/v1',
+      profileName: 'Custom Image Provider',
+      model: 'custom-art-model',
+    });
   });
 });

@@ -233,6 +233,15 @@ async function main(): Promise<void> {
     staticDir,
     port,
     allowRemote,
+    imageWorkbenchConfig: process.env.AIONUI_IMAGE_WORKBENCH_KEY?.trim()
+      ? {
+          apiKey: process.env.AIONUI_IMAGE_WORKBENCH_KEY.trim(),
+          baseUrl: process.env.AIONUI_IMAGE_UPSTREAM_URL?.trim(),
+          profileName: process.env.AIONUI_IMAGE_WORKBENCH_PROFILE_NAME?.trim(),
+          model: process.env.AIONUI_IMAGE_WORKBENCH_MODEL?.trim(),
+          apiMode: process.env.AIONUI_IMAGE_WORKBENCH_API_MODE === 'responses' ? 'responses' : 'images',
+        }
+      : undefined,
     dataDir: workDir,
     sharedDriveDir: path.join(workDir, 'sharedDrive'),
     logDir,

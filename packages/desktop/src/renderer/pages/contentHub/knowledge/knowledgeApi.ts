@@ -22,6 +22,15 @@ export type KnowledgeDoc = {
   chunkCount: number;
 };
 
+export type KnowledgeSearchResult = {
+  id: string;
+  sourcePath: string;
+  fileName: string;
+  fileType: string;
+  text: string;
+  score: number;
+};
+
 export function vectorEndpoint(): string {
   return (configService.get('vectorDB.endpoint') ?? 'http://127.0.0.1:8618').replace(/\/+$/, '');
 }
@@ -59,6 +68,53 @@ export async function fetchKnowledgeDocs(limit = 300, offset = 0): Promise<{ tot
   const data = await resp.json();
   const items: RawDoc[] = Array.isArray(data.items) ? data.items : [];
   return { total: num(data.total) || items.length, docs: items.map(normalize) };
+}
+
+type RawSearchHit = {
+  id?: string;
+  source_path?: string;
+  text?: string;
+  score?: number;
+  rerank_score?: number;
+  vector_score?: number;
+  metadata?: Record<string, unknown>;
+};
+
+function normalizeSearchHit(raw: RawSearchHit): KnowledgeSearchResult {
+  const metadata = raw.metadata ?? {};
+  const sourcePath = String(raw.source_path ?? metadata.source_path ?? metadata.file_path ?? raw.id ?? '');
+  return {
+    id: String(raw.id ?? sourcePath),
+    sourcePath,
+    fileName: String(metadata.file_name ?? sourcePath.split(/[\\/]/).pop() ?? raw.id ?? 'knowledge'),
+    fileType: String(metadata.file_type ?? ''),
+    text: String(raw.text ?? ''),
+    score: num(raw.score ?? raw.rerank_score ?? raw.vector_score),
+  };
+}
+
+export async function searchKnowledge(
+  query: string,
+  nResults = 8,
+  mode: 'text' | 'visual' | 'hybrid' = 'text'
+): Promise<KnowledgeSearchResult[]> {
+  const endpoint = vectorEndpoint();
+  const body = { query, n_results: nResults, mode };
+  const resp = isElectronDesktop()
+    ? await fetch(`${endpoint}/api/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    : await fetch(`${getBaseUrl()}/api/vector-search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint, ...body }),
+      });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  const results: RawSearchHit[] = Array.isArray(data.results) ? data.results : [];
+  return results.map(normalizeSearchHit);
 }
 
 function imageUrl(path: string): string {

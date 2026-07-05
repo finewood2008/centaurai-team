@@ -25,6 +25,9 @@ type ProviderShape = {
   platform?: string;
   base_url?: string;
   name?: string;
+  models?: string[];
+  enabled?: boolean;
+  model_enabled?: Record<string, boolean>;
 };
 
 const IMAGE_NAME_PATTERN = /(image|banana|imagine)/i;
@@ -51,3 +54,61 @@ export const isImageGenSupported = (provider: ProviderShape, modelName: string):
   if (!IMAGE_NAME_PATTERN.test(modelName)) return false;
   return RULES.some((rule) => rule.match(provider));
 };
+
+const normalizeModelName = (name: string): string => name.trim();
+
+const uniqueModels = (models: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const rawModel of models) {
+    const model = normalizeModelName(rawModel);
+    if (!model || seen.has(model)) continue;
+    seen.add(model);
+    result.push(model);
+  }
+  return result;
+};
+
+export function getSupplementalImageModels(provider: ProviderShape): string[] {
+  const platformLower = provider.platform?.toLowerCase() || '';
+  const models = provider.models ?? [];
+  const hasImageModel = models.some((model) => IMAGE_NAME_PATTERN.test(model));
+
+  if (provider.platform === 'gemini' && (!provider.base_url || provider.base_url.trim() === '')) {
+    const hasGeminiImage = models.some((model) => model.includes('gemini') && IMAGE_NAME_PATTERN.test(model));
+    return hasGeminiImage ? [] : ['gemini-2.5-flash-image-preview'];
+  }
+
+  if (provider.base_url?.includes('openrouter.ai')) {
+    const hasOpenRouterImage = models.some((model) => IMAGE_NAME_PATTERN.test(model));
+    return hasOpenRouterImage ? [] : ['google/gemini-2.5-flash-image-preview'];
+  }
+
+  if (platformLower.includes('antigravity') || provider.name?.toLowerCase().includes('antigravity')) {
+    return hasImageModel ? [] : ['gemini-3-pro-image-1x1'];
+  }
+
+  return [];
+}
+
+export function buildSelectableImageGenerationModels(
+  provider: ProviderShape,
+  explicitModels: string[] = [],
+  selectedModel?: string
+): string[] {
+  const explicitSet = new Set(explicitModels.map(normalizeModelName).filter(Boolean));
+  const detectedModels = uniqueModels([...(provider.models ?? []), ...getSupplementalImageModels(provider)]).filter(
+    (modelName) => isImageGenSupported(provider, modelName) || explicitSet.has(modelName)
+  );
+  return uniqueModels([...detectedModels, ...explicitModels, ...(selectedModel ? [selectedModel] : [])]);
+}
+
+export function findFirstSelectableImageGenerationModel(
+  provider: ProviderShape,
+  explicitModels: string[] = []
+): string | undefined {
+  if (provider.enabled === false) return undefined;
+  return buildSelectableImageGenerationModels(provider, explicitModels).find(
+    (modelName) => provider.model_enabled?.[modelName] !== false
+  );
+}

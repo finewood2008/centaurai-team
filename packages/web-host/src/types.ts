@@ -29,6 +29,20 @@ export type BackendSystemDirs = {
   logDir: string;
 };
 
+export type ImageWorkbenchConfig = {
+  /** Server-held image API key. Never sent to LAN browsers. */
+  apiKey?: string;
+  /** Admin-configured OpenAI-compatible API base URL. */
+  baseUrl?: string;
+  /** Display name injected into the LAN workbench profile. */
+  profileName?: string;
+  /** Model ID injected into the LAN workbench profile. */
+  model?: string;
+  apiMode?: 'images' | 'responses';
+  streamImages?: boolean;
+  streamPartialImages?: number;
+};
+
 /**
  * Options for starting WebHost
  */
@@ -45,10 +59,12 @@ export type WebHostOptions = {
   nasRootDir?: string;
   /** Image workbench SPA dist dir, served to browser/LAN users at /workbench/image/*. */
   imageWorkbenchDir?: string;
+  /** Admin-owned image workbench config shared with LAN users via server proxy. */
+  imageWorkbenchConfig?: ImageWorkbenchConfig;
+  /** Optional runtime resolver so admin config changes apply without restarting WebUI. */
+  imageWorkbenchConfigResolver?: () => Promise<ImageWorkbenchConfig | undefined>;
   /** Server-held image API key, injected by the /workbench/image/__proxy/* proxy. */
   imageKey?: string;
-  /** Host opencut origin reverse-proxied at /workbench/video/* (default localhost:3000). */
-  videoUpstreamUrl?: string;
   /**
    * When true, the WebUI proxy returns 403 for the aioncore team/meeting API
    * (`/api/teams*`). Set by the Team edition so LAN employees can't run 智囊团

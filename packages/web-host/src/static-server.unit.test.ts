@@ -257,6 +257,59 @@ describe('static-server', () => {
     expect(json.user.username).toBe('from-backend');
   });
 
+  it('/api/settings/client hides API keys from browser clients', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/api/settings/client' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            data: {
+              'webui.imageWorkbenchConfig': {
+                profiles: [{ apiKey: 'REAL_KEY', api_key: 'REAL_SNAKE_KEY', baseUrl: 'https://api.example.com/v1' }],
+              },
+            },
+          })
+        );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
+
+    const r = await fetch(`${handle.localUrl}/api/settings/client`);
+    expect(r.status).toBe(200);
+    const text = await r.text();
+    expect(text).not.toContain('REAL_KEY');
+    expect(text).not.toContain('REAL_SNAKE_KEY');
+    expect(text).toContain('hasApiKey');
+    expect(text).toContain('has_api_key');
+  });
+
+  it('uses the runtime image workbench config resolver for the LAN entry redirect', async () => {
+    const backend = await startMockBackend((_req, res) => res.end('nope'));
+    stopBackend = backend.close;
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      imageWorkbenchDir: staticDir,
+      imageWorkbenchConfigResolver: async () => ({
+        apiKey: 'RUNTIME_KEY',
+        model: 'runtime-image-model',
+        profileName: 'Runtime Image',
+      }),
+    });
+
+    const r = await fetch(`${handle.localUrl}/workbench/image/index.html`, { redirect: 'manual' });
+    expect(r.status).toBe(302);
+    const location = r.headers.get('location') ?? '';
+    expect(location).toContain('profileName=Runtime+Image');
+    expect(location).toContain('model=runtime-image-model');
+    expect(location).toContain('apiKey=centaur-lan-managed');
+    expect(location).not.toContain('RUNTIME_KEY');
+  });
+
   it('LAN auth gate allows /api/auth/status before login', async () => {
     const backend = await startMockBackend((req, res) => {
       if (req.url === '/api/auth/status' && req.method === 'GET') {

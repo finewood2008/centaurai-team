@@ -4,13 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Alert, Button, Empty, Input, Spin } from '@arco-design/web-react';
+import { Alert, Button, Empty, Input } from '@arco-design/web-react';
 import {
   ArrowRight,
   Avatar,
   BookOne,
   Bowl,
-  EditMovie,
   IdCard,
   Left,
   Magic,
@@ -27,12 +26,12 @@ import {
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ipcBridge } from '@/common';
-import WebviewHost, { type WebviewControl } from '@/renderer/components/media/WebviewHost';
-import { isElectronDesktop } from '@/renderer/utils/platform';
-import VideoAgentChat from './video-agent/VideoAgentChat';
+import WebviewHost from '@/renderer/components/media/WebviewHost';
+import useConfigModelListWithImage from '@/renderer/hooks/agent/useConfigModelListWithImage';
 import { useAgents } from '@/renderer/hooks/agent/useAgents';
+import { useConfig } from '@/renderer/hooks/config/useConfig';
 import type { AgentMetadata } from '@/renderer/utils/model/agentTypes';
+import { buildImageGenerationModelProviders } from '@/renderer/utils/model/imageGenerationModels';
 import { ResultPanel } from './components/ResultPanel';
 import { ToolForm } from './components/ToolForm';
 import { checkToolReadiness } from './imageGenReadiness';
@@ -70,6 +69,8 @@ type ToolboxPageProps = {
 
 const getToolTitle = (tool: ToolDef, t: (key: string) => string) => tool.titleText ?? t(tool.titleKey);
 const getToolDesc = (tool: ToolDef, t: (key: string) => string) => tool.descText ?? t(tool.descKey);
+const IMAGE_WORKBENCH_API_PROXY_URL = 'centaur-image-workbench://app/__tokenclub';
+const IMAGE_WORKBENCH_MANAGED_API_KEY = 'centaur-managed';
 
 /**
  * One calm warm-neutral tone for every tool card — Claude-style restraint.
@@ -260,53 +261,73 @@ const WorkbenchCard: React.FC<{
   </Button>
 );
 
-/**
- * Local Centaur Video Workbench server origin. Served by the desktop launcher
- * or `bun run dev` in the opencut-classic project; embedded via WebviewHost.
- */
-// opencut runs under a Next basePath so one instance serves both the desktop
-// <webview> and the LAN reverse proxy. In a browser, WebviewHost rewrites this
-// localhost URL to the same-origin /workbench/video route.
-const VIDEO_WORKBENCH_URL = 'http://localhost:3000/workbench/video/projects';
-
 /** Common AI Toolbox — a grid of practical, form-driven AI tools. */
 const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { agents } = useAgents();
-  const { status, result, error, run, reset } = useToolboxRun();
+  const { status, result, progress, events: runEvents, error: runError, run, cancel, reset } = useToolboxRun();
+  const [configuredImageModel] = useConfig('tools.imageGenerationModel');
+  const [imageModelRegistry] = useConfig('tools.imageGenerationModels');
+  const { modelListWithImage: imageProviders } = useConfigModelListWithImage();
   const isWorkbenchMode = mode === 'workbench';
   // Deep-link target (?app=image) — the sider 「AI工作台」 entry opens the
   // embedded 半人马 AI 图形工作台 directly instead of the workbench hub.
-  const deepLinkImage = isWorkbenchMode && searchParams.get('app') === 'image';
+  const requestedApp = searchParams.get('app');
+  const deepLinkImage = isWorkbenchMode && requestedApp === 'image';
 
   const tools = useToolboxTools();
   const imageTools = useMemo(() => tools.filter((tool) => tool.category === 'image'), [tools]);
   const workbenchTools = useMemo(() => tools.filter((tool) => tool.category === 'workbench'), [tools]);
   const visibleTools = isWorkbenchMode ? workbenchTools : imageTools;
   const [activeTool, setActiveTool] = useState<ToolDef | null>(null);
-  const [imageWorkbenchOpen, setImageWorkbenchOpen] = useState(!isWorkbenchMode || deepLinkImage);
-  const [videoWorkbenchOpen, setVideoWorkbenchOpen] = useState(false);
-  const [videoServer, setVideoServer] = useState<{ state: 'starting' | 'ready' | 'error'; error?: string }>({
-    state: 'starting',
-  });
+  const [imageWorkbenchOpen, setImageWorkbenchOpen] = useState<boolean>(!isWorkbenchMode || deepLinkImage);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<ToolboxCategory>('all');
   const lastRunRef = useRef<LastRun | null>(null);
-  const videoControlRef = useRef<WebviewControl | null>(null);
 
   useEffect(() => {
     setImageWorkbenchOpen(!isWorkbenchMode || deepLinkImage);
   }, [isWorkbenchMode, deepLinkImage]);
 
+  const imageGenerationModelList = useMemo(
+    () => buildImageGenerationModelProviders(imageProviders, imageModelRegistry, configuredImageModel),
+    [configuredImageModel, imageModelRegistry, imageProviders]
+  );
+  const workbenchImageModel = useMemo(() => {
+    if (configuredImageModel?.id && configuredImageModel.use_model) {
+      return {
+        providerName: configuredImageModel.name?.trim(),
+        model: configuredImageModel.use_model.trim(),
+      };
+    }
+    const provider = imageGenerationModelList.find((item) => item.enabled !== false && item.models.length > 0);
+    const model = provider?.models.find((modelName) => provider.model_enabled?.[modelName] !== false);
+    return model
+      ? {
+          providerName: provider?.name?.trim(),
+          model,
+        }
+      : null;
+  }, [configuredImageModel?.id, configuredImageModel?.name, configuredImageModel?.use_model, imageGenerationModelList]);
+
   // Embedded 半人马 AI 图形工作台. Use a main-process protocol so the workbench
   // does not depend on the renderer dev-server port.
   const workbenchUrl = useMemo(() => {
     const url = new URL('centaur-image-workbench://app/index.html');
+    url.searchParams.set('profileName', workbenchImageModel?.providerName || 'Centaur Image Generation');
+    url.searchParams.set('apiUrl', IMAGE_WORKBENCH_API_PROXY_URL);
+    url.searchParams.set('apiKey', IMAGE_WORKBENCH_MANAGED_API_KEY);
+    if (workbenchImageModel?.model) {
+      url.searchParams.set('model', workbenchImageModel.model);
+    }
+    url.searchParams.set('apiMode', 'images');
+    url.searchParams.set('streamImages', 'false');
+    url.searchParams.set('streamPartialImages', '0');
     url.searchParams.set('disableServiceWorker', 'true');
     return url.toString();
-  }, []);
+  }, [workbenchImageModel]);
 
   const keyword = query.trim().toLowerCase();
   const imageWorkbenchMatches =
@@ -316,14 +337,6 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
       .toLowerCase()
       .includes(keyword);
   const showImageWorkbenchCard = isWorkbenchMode && category !== 'workbench' && imageWorkbenchMatches;
-  const videoWorkbenchMatches =
-    !keyword ||
-    [t('toolbox.videoWorkbench.title'), t('toolbox.videoWorkbench.cardDesc'), t('toolbox.videoWorkbench.subtitle')]
-      .join(' ')
-      .toLowerCase()
-      .includes(keyword);
-  const showVideoWorkbenchCard = isWorkbenchMode && category !== 'workbench' && videoWorkbenchMatches;
-
   const filteredTools = visibleTools.filter((tool) => {
     if (category !== 'all' && tool.category !== category) return false;
     if (!keyword) return true;
@@ -332,16 +345,18 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
     return `${title} ${desc}`.toLowerCase().includes(keyword);
   });
 
+  const nativeWorkbenchCount = 1;
   const imageCount = isWorkbenchMode ? 1 : visibleTools.filter((tool) => tool.category === 'image').length;
   const textCount = visibleTools.filter((tool) => tool.category === 'text').length;
-  const workbenchCount = visibleTools.filter((tool) => tool.category === 'workbench').length;
+  const workbenchCount =
+    visibleTools.filter((tool) => tool.category === 'workbench').length + (isWorkbenchMode ? 1 : 0);
 
   const categoryOptions: Array<{ key: ToolboxCategory; label: string; count: number }> = (
     [
       {
         key: 'all',
         label: t('toolbox.categories.all'),
-        count: isWorkbenchMode ? workbenchTools.length + 1 : visibleTools.length,
+        count: isWorkbenchMode ? workbenchTools.length + nativeWorkbenchCount : visibleTools.length,
       },
       { key: 'image', label: t('toolbox.categories.image'), count: imageCount },
       { key: 'text', label: t('toolbox.categories.text'), count: textCount },
@@ -353,7 +368,7 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
     ? [
         {
           label: t('toolbox.categories.all'),
-          count: workbenchTools.length + 1,
+          count: workbenchTools.length + nativeWorkbenchCount,
           icon: <Workbench size={20} />,
           tone: 'var(--centaur-clay)',
           surface: 'var(--centaur-clay-tint)',
@@ -432,63 +447,23 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
     [reset]
   );
 
-  const closeTool = useCallback(() => setActiveTool(null), []);
+  const closeTool = useCallback(() => {
+    setActiveTool(null);
+  }, []);
 
   const openImageWorkbench = useCallback(() => {
     reset();
     lastRunRef.current = null;
     setImageWorkbenchOpen(true);
-  }, [reset]);
+    if (isWorkbenchMode) void navigate('/workbench?app=image');
+  }, [isWorkbenchMode, navigate, reset]);
 
   const closeImageWorkbench = useCallback(() => {
     reset();
     lastRunRef.current = null;
     setImageWorkbenchOpen(false);
-  }, [reset]);
-
-  const startVideoServer = useCallback(() => {
-    // Browser/LAN users can't start the host server over IPC — the host keeps
-    // opencut running and the WebUI reverse-proxies it. Probe its health first so
-    // a stopped host surfaces the card's error state instead of a raw 502 inside
-    // the iframe.
-    if (!isElectronDesktop()) {
-      setVideoServer({ state: 'starting' });
-      void fetch('/workbench/video/api/health')
-        .then((r) =>
-          setVideoServer(
-            r.ok ? { state: 'ready' } : { state: 'error', error: 'Video workbench is not available on the server' }
-          )
-        )
-        .catch(() => setVideoServer({ state: 'error', error: 'Video workbench is not available on the server' }));
-      return;
-    }
-    setVideoServer({ state: 'starting' });
-    void ipcBridge.videostudio.start
-      .invoke()
-      .then((videoStatus) => {
-        setVideoServer(videoStatus.running ? { state: 'ready' } : { state: 'error', error: videoStatus.error });
-      })
-      .catch((err: unknown) => {
-        setVideoServer({ state: 'error', error: err instanceof Error ? err.message : String(err) });
-      });
-  }, []);
-
-  const openVideoWorkbench = useCallback(() => {
-    reset();
-    lastRunRef.current = null;
-    setVideoWorkbenchOpen(true);
-    startVideoServer();
-  }, [reset, startVideoServer]);
-
-  const closeVideoWorkbench = useCallback(() => {
-    reset();
-    lastRunRef.current = null;
-    setVideoWorkbenchOpen(false);
-    // Stop the spawned opencut dev server so it doesn't keep running in the
-    // background. No-op for a reused/standalone server (only our spawned child
-    // is killed; a reused server leaves `child` null in videostudioBridge).
-    void ipcBridge.videostudio.stop.invoke();
-  }, [reset]);
+    if (isWorkbenchMode) void navigate('/workbench');
+  }, [isWorkbenchMode, navigate, reset]);
 
   const handleRun = useCallback(
     (tool: ToolDef, agent: AgentMetadata | null, values: ToolFormValues) => {
@@ -549,77 +524,10 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
     );
   };
 
-  const renderVideoWorkbench = () => {
-    return (
-      <div className='flex flex-col gap-16px'>
-        <div className='flex flex-col gap-16px lg:flex-row lg:items-end lg:justify-between'>
-          <div className='flex min-w-0 items-start gap-14px'>
-            {isWorkbenchMode && (
-              <Button className='mt-5px' shape='circle' icon={<Left />} onClick={closeVideoWorkbench} />
-            )}
-            <div className='centaur-mark h-52px w-52px shrink-0'>
-              <EditMovie size={26} />
-            </div>
-            <div className='min-w-0'>
-              <div className='centaur-eyebrow'>CENTAUR · VIDEO WORKBENCH</div>
-              <div className='centaur-title mt-2px text-26px leading-32px' style={{ color: 'var(--centaur-ink)' }}>
-                {t('toolbox.videoWorkbench.title')}
-              </div>
-              <div className='mt-5px max-w-760px text-14px leading-21px' style={{ color: 'var(--centaur-ink-soft)' }}>
-                {t('toolbox.videoWorkbench.subtitle')}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div
-          className='centaur-card relative w-full overflow-hidden'
-          style={{ height: '78vh', minHeight: 520, padding: 0, borderRadius: 'var(--centaur-radius-sm)' }}
-        >
-          {videoServer.state === 'ready' ? (
-            <WebviewHost
-              url={VIDEO_WORKBENCH_URL}
-              id='centaur-video-workbench'
-              partition='persist:centaur-video-workbench'
-              controlRef={videoControlRef}
-              className='h-full w-full'
-              style={{ height: '100%', minHeight: 520 }}
-            />
-          ) : (
-            <div
-              className='flex h-full w-full flex-col items-center justify-center gap-12px'
-              style={{ minHeight: 520 }}
-            >
-              {videoServer.state === 'starting' ? (
-                <>
-                  <Spin size={28} />
-                  <div className='text-14px' style={{ color: 'var(--centaur-ink-soft)' }}>
-                    {t('toolbox.videoWorkbench.starting')}
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className='max-w-420px text-center text-14px' style={{ color: 'var(--centaur-ink-soft)' }}>
-                    {t('toolbox.videoWorkbench.startFailed')}
-                  </div>
-                  <Button onClick={startVideoServer}>{t('toolbox.videoWorkbench.retry')}</Button>
-                </>
-              )}
-            </div>
-          )}
-          {/* Floating, collapsible AI assistant — overlays the editor, does not resize it. */}
-          <VideoAgentChat control={videoControlRef} />
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className='centaur-brand w-full min-h-full box-border overflow-y-auto'>
       <div className='mx-auto flex w-full max-w-1280px box-border flex-col gap-20px p-24px'>
-        {videoWorkbenchOpen ? (
-          renderVideoWorkbench()
-        ) : imageWorkbenchOpen ? (
+        {imageWorkbenchOpen ? (
           renderImageWorkbench()
         ) : !activeTool ? (
           <>
@@ -700,7 +608,7 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
               })}
             </div>
 
-            {showImageWorkbenchCard || showVideoWorkbenchCard || filteredTools.length > 0 ? (
+            {showImageWorkbenchCard || filteredTools.length > 0 ? (
               <div className='grid grid-cols-1 gap-16px md:grid-cols-2 xl:grid-cols-3'>
                 {showImageWorkbenchCard && (
                   <WorkbenchCard
@@ -715,16 +623,6 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
                       t('toolbox.tools.product.title'),
                     ]}
                     onOpen={openImageWorkbench}
-                  />
-                )}
-                {showVideoWorkbenchCard && (
-                  <WorkbenchCard
-                    title={t('toolbox.videoWorkbench.title')}
-                    desc={t('toolbox.videoWorkbench.cardDesc')}
-                    icon={<EditMovie size={24} />}
-                    meta={t('toolbox.videoWorkbench.category')}
-                    chips={[]}
-                    onOpen={openVideoWorkbench}
                   />
                 )}
                 {filteredTools.map((tool) => (
@@ -780,9 +678,12 @@ const ToolboxPage: React.FC<ToolboxPageProps> = ({ mode = 'toolbox' }) => {
               <ResultPanel
                 status={status}
                 result={result}
-                error={error}
+                progress={progress}
+                events={runEvents}
+                error={runError}
                 onOpenConversation={handleOpenConversation}
                 onRegenerate={handleRegenerate}
+                onCancel={cancel}
               />
             </div>
           </>
