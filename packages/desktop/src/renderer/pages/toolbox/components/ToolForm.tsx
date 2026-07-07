@@ -12,6 +12,7 @@ import useConfigModelListWithImage from '@/renderer/hooks/agent/useConfigModelLi
 import { useConfig } from '@/renderer/hooks/config/useConfig';
 import { getAgentDisplayName, type AgentMetadata } from '@/renderer/utils/model/agentTypes';
 import { getImageModelValue } from '@/renderer/utils/model/imageGenerationModels';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import { findMissingRequired } from '../toolboxPrompt';
 import { applyImageModelSelection, getCurrentImageModelValue, getImageModelOptions } from '../imageModel';
 import type { ToolDef, ToolFormValues } from '../types';
@@ -103,7 +104,7 @@ export const ToolForm: React.FC<ToolFormProps> = ({ tool, agents, running, disab
       return;
     }
     if (usesImageModel) {
-      if (imageModel) await applyImageModelSelection(imageModel, imageProviders);
+      if (imageModel && isElectronDesktop()) await applyImageModelSelection(imageModel, imageProviders);
       onRun(tool, null, values);
       return;
     }

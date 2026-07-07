@@ -6,7 +6,6 @@ import { isElectronDesktop, resolveExtensionAssetUrl } from '@/renderer/utils/pl
 import { type IExtensionSettingsTab } from '@/common/adapter/ipcBridge';
 import { useExtensionSettingsTabs } from '@/renderer/hooks/system/useExtensionSettingsTabs';
 import {
-  Cat,
   Communication,
   Components,
   Computer,
@@ -100,13 +99,12 @@ export function getBuiltinSettingsNavItems(isDesktop: boolean, t: TranslateFn): 
       icon: <User theme='outline' size='16' />,
       path: 'users',
     },
-    pet: { id: 'pet', label: t('pet.desktopPet'), icon: <Cat theme='outline' size='16' />, path: 'pet' },
     system: { id: 'system', label: t('settings.system'), icon: <System theme='outline' size='16' />, path: 'system' },
     about: { id: 'about', label: t('settings.about'), icon: <Info theme='outline' size='16' />, path: 'about' },
   };
 
   return BUILTIN_TAB_IDS.filter((id) =>
-    id === 'client' ? !isDesktop : isDesktop || (id !== 'pet' && id !== 'users' && id !== 'local-models')
+    id === 'client' ? !isDesktop : isDesktop || (id !== 'users' && id !== 'local-models')
   )
     .map((id) => builtinMap[id])
     .filter((item): item is NavItem => Boolean(item));

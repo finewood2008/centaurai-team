@@ -5,13 +5,15 @@
  */
 
 import { ipcBridge } from '@/common';
-import type { IDirOrFile } from '@/common/adapter/ipcBridge';
+import type { IConversationTurnCompletedEvent, IDirOrFile } from '@/common/adapter/ipcBridge';
+import { registerGeneratedArtifactsFromPayload } from '@/renderer/utils/file/generatedArtifacts';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 import type { ContextMenuState } from '../types';
 
 interface UseWorkspaceEventsOptions {
   conversation_id: string;
+  workspace: string;
   eventPrefix: 'acp' | 'codex' | 'aionrs';
 
   // Dependencies from useWorkspaceTree
@@ -41,6 +43,7 @@ interface UseWorkspaceEventsOptions {
 export function useWorkspaceEvents(options: UseWorkspaceEventsOptions) {
   const {
     conversation_id,
+    workspace,
     eventPrefix,
     refreshWorkspace,
     clearSelection,
@@ -150,6 +153,27 @@ export function useWorkspaceEvents(options: UseWorkspaceEventsOptions) {
       unsubscribe();
     };
   }, [conversation_id, eventPrefix, throttledRefresh]);
+
+  /**
+   * Some generators report saved files in the final assistant message instead
+   * of through a file-tool event. Copy external generated artifacts into this
+   * workspace so the temporary-space tree and Content Hub can see them.
+   */
+  useEffect(() => {
+    const unsubscribe = ipcBridge.conversation.turnCompleted.on((event: IConversationTurnCompletedEvent) => {
+      if (event.session_id !== conversation_id) return;
+      void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
+        workspace: event.workspace || workspace,
+        conversationId: conversation_id,
+        source: 'conversation',
+      }).then((registered) => {
+        if (registered.length > 0) throttledRefresh();
+      });
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [conversation_id, throttledRefresh, workspace]);
 
   /**
    * 监听手动刷新工作空间事件

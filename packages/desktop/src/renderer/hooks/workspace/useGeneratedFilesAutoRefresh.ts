@@ -5,6 +5,8 @@
  */
 
 import { ipcBridge } from '@/common';
+import type { IConversationTurnCompletedEvent } from '@/common/adapter/ipcBridge';
+import { registerGeneratedArtifactsFromPayload } from '@/renderer/utils/file/generatedArtifacts';
 import { emitter } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 
@@ -51,6 +53,16 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
 
   useEffect(() => {
     const handleGeneratedFilesChanged = () => throttled();
+    const handleTurnCompleted = (event: IConversationTurnCompletedEvent) => {
+      if (event.workspace) {
+        void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
+          workspace: event.workspace,
+          conversationId: event.session_id,
+          source: 'conversation',
+        });
+      }
+      throttled();
+    };
     const handleResponse = (data: { type: string; data?: unknown }) => {
       if (data.type === 'acp_tool_call') {
         const acpData = data.data as { update?: { kind?: string; status?: string; title?: string } } | undefined;
@@ -65,9 +77,11 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
     };
     emitter.on('generated-files.changed', handleGeneratedFilesChanged);
     const unsubscribe = ipcBridge.acpConversation.responseStream.on(handleResponse);
+    const unsubscribeTurnCompleted = ipcBridge.conversation.turnCompleted.on(handleTurnCompleted);
     return () => {
       emitter.off('generated-files.changed', handleGeneratedFilesChanged);
       unsubscribe();
+      unsubscribeTurnCompleted();
       if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
     };
   }, [throttled]);

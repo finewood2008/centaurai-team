@@ -11,6 +11,7 @@ import { filterConversationsWithChannelScope } from '@/renderer/utils/user/conve
 import { useGeneratedFilesAutoRefresh } from '@/renderer/hooks/workspace/useGeneratedFilesAutoRefresh';
 import { fetchRecentFiles } from '@/renderer/pages/guid/components/RecentFiles';
 import { getContentTypeByExtension } from '@/renderer/pages/conversation/Preview/fileUtils';
+import { loadStandaloneGeneratedArtifactFiles } from '@/renderer/utils/file/generatedArtifacts';
 import type { FileEntry, HubConversationGroup, HubFileKind } from './types';
 
 /** Map a fine-grained PreviewContentType to the coarse hub filter buckets. */
@@ -32,7 +33,11 @@ export function useHubFiles(search: string) {
     try {
       const conversations = await ipcBridge.database.getUserConversations.invoke({ limit: 10000 });
       const visibleConversations = await filterConversationsWithChannelScope(conversations.items ?? []);
-      setFiles(await fetchRecentFiles(visibleConversations));
+      const [conversationFiles, standaloneFiles] = await Promise.all([
+        fetchRecentFiles(visibleConversations),
+        loadStandaloneGeneratedArtifactFiles(),
+      ]);
+      setFiles([...conversationFiles, ...standaloneFiles]);
     } catch {
       setFiles([]);
     } finally {

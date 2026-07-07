@@ -31,8 +31,14 @@ fi
 
 cd /home/user/桌面/centaurai-aionui || exit 1
 export PATH="$HOME/.bun/bin:$PATH"
-export HTTP_PROXY=http://127.0.0.1:7897 HTTPS_PROXY=http://127.0.0.1:7897 ALL_PROXY=socks://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1,::1
-export http_proxy=http://127.0.0.1:7897 https_proxy=http://127.0.0.1:7897 all_proxy=socks://127.0.0.1:7897 no_proxy=localhost,127.0.0.1,::1
+if ss -ltn 2>/dev/null | grep -qE '127\.0\.0\.1:7897\b'; then
+  export HTTP_PROXY=http://127.0.0.1:7897 HTTPS_PROXY=http://127.0.0.1:7897 ALL_PROXY=socks://127.0.0.1:7897 NO_PROXY=localhost,127.0.0.1,::1
+  export http_proxy=http://127.0.0.1:7897 https_proxy=http://127.0.0.1:7897 all_proxy=socks://127.0.0.1:7897 no_proxy=localhost,127.0.0.1,::1
+else
+  unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+  export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1
+  echo "[centaurai] 本地代理 127.0.0.1:7897 未运行，已禁用代理环境。"
+fi
 # App Store standalone-app installers (per-OS), served to LAN users via /api/appstore/downloads/*
 export AIONUI_APPSTORE_INSTALLER_DIR="$HOME/.config/CentaurAI-Dev/appstore-installers"
 

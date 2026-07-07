@@ -8,10 +8,19 @@ import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ipcBridge } from '@/common';
 import type { IConversationTurnCompletedEvent, IDirOrFile, IResponseMessage } from '@/common/adapter/ipcBridge';
+import { BUILTIN_IMAGE_GEN_ID } from '@/common/config/storage';
 import { getFullAutoMode } from '@/common/types/agent/agentModes';
-import { buildCliAgentParams } from '@/renderer/pages/conversation/utils/createConversationParams';
-import { emitter } from '@/renderer/utils/emitter';
+import {
+  buildCliAgentParams,
+  getDefaultAionrsModel,
+} from '@/renderer/pages/conversation/utils/createConversationParams';
+import {
+  extractGeneratedArtifactPaths,
+  notifyGeneratedArtifactsChanged,
+  registerGeneratedArtifacts,
+} from '@/renderer/utils/file/generatedArtifacts';
 import type { AgentMetadata } from '@/renderer/utils/model/agentTypes';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import { buildToolPrompt, collectUploadPaths } from './toolboxPrompt';
 import type {
   ToolDef,
@@ -118,11 +127,30 @@ function titleCandidate(tool: ToolDef, values: ToolFormValues): string {
   return tool.titleText || tool.id;
 }
 
-function stripPathDecoration(value: string): string {
-  return value
-    .trim()
-    .replace(/^["'`<([]+/, '')
-    .replace(/[)"'`>\].,，。；;:：]+$/, '');
+async function createToolboxImageWorkspace(
+  tool: ToolDef,
+  values: ToolFormValues
+): Promise<{ conversationId: string; workspace: string }> {
+  const model = await getDefaultAionrsModel();
+  const conversation = await ipcBridge.conversation.create.invoke({
+    type: 'aionrs',
+    name: safeFileName(`${tool.titleText || tool.id} ${titleCandidate(tool, values)}`).slice(0, 80),
+    model,
+    extra: {
+      workspace: '',
+      custom_workspace: false,
+      selected_mcp_server_ids: [BUILTIN_IMAGE_GEN_ID],
+      hidden_from_sidebar: true,
+      workbench_id: tool.id,
+      workbench_title: tool.titleText || tool.id,
+      workbench_kind: tool.category,
+    },
+  });
+  const workspace = (conversation?.extra as { workspace?: string } | undefined)?.workspace;
+  if (!conversation?.id || !workspace) {
+    throw new Error('workspace_create_failed');
+  }
+  return { conversationId: conversation.id, workspace };
 }
 
 function truncateLogText(value: string, length = 180): string {
@@ -209,23 +237,6 @@ function summarizeStreamEvent(
   }
 }
 
-function extractGeneratedDocumentPaths(text: string): string[] {
-  if (!text.trim()) return [];
-  const paths: string[] = [];
-  for (const line of text.split('\n')) {
-    const matches = line.match(/(?:[./~]|[A-Za-z]:[\\/])[^<>"'`\n]*?\.(?:pptx|ppt|potx|pdf|docx?|xlsx?|csv|md)\b/gi);
-    if (matches) paths.push(...matches.map(stripPathDecoration));
-  }
-  return Array.from(new Set(paths.filter(Boolean)));
-}
-
-function notifyGeneratedFilesChanged(): void {
-  emitter.emit('acp.workspace.refresh');
-  emitter.emit('codex.workspace.refresh');
-  emitter.emit('aionrs.workspace.refresh');
-  emitter.emit('generated-files.changed');
-}
-
 async function persistTextOutput(
   tool: ToolDef,
   values: ToolFormValues,
@@ -245,7 +256,7 @@ async function persistTextOutput(
   })}\n\n`;
   const ok = await ipcBridge.fs.writeFile.invoke({ path: filePath, data: `${header}${text}` });
   if (!ok) return [];
-  notifyGeneratedFilesChanged();
+  notifyGeneratedArtifactsChanged();
   return [filePath];
 }
 
@@ -348,8 +359,52 @@ export function useToolboxRun(): UseToolboxRun {
         });
         if (cancelRequestedRef.current) throw new Error(RUN_CANCELLED_ERROR);
 
-        // Image tools generate directly with the configured image model — no agent,
-        // no tool-calling. Deterministic and reliable regardless of agent choice.
+        const waitForConversationCompletion = (conversationId: string, timeoutMs = RUN_TIMEOUT_MS) =>
+          new Promise<IConversationTurnCompletedEvent>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(RUN_TIMEOUT_ERROR)), timeoutMs);
+            unsubscribers.push(
+              ipcBridge.conversation.turnCompleted.on((event: IConversationTurnCompletedEvent) => {
+                if (event.session_id !== conversationId) return;
+                if (event.status === 'finished' || event.can_send_message === true) {
+                  clearTimeout(timer);
+                  resolve(event);
+                }
+              })
+            );
+          });
+
+        const subscribeConversationStream = (conversationId: string) => {
+          unsubscribers.push(
+            ipcBridge.conversation.responseStream.on((message: IResponseMessage) => {
+              if (message.conversation_id !== conversationId) return;
+              const event = summarizeStreamEvent(message, t);
+              if (event) appendEvent(event);
+            })
+          );
+        };
+
+        const sendConversationAndWait = async (
+          conversationId: string,
+          message: string,
+          sendFiles: string[],
+          timeoutMs = RUN_TIMEOUT_MS
+        ) => {
+          const completion = waitForConversationCompletion(conversationId, timeoutMs);
+          const sent = ipcBridge.conversation.sendMessage.invoke({
+            conversation_id: conversationId,
+            input: message,
+            files: sendFiles,
+            ...(tool.injectSkills?.length ? { inject_skills: tool.injectSkills } : {}),
+          });
+          const sendFailure = sent.then(
+            () => new Promise<IConversationTurnCompletedEvent>(() => {}),
+            (sendError) => Promise.reject(sendError)
+          );
+          return Promise.race([completion, sendFailure]);
+        };
+
+        // Desktop can call the local MCP directly. WebUI/LAN browsers route
+        // through a hidden conversation with the builtin image MCP attached.
         if (tool.requires === 'image-model') {
           setProgress({ percent: 18, label: t('toolbox.runEvents.progress.callingImageModel'), step: 2, total: 4 });
           appendEvent({
@@ -357,14 +412,89 @@ export function useToolboxRun(): UseToolboxRun {
             title: t('toolbox.runEvents.callingImageModel'),
             detail: t('toolbox.runEvents.callingImageModelDetail'),
           });
+          const runSpace = await createToolboxImageWorkspace(tool, values);
+          currentConversationIdRef.current = runSpace.conversationId;
+          appendEvent({
+            kind: 'success',
+            title: t('toolbox.runEvents.workspaceCreated'),
+            detail: runSpace.conversationId,
+          });
+          if (cancelRequestedRef.current) {
+            try {
+              await ipcBridge.conversation.stop.invoke({ conversation_id: runSpace.conversationId });
+            } catch (cancelError) {
+              console.warn('[Toolbox] stop request failed', cancelError);
+            }
+            throw new Error(RUN_CANCELLED_ERROR);
+          }
           const image_uris = files.length ? files : undefined;
           const rawCount = Number(values.count);
           const count = Number.isFinite(rawCount) ? Math.min(Math.max(Math.trunc(rawCount), 1), 4) : 1;
+
+          if (!isElectronDesktop()) {
+            subscribeConversationStream(runSpace.conversationId);
+            startProgressTicker(t('toolbox.runEvents.progress.generatingImages'), 28, 78, 3, 4);
+            appendEvent({
+              kind: 'agent',
+              title: t('toolbox.runEvents.sentToAgent'),
+              detail: t('toolbox.runEvents.sentToAgentDesc'),
+            });
+            const lanPrompt =
+              count > 1
+                ? `${input}\n\nGenerate ${count} distinct images and save every generated image into the current workspace.`
+                : input;
+            const finished = await sendConversationAndWait(runSpace.conversationId, lanPrompt, files);
+            if (cancelRequestedRef.current) throw new Error(RUN_CANCELLED_ERROR);
+            stopProgressTicker();
+
+            const lastContent = finished.last_message?.content;
+            const finalText = typeof lastContent === 'string' ? lastContent : '';
+            const workspace = finished.workspace || runSpace.workspace;
+            setProgress({ percent: 84, label: t('toolbox.runEvents.progress.loadingResults'), step: 4, total: 4 });
+            const scannedImages = await scanImages(runSpace.conversationId, workspace, workspace, 0);
+            const mentionedPaths = extractGeneratedArtifactPaths(finalText);
+            const registeredPaths = await registerGeneratedArtifacts({
+              paths: [...scannedImages, ...mentionedPaths],
+              workspace,
+              conversationId: runSpace.conversationId,
+              source: 'toolbox',
+              standaloneLabel: '工具箱',
+            });
+            const imagePaths = registeredPaths.filter((path) => IMAGE_EXT.test(path));
+            if (imagePaths.length === 0) {
+              throw new Error('generation_failed');
+            }
+            const loaded = await Promise.all(
+              imagePaths.map((path) =>
+                ipcBridge.fs.getImageBase64
+                  .invoke({ path, workspace })
+                  .then((dataUrl) => (dataUrl ? { path, dataUrl } : null))
+              )
+            );
+            const images = loaded.filter((item): item is ToolImageResult => item !== null);
+            appendEvent({
+              kind: 'success',
+              title: t('toolbox.runEvents.imageGenerated'),
+              detail: t('toolbox.runEvents.imageGeneratedDesc', { count: images.length }),
+            });
+            setResult({
+              conversation_id: runSpace.conversationId,
+              hiddenConversation: true,
+              workspace,
+              text: finalText,
+              images,
+              files: registeredPaths,
+            });
+            setProgress({ percent: 100, label: t('toolbox.runEvents.progress.done'), step: 4, total: 4 });
+            setStatus('done');
+            return;
+          }
+
           startProgressTicker(t('toolbox.runEvents.progress.generatingImages'), 28, 78, 3, 4);
 
           const results = await Promise.all(
             Array.from({ length: count }, () =>
-              ipcBridge.imageGen.generate.invoke({ prompt: input, image_uris, workspace: '' })
+              ipcBridge.imageGen.generate.invoke({ prompt: input, image_uris, workspace: runSpace.workspace })
             )
           );
           const paths = results.filter((r) => r.success && r.imagePath).map((r) => r.imagePath as string);
@@ -379,12 +509,26 @@ export function useToolboxRun(): UseToolboxRun {
             )
           );
           const images = loaded.filter((item): item is ToolImageResult => item !== null);
+          const registeredPaths = await registerGeneratedArtifacts({
+            paths,
+            workspace: runSpace.workspace,
+            conversationId: runSpace.conversationId,
+            source: 'toolbox',
+            standaloneLabel: '工具箱',
+          });
           appendEvent({
             kind: 'success',
             title: t('toolbox.runEvents.imageGenerated'),
             detail: t('toolbox.runEvents.imageGeneratedDesc', { count: images.length }),
           });
-          setResult({ conversation_id: '', text: results.find((r) => r.text)?.text ?? '', images, files: [] });
+          setResult({
+            conversation_id: runSpace.conversationId,
+            hiddenConversation: true,
+            workspace: runSpace.workspace,
+            text: results.find((r) => r.text)?.text ?? '',
+            images,
+            files: registeredPaths,
+          });
           setProgress({ percent: 100, label: t('toolbox.runEvents.progress.done'), step: 4, total: 4 });
           setStatus('done');
           return;
@@ -454,42 +598,7 @@ export function useToolboxRun(): UseToolboxRun {
           throw new Error(RUN_CANCELLED_ERROR);
         }
 
-        const waitForCompletion = (timeoutMs = RUN_TIMEOUT_MS) =>
-          new Promise<IConversationTurnCompletedEvent>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error(RUN_TIMEOUT_ERROR)), timeoutMs);
-            unsubscribers.push(
-              ipcBridge.conversation.turnCompleted.on((event: IConversationTurnCompletedEvent) => {
-                if (event.session_id !== conversationId) return;
-                if (event.status === 'finished' || event.can_send_message === true) {
-                  clearTimeout(timer);
-                  resolve(event);
-                }
-              })
-            );
-          });
-
-        unsubscribers.push(
-          ipcBridge.conversation.responseStream.on((message: IResponseMessage) => {
-            if (message.conversation_id !== conversationId) return;
-            const event = summarizeStreamEvent(message, t);
-            if (event) appendEvent(event);
-          })
-        );
-
-        const sendAndWait = async (message: string, timeoutMs = RUN_TIMEOUT_MS) => {
-          const completion = waitForCompletion(timeoutMs);
-          const sent = ipcBridge.conversation.sendMessage.invoke({
-            conversation_id: conversationId,
-            input: message,
-            files,
-            ...(tool.injectSkills?.length ? { inject_skills: tool.injectSkills } : {}),
-          });
-          const sendFailure = sent.then(
-            () => new Promise<IConversationTurnCompletedEvent>(() => {}),
-            (sendError) => Promise.reject(sendError)
-          );
-          return Promise.race([completion, sendFailure]);
-        };
+        subscribeConversationStream(conversationId);
 
         startProgressTicker(
           isWorkbenchRun
@@ -506,7 +615,7 @@ export function useToolboxRun(): UseToolboxRun {
           detail: t('toolbox.runEvents.sentToAgentDesc'),
         });
         let finished: IConversationTurnCompletedEvent;
-        finished = await sendAndWait(input);
+        finished = await sendConversationAndWait(conversationId, input, files);
         if (cancelRequestedRef.current) throw new Error(RUN_CANCELLED_ERROR);
         stopProgressTicker();
 
@@ -524,7 +633,7 @@ export function useToolboxRun(): UseToolboxRun {
         let newImagePaths = allImages.filter((p) => !baseline.has(p));
         let allDocuments = await scanDocuments(conversationId, workspace, workspace, 0);
         let newDocumentPaths = allDocuments.filter((p) => !baselineDocuments.has(p));
-        let mentionedDocumentPaths = extractGeneratedDocumentPaths(finalText);
+        let mentionedDocumentPaths = extractGeneratedArtifactPaths(finalText);
 
         const loaded = await Promise.all(
           newImagePaths.map((path) =>
@@ -536,7 +645,13 @@ export function useToolboxRun(): UseToolboxRun {
         const images: ToolImageResult[] = loaded.filter((item): item is ToolImageResult => item !== null);
         setProgress({ percent: 90, label: t('toolbox.runEvents.progress.savingContentHub'), step: 6, total: 6 });
         const artifactFiles = await persistTextOutput(tool, values, finalText, workspace, t);
-        const resultFiles = Array.from(new Set([...newDocumentPaths, ...mentionedDocumentPaths, ...artifactFiles]));
+        const resultFiles = await registerGeneratedArtifacts({
+          paths: [...newImagePaths, ...newDocumentPaths, ...mentionedDocumentPaths, ...artifactFiles],
+          workspace,
+          conversationId,
+          source: 'toolbox',
+          standaloneLabel: '工具箱',
+        });
         appendEvent({
           kind: resultFiles.length > 0 ? 'success' : 'warning',
           title: resultFiles.length > 0 ? t('toolbox.runEvents.resultCollected') : t('toolbox.runEvents.noFileResult'),

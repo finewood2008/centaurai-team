@@ -3,7 +3,10 @@ import { mutate as globalMutate } from 'swr';
 import { Message } from '@arco-design/web-react';
 import { ipcBridge } from '@/common';
 import { retrieveKnowledgeContext } from '@/renderer/services/knowledgeBaseSearch';
+import { uploadFileViaHttp } from '@/renderer/services/FileService';
 import { emitter } from '@/renderer/utils/emitter';
+import { registerGeneratedArtifacts } from '@/renderer/utils/file/generatedArtifacts';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import type { IConversationTurnCompletedEvent, IResponseMessage } from '@/common/adapter/ipcBridge';
 import { joinPath, transformMessage } from '@/common/chat/chatLib';
 import type { TMessage, IMessageText } from '@/common/chat/chatLib';
@@ -112,6 +115,15 @@ export type MeetingOrchestrator = {
 };
 
 // ---- persistence helpers ---------------------------------------------------
+
+function base64ToFile(base64: string, fileName: string, mimeType: string): File {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new File([bytes], fileName, { type: mimeType });
+}
 
 function readHistory(team_id: string): MeetingRecord[] {
   try {
@@ -349,9 +361,13 @@ class MeetingEngine {
       const header = `# ${topic || '方案书'}\n\n> 智囊团产出 · ${new Date().toLocaleString('zh-CN')}\n\n`;
       const ok = await ipcBridge.fs.writeFile.invoke({ path, data: header + planText });
       if (!ok) return null;
-      emitter.emit('acp.workspace.refresh');
-      emitter.emit('codex.workspace.refresh');
-      emitter.emit('aionrs.workspace.refresh');
+      await registerGeneratedArtifacts({
+        paths: [path],
+        workspace,
+        conversationId: moderator.conversation_id,
+        source: 'meeting',
+        standaloneLabel: `${this.team.name} · 圆桌会议`,
+      });
       return path;
     } catch {
       return null;
@@ -371,12 +387,7 @@ class MeetingEngine {
     }
   }
 
-  /**
-   * Generate a well-formatted Word (.docx) of the 方案书 with the boss's chosen
-   * option highlighted, and write it to the team workspace (→ Content Hub), falling
-   * back to the Downloads folder. Blob downloads are dropped by this app and the
-   * aioncore fs.write is text-only, so we route bytes through the Electron main IPC.
-   */
+  /** Generate the final decision Word document into the meeting workspace. */
   private async exportDecisionDocx(decision: MeetingResolutionOption | null): Promise<void> {
     const topic = this.state.topic;
     const plan = this.state.plan;
@@ -391,8 +402,22 @@ class MeetingEngine {
         dateLabel: new Date().toLocaleDateString('zh-CN'),
       });
       const fileName = decisionFileName(topic, this.team.name);
+      const moderator = this.moderator;
       let dir = await this.resolveWorkspace();
-      const inWorkspace = Boolean(dir);
+      const inWorkspace = Boolean(dir && moderator?.conversation_id);
+      let savedPath: string | null = null;
+      let savedToWorkspace = false;
+
+      if (inWorkspace && moderator?.conversation_id) {
+        const file = base64ToFile(
+          base64,
+          fileName,
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        );
+        savedPath = await uploadFileViaHttp(file, moderator.conversation_id, undefined, fileName);
+        savedToWorkspace = true;
+      }
+
       if (!dir) {
         try {
           const downloads = await ipcBridge.application.getPath.invoke({ name: 'downloads' });
@@ -405,18 +430,34 @@ class MeetingEngine {
         Message.error('生成 Word 文档失败：未找到保存位置');
         return;
       }
-      const res = await ipcBridge.application.saveBinaryFile.invoke({ dir, fileName, base64 });
-      if (res?.success && res.data?.path) {
-        if (inWorkspace) {
-          emitter.emit('acp.workspace.refresh');
-          emitter.emit('codex.workspace.refresh');
-          emitter.emit('aionrs.workspace.refresh');
+
+      if (!savedPath) {
+        if (!isElectronDesktop()) {
+          Message.error('生成 Word 文档失败：未找到可用的临时空间');
+          return;
+        }
+        const res = await ipcBridge.application.saveBinaryFile.invoke({ dir, fileName, base64 });
+        if (res?.success && res.data?.path) {
+          savedPath = res.data.path;
+        } else {
+          Message.error(`生成 Word 文档失败${res?.msg ? '：' + res.msg : ''}`);
+          return;
+        }
+      }
+
+      if (savedPath) {
+        await registerGeneratedArtifacts({
+          paths: [savedPath],
+          workspace: savedToWorkspace ? dir : null,
+          conversationId: moderator?.conversation_id,
+          source: 'meeting',
+          standaloneLabel: `${this.team.name} · 圆桌会议`,
+        });
+        if (savedToWorkspace) {
           Message.success(`已生成 Word 决策文档：${fileName}（已存入内容中心）`);
         } else {
           Message.success(`已生成 Word 决策文档：${fileName}（已保存到下载文件夹）`);
         }
-      } else {
-        Message.error(`生成 Word 文档失败${res?.msg ? '：' + res.msg : ''}`);
       }
     } catch {
       Message.error('生成 Word 文档失败');
@@ -742,15 +783,29 @@ class MeetingEngine {
           await speak(mod, '聚类', buildClusterPrompt({ topic, ideasContext: transcriptText() }));
         }
         await eachPanelist('收敛', (p) =>
-          buildConvergePrompt({ topic, persona: p.name, lens: lensByPanel.get(p.id), clustersContext: transcriptText() })
+          buildConvergePrompt({
+            topic,
+            persona: p.name,
+            lens: lensByPanel.get(p.id),
+            clustersContext: transcriptText(),
+          })
         );
         if (!(await pauseAndWait(2, '收敛'))) return;
       } else if (form === 'deepdive') {
         for (let round = 2; round <= 3; round++) {
           if (stale()) break;
-          await speak(mod, '追问', buildDeepDiveProbePrompt({ topic, round: round - 1, priorContext: transcriptText() }));
+          await speak(
+            mod,
+            '追问',
+            buildDeepDiveProbePrompt({ topic, round: round - 1, priorContext: transcriptText() })
+          );
           await eachPanelist('深答', (p) =>
-            buildDeepDiveAnswerPrompt({ topic, persona: p.name, lens: lensByPanel.get(p.id), probeContext: transcriptText() })
+            buildDeepDiveAnswerPrompt({
+              topic,
+              persona: p.name,
+              lens: lensByPanel.get(p.id),
+              probeContext: transcriptText(),
+            })
           );
           if (!(await pauseAndWait(round, '追问'))) return;
         }

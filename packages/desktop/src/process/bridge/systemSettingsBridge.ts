@@ -19,6 +19,7 @@ import { changeLanguage } from '@process/services/i18n';
 import type { PetSize } from '@process/pet/petTypes';
 import { createOrUpdateTray, destroyTray, setCloseToTrayEnabled } from '@process/utils/tray';
 import { readCloseToTraySetting, writeCloseToTraySetting } from '@process/utils/closeToTraySetting';
+import { DESKTOP_PET_ENABLED } from '@/common/config/constants';
 
 // Keep-awake power blocker state
 let _keepAwakeBlockerId: number | null = null;
@@ -89,11 +90,18 @@ export function initSystemSettingsBridge(): void {
 
   // Desktop pet settings
   ipcBridge.systemSettings.getPetEnabled.provider(async () => {
+    if (!DESKTOP_PET_ENABLED) return false;
     const value = await ProcessConfig.get('pet.enabled');
     return value ?? false;
   });
 
   ipcBridge.systemSettings.setPetEnabled.provider(async ({ enabled }) => {
+    if (!DESKTOP_PET_ENABLED) {
+      await ProcessConfig.set('pet.enabled', false);
+      const { destroyPetWindow } = await import('@process/pet/petManager');
+      destroyPetWindow();
+      return;
+    }
     const { createPetWindow, destroyPetWindow, isPetSupported } = await import('@process/pet/petManager');
     if (enabled && !isPetSupported()) {
       console.warn('[SystemSettings] Desktop pet is not supported in headless mode');
@@ -114,6 +122,7 @@ export function initSystemSettingsBridge(): void {
 
   ipcBridge.systemSettings.setPetSize.provider(async ({ size }) => {
     await ProcessConfig.set('pet.size', size);
+    if (!DESKTOP_PET_ENABLED) return;
     const { resizePetWindow } = await import('@process/pet/petManager');
     resizePetWindow(size as PetSize);
   });
@@ -125,6 +134,7 @@ export function initSystemSettingsBridge(): void {
 
   ipcBridge.systemSettings.setPetDnd.provider(async ({ dnd }) => {
     await ProcessConfig.set('pet.dnd', dnd);
+    if (!DESKTOP_PET_ENABLED) return;
     const { setPetDndMode } = await import('@process/pet/petManager');
     setPetDndMode(dnd);
   });
@@ -138,6 +148,7 @@ export function initSystemSettingsBridge(): void {
 
   ipcBridge.systemSettings.setPetConfirmEnabled.provider(async ({ enabled }) => {
     await ProcessConfig.set('pet.confirmEnabled', enabled);
+    if (!DESKTOP_PET_ENABLED) return;
     const { setPetConfirmEnabled } = await import('@process/pet/petManager');
     setPetConfirmEnabled(enabled);
   });

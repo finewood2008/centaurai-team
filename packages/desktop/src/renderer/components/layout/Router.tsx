@@ -7,7 +7,6 @@ import { useAuth } from '@renderer/hooks/context/AuthContext';
 import {
   TEAM_MODE_ENABLED,
   IS_DECISION,
-  IS_TEAM,
   WORKBENCH_ENABLED,
   MULTI_USER_ENABLED,
   OFFICE_ASSISTANTS_ENABLED,
@@ -25,7 +24,6 @@ const SystemSettings = React.lazy(() => import('@renderer/pages/settings/SystemS
 const WebuiSettings = React.lazy(() => import('@renderer/pages/settings/WebuiSettings'));
 const ClientSettings = React.lazy(() => import('@renderer/pages/settings/ClientSettings'));
 const UsersSettings = React.lazy(() => import('@renderer/pages/settings/UsersSettings'));
-const PetSettings = React.lazy(() => import('@renderer/pages/settings/PetSettings'));
 const ExtensionSettingsPage = React.lazy(() => import('@renderer/pages/settings/ExtensionSettingsPage'));
 const LoginPage = React.lazy(() => import('@renderer/pages/login'));
 const ComponentsShowcase = React.lazy(() => import('@renderer/pages/TestShowcase'));
@@ -207,11 +205,8 @@ const PanelRoute: React.FC<{ layout: React.ReactElement }> = ({ layout }) => {
             path='/settings/users'
             element={MULTI_USER_ENABLED ? withRouteFallback(UsersSettings) : <Navigate to='/settings/model' replace />}
           />
-          {/* Desktop pet (宠物) — hidden in the Team edition. */}
-          <Route
-            path='/settings/pet'
-            element={IS_TEAM ? <Navigate to='/settings/model' replace /> : withRouteFallback(PetSettings)}
-          />
+          {/* Desktop pet is disabled in the CentaurAI shell. */}
+          <Route path='/settings/pet' element={<Navigate to='/settings/model' replace />} />
           <Route path='/settings/system' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/about' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/ext/:tabId' element={withRouteFallback(ExtensionSettingsPage)} />

@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI 图片生成</title>
+    <script>
+      (function applyThemeFromQuery() {
+        const params = new URLSearchParams(window.location.search);
+        const theme = params.get('theme');
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+
+        const vars = {
+          bg: '--theme-bg',
+          bg2: '--theme-bg-2',
+          surface: '--theme-surface',
+          border: '--theme-border',
+          text: '--theme-text',
+          textSoft: '--theme-text-soft',
+          textMuted: '--theme-text-muted',
+          primary: '--theme-primary',
+          primarySoft: '--theme-primary-soft',
+          success: '--theme-success',
+          danger: '--theme-danger',
+        };
+        for (const [key, variable] of Object.entries(vars)) {
+          const value = params.get(key);
+          if (!value || value.length > 96 || /[{};]/.test(value)) continue;
+          document.documentElement.style.setProperty(variable, value);
+        }
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+        --page-bg: var(--theme-bg, #f6f9ff);
+        --page-bg-soft: var(--theme-bg-2, #eef5ff);
+        --surface: var(--theme-surface, #ffffff);
+        --surface-soft: color-mix(in srgb, var(--page-bg-soft) 72%, var(--surface));
+        --surface-strong: color-mix(in srgb, var(--surface) 86%, var(--theme-primary-soft, #e8f3ff));
+        --line: var(--theme-border, #dfe8f5);
+        --line-strong: color-mix(in srgb, var(--theme-primary, #2563eb) 18%, var(--line));
+        --text: var(--theme-text, #172033);
+        --text-soft: var(--theme-text-soft, #4d5b73);
+        --text-muted: var(--theme-text-muted, #7b8798);
+        --brand: var(--theme-primary, #2563eb);
+        --brand-soft: var(--theme-primary-soft, color-mix(in srgb, var(--brand) 12%, var(--surface)));
+        --brand-strong: color-mix(in srgb, var(--brand) 86%, #0f172a);
+        --success: var(--theme-success, #16a34a);
+        --danger: var(--theme-danger, #dc2626);
+        --shadow: 0 24px 70px -46px color-mix(in srgb, var(--brand) 34%, #111827);
+        --shadow-sm: 0 14px 34px -28px color-mix(in srgb, var(--brand) 36%, #111827);
+        --radius: 20px;
+        --radius-sm: 12px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          color-scheme: dark;
+          --page-bg: var(--theme-bg, #101623);
+          --page-bg-soft: var(--theme-bg-2, #162033);
+          --surface: var(--theme-surface, #172033);
+          --surface-soft: color-mix(in srgb, var(--page-bg-soft) 76%, var(--surface));
+          --surface-strong: color-mix(in srgb, var(--surface) 84%, var(--brand-soft));
+          --line: var(--theme-border, #2b3548);
+          --text: var(--theme-text, #f4f7fb);
+          --text-soft: var(--theme-text-soft, #c8d2e1);
+          --text-muted: var(--theme-text-muted, #8f9bad);
+          --shadow: 0 26px 74px -48px rgba(0, 0, 0, 0.72);
+          --shadow-sm: 0 14px 36px -30px rgba(0, 0, 0, 0.62);
+        }
+      }
+
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --page-bg: var(--theme-bg, #101623);
+        --page-bg-soft: var(--theme-bg-2, #162033);
+        --surface: var(--theme-surface, #172033);
+        --surface-soft: color-mix(in srgb, var(--page-bg-soft) 76%, var(--surface));
+        --surface-strong: color-mix(in srgb, var(--surface) 84%, var(--brand-soft));
+        --line: var(--theme-border, #2b3548);
+        --text: var(--theme-text, #f4f7fb);
+        --text-soft: var(--theme-text-soft, #c8d2e1);
+        --text-muted: var(--theme-text-muted, #8f9bad);
+        --shadow: 0 26px 74px -48px rgba(0, 0, 0, 0.72);
+        --shadow-sm: 0 14px 36px -30px rgba(0, 0, 0, 0.62);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        min-height: 100vh;
+        overflow-x: hidden;
+        background: linear-gradient(180deg, var(--page-bg-soft) 0%, var(--page-bg) 42%, var(--page-bg) 100%);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+        line-height: 1.5;
+      }
+
+      button,
+      textarea,
+      select {
+        font: inherit;
+      }
+
+      .app-shell {
+        width: min(1180px, calc(100vw - 32px));
+        min-height: 100vh;
+        margin: 0 auto;
+        padding: 28px 0;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 18px;
+      }
+
+      .brand-lockup {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .brand-mark {
+        position: relative;
+        display: grid;
+        width: 52px;
+        height: 52px;
+        flex: 0 0 auto;
+        place-items: center;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        border-radius: 16px;
+        background: linear-gradient(135deg, var(--surface) 0%, var(--brand-soft) 100%);
+        box-shadow: var(--shadow-sm);
+      }
+
+      .brand-mark::before,
+      .brand-mark::after {
+        position: absolute;
+        content: '';
+        border-radius: 999px;
+        background: var(--brand);
+      }
+
+      .brand-mark::before {
+        width: 24px;
+        height: 3px;
+        box-shadow:
+          0 9px 0 color-mix(in srgb, var(--brand) 58%, var(--surface)),
+          0 -9px 0 color-mix(in srgb, var(--brand) 36%, var(--surface));
+      }
+
+      .brand-mark::after {
+        width: 8px;
+        height: 8px;
+        box-shadow:
+          -15px 0 0 var(--brand),
+          15px 0 0 color-mix(in srgb, var(--brand) 64%, var(--surface));
+      }
+
+      .eyebrow {
+        color: var(--brand);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin-top: 2px;
+        color: var(--text);
+        font-size: clamp(26px, 3vw, 36px);
+        font-weight: 760;
+        letter-spacing: 0;
+        line-height: 1.16;
+      }
+
+      .subtitle {
+        margin-top: 4px;
+        color: var(--text-soft);
+        font-size: 14px;
+      }
+
+      .status-bar {
+        display: inline-flex;
+        min-height: 38px;
+        flex: 0 0 auto;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--surface) 86%, transparent);
+        box-shadow: var(--shadow-sm);
+        color: var(--text-soft);
+        font-size: 13px;
+        padding: 8px 13px;
+      }
+
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        flex: 0 0 auto;
+        border-radius: 999px;
+      }
+
+      .status-dot.online {
+        background: var(--success);
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 14%, transparent);
+      }
+
+      .status-dot.offline {
+        background: var(--danger);
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 12%, transparent);
+      }
+
+      .workspace {
+        display: grid;
+        align-items: stretch;
+        grid-template-columns: minmax(340px, 0.82fr) minmax(0, 1.18fr);
+        gap: 18px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: color-mix(in srgb, var(--surface) 94%, transparent);
+        box-shadow: var(--shadow);
+      }
+
+      .control-panel {
+        display: flex;
+        min-height: 650px;
+        flex-direction: column;
+        padding: 18px;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+
+      .section-title {
+        color: var(--text);
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .prompt-input {
+        width: 100%;
+        min-height: 190px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        outline: none;
+        background: var(--surface-soft);
+        color: var(--text);
+        font-size: 15px;
+        line-height: 1.62;
+        padding: 15px 16px;
+        transition:
+          border-color 0.18s ease,
+          background 0.18s ease,
+          box-shadow 0.18s ease;
+      }
+
+      .prompt-input::placeholder {
+        color: var(--text-muted);
+      }
+
+      .prompt-input:hover {
+        border-color: var(--line-strong);
+      }
+
+      .prompt-input:focus {
+        border-color: var(--brand);
+        background: var(--surface);
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--brand) 12%, transparent);
+      }
+
+      .prompt-input.is-invalid {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 10%, transparent);
+      }
+
+      .options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .opt-group {
+        min-width: 0;
+      }
+
+      .opt-label {
+        margin-bottom: 5px;
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .opt-select {
+        width: 100%;
+        height: 42px;
+        cursor: pointer;
+        appearance: none;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-sm);
+        outline: none;
+        background:
+          linear-gradient(45deg, transparent 50%, var(--text-muted) 50%) calc(100% - 17px) 18px / 6px 6px no-repeat,
+          linear-gradient(135deg, var(--text-muted) 50%, transparent 50%) calc(100% - 12px) 18px / 6px 6px no-repeat,
+          var(--surface-soft);
+        color: var(--text);
+        font-size: 14px;
+        padding: 0 32px 0 12px;
+        transition:
+          border-color 0.18s ease,
+          background-color 0.18s ease,
+          box-shadow 0.18s ease;
+      }
+
+      .opt-select:hover {
+        border-color: var(--line-strong);
+      }
+
+      .opt-select:focus {
+        border-color: var(--brand);
+        background-color: var(--surface);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 11%, transparent);
+      }
+
+      .btn-generate {
+        display: inline-flex;
+        width: 100%;
+        min-height: 48px;
+        align-items: center;
+        justify-content: center;
+        margin-top: auto;
+        border: 0;
+        border-radius: 15px;
+        background: linear-gradient(135deg, var(--brand) 0%, var(--brand-strong) 100%);
+        box-shadow: 0 16px 28px -22px var(--brand);
+        color: #fff;
+        cursor: pointer;
+        font-size: 15px;
+        font-weight: 720;
+        padding: 0 18px;
+        transition:
+          filter 0.18s ease,
+          transform 0.12s ease,
+          box-shadow 0.18s ease;
+      }
+
+      .btn-generate:hover:not(:disabled) {
+        filter: brightness(1.04);
+        box-shadow: 0 20px 34px -24px var(--brand);
+      }
+
+      .btn-generate:active:not(:disabled) {
+        transform: translateY(1px);
+      }
+
+      .btn-generate:disabled {
+        cursor: not-allowed;
+        filter: grayscale(0.1);
+        opacity: 0.58;
+        transform: none;
+      }
+
+      .result-panel {
+        display: flex;
+        min-height: 650px;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .result-head {
+        display: flex;
+        min-height: 58px;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface-strong);
+        padding: 0 18px;
+      }
+
+      .result-title {
+        color: var(--text);
+        font-size: 15px;
+        font-weight: 720;
+      }
+
+      .result-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 26px;
+        border: 1px solid color-mix(in srgb, var(--brand) 18%, var(--line));
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--brand) 9%, var(--surface));
+        color: var(--brand);
+        font-size: 12px;
+        font-weight: 650;
+        padding: 3px 10px;
+      }
+
+      .result-area {
+        display: flex;
+        min-height: 0;
+        flex: 1;
+        flex-direction: column;
+        padding: 18px;
+      }
+
+      .result-empty,
+      .loading {
+        display: flex;
+        min-height: 500px;
+        flex: 1;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        border: 1px dashed color-mix(in srgb, var(--brand) 20%, var(--line));
+        border-radius: 18px;
+        background:
+          linear-gradient(90deg, color-mix(in srgb, var(--brand) 6%, transparent) 1px, transparent 1px),
+          linear-gradient(0deg, color-mix(in srgb, var(--brand) 6%, transparent) 1px, transparent 1px),
+          var(--surface-soft);
+        background-size: 34px 34px;
+        color: var(--text-muted);
+        text-align: center;
+        padding: 28px;
+      }
+
+      .preview-frame {
+        position: relative;
+        width: min(300px, 72%);
+        aspect-ratio: 4 / 3;
+        overflow: hidden;
+        border: 1px solid color-mix(in srgb, var(--brand) 20%, var(--line));
+        border-radius: 18px;
+        background: linear-gradient(
+          135deg,
+          var(--surface) 0%,
+          color-mix(in srgb, var(--brand) 12%, var(--surface)) 100%
+        );
+        box-shadow: var(--shadow-sm);
+      }
+
+      .preview-frame::before {
+        position: absolute;
+        inset: 18px;
+        content: '';
+        border-radius: 13px;
+        background:
+          linear-gradient(90deg, var(--brand) 0 34%, transparent 34% 100%) 0 0 / 100% 16px no-repeat,
+          linear-gradient(90deg, color-mix(in srgb, var(--brand) 28%, var(--surface)) 0 62%, transparent 62% 100%) 0
+            32px / 100% 12px no-repeat,
+          linear-gradient(90deg, color-mix(in srgb, var(--success) 34%, var(--surface)) 0 48%, transparent 48% 100%) 0
+            58px / 100% 54px no-repeat,
+          color-mix(in srgb, var(--surface) 82%, var(--brand-soft));
+      }
+
+      .empty-title {
+        margin-top: 18px;
+        color: var(--text-soft);
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .spinner {
+        width: 42px;
+        height: 42px;
+        border: 3px solid color-mix(in srgb, var(--brand) 14%, var(--line));
+        border-top-color: var(--brand);
+        border-radius: 999px;
+        animation: spin 0.85s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .loading-text {
+        margin-top: 14px;
+        color: var(--text-soft);
+        font-size: 14px;
+        font-weight: 650;
+      }
+
+      .loading-hint {
+        margin-top: 4px;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .images-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 12px;
+      }
+
+      .image-card {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--surface);
+        box-shadow: var(--shadow-sm);
+        transition:
+          border-color 0.18s ease,
+          box-shadow 0.18s ease,
+          transform 0.18s ease;
+      }
+
+      .image-card:hover {
+        border-color: var(--line-strong);
+        box-shadow: var(--shadow);
+        transform: translateY(-2px);
+      }
+
+      .image-card img {
+        display: block;
+        width: 100%;
+        background: var(--surface-soft);
+      }
+
+      .image-card .meta {
+        overflow: hidden;
+        color: var(--text-muted);
+        font-size: 12px;
+        padding: 9px 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .error-msg {
+        display: flex;
+        min-height: 220px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
+        border-radius: 18px;
+        background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+        color: var(--danger);
+        font-size: 14px;
+        text-align: center;
+        padding: 24px;
+      }
+
+      @media (max-width: 900px) {
+        .app-shell {
+          width: min(100vw - 24px, 720px);
+          padding: 18px 0;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .status-bar {
+          align-self: stretch;
+          justify-content: center;
+        }
+
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .control-panel,
+        .result-panel {
+          min-height: auto;
+        }
+
+        .btn-generate {
+          margin-top: 16px;
+        }
+
+        .result-empty,
+        .loading {
+          min-height: 330px;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .app-shell {
+          width: min(100vw - 20px, 520px);
+        }
+
+        .brand-lockup {
+          align-items: flex-start;
+        }
+
+        .brand-mark {
+          width: 46px;
+          height: 46px;
+          border-radius: 14px;
+        }
+
+        .options {
+          grid-template-columns: 1fr;
+        }
+
+        .panel {
+          border-radius: 16px;
+        }
+
+        .control-panel,
+        .result-area {
+          padding: 14px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <div class="eyebrow">本机模型图片生成工作台</div>
+            <h1>AI 图片生成</h1>
+            <p class="subtitle">本地 ComfyUI 引擎 · SDXL / SD 1.5</p>
+          </div>
+        </div>
+        <div id="statusBar" class="status-bar">
+          <div class="status-dot offline" id="statusDot"></div>
+          <span id="statusText">检测 ComfyUI 连接...</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel control-panel" aria-label="图片生成设置">
+          <div class="section-head">
+            <div class="section-title">提示词</div>
+          </div>
+          <textarea
+            class="prompt-input"
+            id="prompt"
+            placeholder="描述你想要的画面...&#10;例如：一只可爱的橘猫坐在窗台上，阳光透过窗帘洒在它身上"
+            rows="5"
+          ></textarea>
+
+          <div class="options">
+            <div class="opt-group">
+              <div class="opt-label">风格</div>
+              <select class="opt-select" id="style">
+                <option value="realistic">写实摄影</option>
+                <option value="anime">动漫风格</option>
+                <option value="product">电商产品</option>
+                <option value="illustration">插画</option>
+                <option value="oil-painting">油画</option>
+                <option value="3d-render">3D渲染</option>
+              </select>
+            </div>
+            <div class="opt-group">
+              <div class="opt-label">尺寸</div>
+              <select class="opt-select" id="size">
+                <option value="1024x1024">方形 1:1</option>
+                <option value="1216x832">横版 3:2</option>
+                <option value="832x1216">竖版 2:3</option>
+                <option value="1344x768">宽屏 16:9</option>
+              </select>
+            </div>
+            <div class="opt-group">
+              <div class="opt-label">模型</div>
+              <select class="opt-select" id="model">
+                <option value="sdxl">SDXL 高质量</option>
+                <option value="sd15">SD 1.5 快速</option>
+              </select>
+            </div>
+            <div class="opt-group">
+              <div class="opt-label">数量</div>
+              <select class="opt-select" id="count">
+                <option value="1">1张</option>
+                <option value="2">2张</option>
+                <option value="4">4张</option>
+              </select>
+            </div>
+          </div>
+
+          <button class="btn-generate" id="generateBtn" onclick="generate()">生成图片</button>
+        </section>
+
+        <section class="panel result-panel" aria-label="生成结果">
+          <div class="result-head">
+            <div class="result-title">生成结果</div>
+            <div class="result-badge">ComfyUI</div>
+          </div>
+          <div class="result-area" id="resultArea">
+            <div class="result-empty">
+              <div class="preview-frame" aria-hidden="true"></div>
+              <div class="empty-title">等待生成结果</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const isLocalFile = window.location.protocol === 'file:';
+      const isDesktop = window.location.protocol === 'centaur-image-workbench:';
+      const API = isDesktop || isLocalFile ? 'http://127.0.0.1:8188' : '/workbench/image/__proxy/comfyui';
+      let isGenerating = false;
+
+      const STYLE_PROMPTS = {
+        realistic: 'masterpiece, best quality, photorealistic, highly detailed, 8k, professional photography, ',
+        anime: 'masterpiece, best quality, anime style, vibrant colors, clean lines, ',
+        product: 'professional product photography, studio lighting, white background, e-commerce, commercial, ',
+        illustration: 'beautiful illustration, digital art, detailed, colorful, artistic, trending on artstation, ',
+        'oil-painting': 'oil painting, textured brushstrokes, classical art, fine art, gallery quality, ',
+        '3d-render': '3D render, octane render, unreal engine, ray tracing, high quality CGI, ',
+      };
+
+      const NEGATIVE_PROMPT =
+        'low quality, blurry, distorted, bad anatomy, extra fingers, watermark, text, signature, ugly, deformed';
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }
+
+      async function checkStatus() {
+        try {
+          const r = await fetch(API + '/system_stats');
+          if (r.ok) {
+            document.getElementById('statusDot').className = 'status-dot online';
+            document.getElementById('statusText').textContent = 'ComfyUI 已连接 · 就绪';
+            return true;
+          }
+        } catch (e) {}
+        document.getElementById('statusDot').className = 'status-dot offline';
+        document.getElementById('statusText').textContent = 'ComfyUI 未连接';
+        return false;
+      }
+
+      function buildWorkflow(prompt, negativePrompt, width, height, modelName) {
+        const seed = Math.floor(Math.random() * 999999999999999);
+        return {
+          4: { inputs: { ckpt_name: modelName }, class_type: 'CheckpointLoaderSimple', _meta: { title: '加载模型' } },
+          6: { inputs: { text: prompt, clip: ['4', 1] }, class_type: 'CLIPTextEncode' },
+          7: { inputs: { text: negativePrompt, clip: ['4', 1] }, class_type: 'CLIPTextEncode' },
+          5: { inputs: { width, height, batch_size: 1 }, class_type: 'EmptyLatentImage' },
+          3: {
+            inputs: {
+              seed,
+              steps: 20,
+              cfg: 7.0,
+              sampler_name: 'dpmpp_2m',
+              scheduler: 'karras',
+              denoise: 1.0,
+              model: ['4', 0],
+              positive: ['6', 0],
+              negative: ['7', 0],
+              latent_image: ['5', 0],
+            },
+            class_type: 'KSampler',
+          },
+          8: { inputs: { samples: ['3', 0], vae: ['4', 2] }, class_type: 'VAEDecode' },
+          9: { inputs: { filename_prefix: 'CentaurAI', images: ['8', 0] }, class_type: 'SaveImage' },
+        };
+      }
+
+      async function generate() {
+        if (isGenerating) return;
+
+        const promptEl = document.getElementById('prompt');
+        const prompt = promptEl.value.trim();
+        if (!prompt) {
+          promptEl.classList.add('is-invalid');
+          promptEl.focus();
+          return;
+        }
+        promptEl.classList.remove('is-invalid');
+
+        const style = document.getElementById('style').value;
+        const size = document.getElementById('size').value.split('x');
+        const model = document.getElementById('model').value;
+        const count = parseInt(document.getElementById('count').value);
+        const fullPrompt = (STYLE_PROMPTS[style] || '') + prompt;
+        const modelName = model === 'sdxl' ? 'sd_xl_base_1.0.safetensors' : 'v1-5-pruned-emaonly.safetensors';
+
+        isGenerating = true;
+        const btn = document.getElementById('generateBtn');
+        btn.disabled = true;
+        btn.textContent = '生成中...';
+
+        const area = document.getElementById('resultArea');
+        area.innerHTML =
+          '<div class="loading"><div class="spinner"></div><div class="loading-text">生成中...</div><div class="loading-hint">SDXL 通常需要 10-20 秒</div></div>';
+
+        try {
+          const images = [];
+          for (let i = 0; i < count; i++) {
+            const workflow = buildWorkflow(
+              fullPrompt,
+              NEGATIVE_PROMPT,
+              parseInt(size[0]),
+              parseInt(size[1]),
+              modelName
+            );
+            workflow['3'].inputs.seed = Math.floor(Math.random() * 999999999999999);
+
+            const submitResp = await fetch(API + '/prompt', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt: workflow }),
+            });
+            if (!submitResp.ok) throw new Error('提交失败');
+
+            const { prompt_id } = await submitResp.json();
+            let result = null;
+            for (let attempt = 0; attempt < 150; attempt++) {
+              const histResp = await fetch(API + '/history/' + prompt_id);
+              if (!histResp.ok) {
+                await sleep(2000);
+                continue;
+              }
+              const hist = await histResp.json();
+              if (hist[prompt_id]?.status.completed) {
+                result = hist[prompt_id];
+                break;
+              }
+              await sleep(2000);
+            }
+            if (!result) throw new Error('生成超时');
+
+            for (const nodeId of Object.keys(result.outputs)) {
+              const output = result.outputs[nodeId];
+              for (const img of output?.images || []) {
+                const params = new URLSearchParams({ filename: img.filename, type: 'output' });
+                if (img.subfolder) params.set('subfolder', img.subfolder);
+                const imgResp = await fetch(API + '/view?' + params);
+                if (!imgResp.ok) continue;
+                const blob = await imgResp.blob();
+                const dataUrl = await new Promise((resolve) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.readAsDataURL(blob);
+                });
+                images.push({ dataUrl, filename: img.filename });
+              }
+            }
+          }
+
+          if (!images.length) throw new Error('未生成图片');
+          area.innerHTML =
+            '<div class="images-grid">' +
+            images
+              .map((image) => {
+                const filename = escapeHtml(image.filename);
+                return `<div class="image-card"><img src="${image.dataUrl}" alt="${filename}"><div class="meta">${filename}</div></div>`;
+              })
+              .join('') +
+            '</div>';
+        } catch (err) {
+          area.innerHTML = '<div class="error-msg">生成失败：' + escapeHtml(err.message) + '</div>';
+        } finally {
+          isGenerating = false;
+          btn.disabled = false;
+          btn.textContent = '生成图片';
+        }
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      document.getElementById('prompt').addEventListener('input', (event) => {
+        if (event.currentTarget.value.trim()) event.currentTarget.classList.remove('is-invalid');
+      });
+      document.getElementById('prompt').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          generate();
+        }
+      });
+
+      checkStatus();
+      setInterval(checkStatus, 30000);
+    </script>
+  </body>
+</html>

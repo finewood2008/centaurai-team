@@ -26,6 +26,7 @@ import { classifyBackendStartupFailure } from './process/startup/backendStartupF
 import { resolvePreferredBackendPort } from './process/startup/backendPort';
 import { installQuitCleanup } from './process/startup/quitCleanup';
 import { ProcessConfig } from './process/utils/initStorage';
+import { DESKTOP_PET_ENABLED } from './common/config/constants';
 import type { BackendStartupFailureInfo } from './common/types/platform/electron';
 import { registerWindowMaximizeListeners } from '@process/bridge';
 import { BackendLifecycleManager } from '@aionui/web-host';
@@ -1161,7 +1162,7 @@ const handleAppReady = async (): Promise<void> => {
     setTimeout(() => {
       void (async () => {
         try {
-          const petEnabled = await ProcessConfig.get('pet.enabled');
+          const petEnabled = DESKTOP_PET_ENABLED && (await ProcessConfig.get('pet.enabled'));
           if (petEnabled === true) {
             // Read pet sub-settings before creating the pet so flags are honored
             // on the first createPetWindow() call (which is sync).

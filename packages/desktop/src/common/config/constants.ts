@@ -98,6 +98,8 @@ export const WORKBENCH_ENABLED = EDITION !== 'decision';
 export const MULTI_USER_ENABLED = EDITION !== 'decision';
 /** Office assistants (办公助理: word/ppt/excel/财务/学术/Mermaid…): present in full + team; removed in decision (experts/专家 stay). */
 export const OFFICE_ASSISTANTS_ENABLED = EDITION !== 'decision';
+/** Desktop pet: disabled for the CentaurAI product shell. */
+export const DESKTOP_PET_ENABLED: boolean = false;
 
 // ===== AI Provider 相关常量 =====
 

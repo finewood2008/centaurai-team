@@ -1,11 +1,10 @@
 import FlexFullContainer from '@/renderer/components/layout/FlexFullContainer';
 import { isElectronDesktop, resolveExtensionAssetUrl } from '@/renderer/utils/platform';
 import { type IExtensionSettingsTab } from '@/common/adapter/ipcBridge';
-import { IS_DECISION, IS_TEAM } from '@/common/config/constants';
+import { IS_DECISION } from '@/common/config/constants';
 import { useExtI18n } from '@/renderer/hooks/system/useExtI18n';
 import { useExtensionSettingsTabs } from '@/renderer/hooks/system/useExtensionSettingsTabs';
 import {
-  Cat,
   Communication,
   Components,
   Computer,
@@ -41,7 +40,6 @@ export const BUILTIN_TAB_IDS = [
   'client',
   'appstore',
   'users',
-  'pet',
   'system',
   'about',
 ] as const;
@@ -148,24 +146,21 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
         icon: <User />,
         path: 'users',
       },
-      pet: { id: 'pet', label: t('pet.desktopPet'), icon: <Cat />, path: 'pet' },
       system: { id: 'system', label: t('settings.system'), icon: <System />, path: 'system' },
       about: { id: 'about', label: t('settings.about'), icon: <Info />, path: 'about' },
     };
 
-    // Start with ordered builtin IDs. 'client' (local-client downloads) is the
-    // mirror image of 'pet'/'users': it only makes sense for LAN/browser users,
-    // so it's hidden on the desktop admin and shown only in browser mode.
+    // Start with ordered builtin IDs. 'client' (local-client downloads) only
+    // makes sense for LAN/browser users, so it's hidden on the desktop admin
+    // and shown only in browser mode.
     const result: SiderItem[] = BUILTIN_TAB_IDS.filter((id) => {
       // Decision edition: drop the multi-user / WebUI / client-download tabs
       // (single-user, loopback-only) and the 办公助理 (office assistants) tab.
       // The 专家 (experts) tab stays.
       if (IS_DECISION && (id === 'users' || id === 'webui' || id === 'client' || id === 'assistants')) return false;
-      // Team edition: drop the desktop-pet (宠物) settings tab.
-      if (IS_TEAM && id === 'pet') return false;
       // local-models needs the local ollama daemon + ability to launch the
-      // manager app — desktop-only, like pet/users.
-      return id === 'client' ? !isDesktop : isDesktop || (id !== 'pet' && id !== 'users' && id !== 'local-models');
+      // manager app — desktop-only, like users.
+      return id === 'client' ? !isDesktop : isDesktop || (id !== 'users' && id !== 'local-models');
     })
       .map((id) => builtinMap[id])
       .filter((item): item is SiderItem => Boolean(item));
