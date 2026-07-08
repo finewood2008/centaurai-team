@@ -12,9 +12,17 @@ import { describe, test, expect, vi, beforeEach } from 'vitest';
 describe('startWebHost', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.resetModules();
   });
 
   test('Returns handle without initialPassword', async () => {
+    const startStaticServer = vi.fn().mockResolvedValue({
+      port: 33000,
+      url: 'http://127.0.0.1:33000',
+      localUrl: 'http://127.0.0.1:33000',
+      stop: vi.fn().mockResolvedValue(undefined),
+    });
+
     // Mock backend-launcher
     vi.doMock('../src/backend-launcher.js', () => ({
       startBackend: vi.fn().mockResolvedValue({
@@ -25,12 +33,7 @@ describe('startWebHost', () => {
 
     // Mock static-server
     vi.doMock('../src/static-server.js', () => ({
-      startStaticServer: vi.fn().mockResolvedValue({
-        port: 33000,
-        url: 'http://127.0.0.1:33000',
-        localUrl: 'http://127.0.0.1:33000',
-        stop: vi.fn().mockResolvedValue(undefined),
-      }),
+      startStaticServer,
     }));
 
     const { startWebHost } = await import('../src/index.js');
@@ -54,11 +57,49 @@ describe('startWebHost', () => {
     expect('initialPassword' in handle).toBe(false);
     expect(handle.port).toBe(33000);
     expect(handle.backendPort).toBe(55555);
+    expect(startStaticServer).toHaveBeenCalledWith(
+      expect.objectContaining({ concurrency: expect.objectContaining({ profile: 'team-32g', memory: {} }) })
+    );
 
     await handle.stop();
 
     vi.doUnmock('../src/backend-launcher.js');
     vi.doUnmock('../src/static-server.js');
+  });
+
+  test('Allows callers to disable admission control explicitly', async () => {
+    const startStaticServer = vi.fn().mockResolvedValue({
+      port: 33000,
+      url: 'http://127.0.0.1:33000',
+      localUrl: 'http://127.0.0.1:33000',
+      stop: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.doMock('../src/backend-launcher.js', () => ({
+      startBackend: vi.fn().mockResolvedValue({
+        port: 55555,
+        stop: vi.fn().mockResolvedValue(undefined),
+      }),
+    }));
+    vi.doMock('../src/static-server.js', () => ({ startStaticServer }));
+
+    const { startWebHost } = await import('../src/index.js');
+    const handle = await startWebHost({
+      app: {
+        version: '1.0.0',
+        isPackaged: false,
+        resourcesPath: '/app',
+        userDataPath: '/tmp/test-data',
+      },
+      staticDir: '/tmp/static',
+      concurrency: false,
+      backend: {
+        kind: 'ownBackend',
+        resolveBackend: () => '/bin/backend',
+      },
+    });
+
+    expect(startStaticServer).toHaveBeenCalledWith(expect.objectContaining({ concurrency: false }));
+    await handle.stop();
   });
 
   test.todo('Backend port conflict: throws and does not leak resources');

@@ -43,6 +43,42 @@ describe('buildSendFailureError', () => {
     expect(result.retryable).toBe(true);
   });
 
+  it('preserves WebHost concurrency errors as non-feedback busy states', () => {
+    const err = httpError(429, 'DEVICE_BUSY', 'Device is busy. Please wait or try again later.', {
+      reason: 'active_run_limit',
+      profile: 'team-32g',
+      active: 4,
+      limit: 4,
+      queued: 12,
+      queue_limit: 30,
+    });
+
+    const result = buildSendFailureError(err, 'Device is busy. Please wait or try again later.');
+
+    expect(result).toEqual({
+      message: 'Device is busy. Please wait or try again later.',
+      code: 'DEVICE_BUSY',
+      ownership: 'aionui',
+      detail: 'Device is busy. Please wait or try again later.',
+      retryable: true,
+      feedback_recommended: false,
+      resolution: { kind: 'wait_for_current_response' },
+    });
+  });
+
+  it('preserves queued run responses as wait states', () => {
+    const err = httpError(202, 'RUN_QUEUED', 'Run has been queued.', { position: 2 });
+
+    const result = buildSendFailureError(err, 'Run has been queued.');
+
+    expect(result).toMatchObject({
+      code: 'RUN_QUEUED',
+      retryable: false,
+      feedback_recommended: false,
+      resolution: { kind: 'wait_for_current_response' },
+    });
+  });
+
   it('preserves workspace-path validation code as a structured non-retryable error', () => {
     const err = httpError(
       400,

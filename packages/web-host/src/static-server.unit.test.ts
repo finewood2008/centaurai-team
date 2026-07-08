@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { startStaticServer, type StaticServerHandle } from './static-server.js';
 
 async function mkRendererFixture(): Promise<string> {
@@ -24,6 +25,61 @@ async function startMockBackend(
     port,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
+}
+
+async function startWsUpgradeBackend(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>();
+  const server = http.createServer((_req, res) => res.writeHead(404).end());
+  server.on('upgrade', (_req, socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+    socket.write(
+      'HTTP/1.1 101 Switching Protocols\r\n' + 'Upgrade: websocket\r\n' + 'Connection: Upgrade\r\n' + '\r\n'
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const port = (server.address() as AddressInfo).port;
+  return {
+    port,
+    close: async () => {
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+async function openRawWs(port: number): Promise<{ socket: Socket; head: string }> {
+  const socket = net.connect({ host: '127.0.0.1', port });
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('error', reject);
+  });
+  socket.write(
+    'GET /ws HTTP/1.1\r\n' +
+      `Host: 127.0.0.1:${port}\r\n` +
+      'Connection: Upgrade\r\n' +
+      'Upgrade: websocket\r\n' +
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+      'Sec-WebSocket-Version: 13\r\n' +
+      '\r\n'
+  );
+  const head = await new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const timeout = setTimeout(() => reject(new Error('timeout waiting for ws head')), 2_000);
+    socket.on('data', (chunk: Buffer) => {
+      chunks.push(chunk);
+      const text = Buffer.concat(chunks).toString('latin1');
+      if (text.includes('\r\n\r\n')) {
+        clearTimeout(timeout);
+        resolve(text);
+      }
+    });
+    socket.once('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+  return { socket, head };
 }
 
 describe('static-server', () => {
@@ -86,6 +142,159 @@ describe('static-server', () => {
     expect(r.status).toBe(200);
     const json = (await r.json()) as { path: string };
     expect(json.path).toBe('/api/anything');
+  });
+
+  it('limits active agent runs and exposes structured busy errors', async () => {
+    let releaseFirstRun: (() => void) | null = null;
+    let markFirstRunStarted: (() => void) | null = null;
+    const firstRunStarted = new Promise<void>((resolve) => {
+      markFirstRunStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    const backend = await startMockBackend(async (req, res) => {
+      if (req.url === '/api/conversations/conv-1/messages' && req.method === 'POST') {
+        markFirstRunStarted?.();
+        await release;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      concurrency: {
+        profile: 'team-32g',
+        overrides: { activeRunUnits: 1, queueLimit: 0 },
+      },
+    });
+
+    const first = fetch(`${handle.localUrl}/api/conversations/conv-1/messages`, {
+      method: 'POST',
+      headers: { 'x-user-id': 'user-1' },
+      body: JSON.stringify({ content: 'one' }),
+    });
+    await firstRunStarted;
+
+    const second = await fetch(`${handle.localUrl}/api/conversations/conv-2/messages`, {
+      method: 'POST',
+      headers: { 'x-user-id': 'user-2' },
+      body: JSON.stringify({ content: 'two' }),
+    });
+    expect(second.status).toBe(429);
+    expect(await second.json()).toMatchObject({
+      success: false,
+      code: 'DEVICE_BUSY',
+      details: { reason: 'active_run_limit', active: 1, limit: 1, queue_limit: 0 },
+    });
+
+    releaseFirstRun?.();
+    expect((await first).status).toBe(200);
+  });
+
+  it('returns concurrency status without proxying to the backend', async () => {
+    const backend = await startMockBackend((_req, res) => {
+      res.writeHead(500).end('should not reach backend');
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      concurrency: { profile: 'team-64g' },
+    });
+
+    const response = await fetch(`${handle.localUrl}/api/system/concurrency-status`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      success: true,
+      data: {
+        profile: 'team-64g',
+        limits: { activeRunUnits: 8, queueLimit: 50 },
+        active: { agent_run: 0 },
+      },
+    });
+  });
+
+  it('limits raw /ws upgrade connections before splicing to the backend', async () => {
+    const backend = await startWsUpgradeBackend();
+    stopBackend = backend.close;
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      concurrency: { profile: 'team-32g', overrides: { websocketConnections: 1 } },
+    });
+
+    const opened: Socket[] = [];
+    try {
+      const first = await openRawWs(handle.port);
+      opened.push(first.socket);
+      expect(first.head).toContain('101 Switching Protocols');
+      await expect(
+        fetch(`${handle.localUrl}/api/system/concurrency-status`).then((r) => r.json())
+      ).resolves.toMatchObject({
+        data: { websocketConnections: 1 },
+      });
+
+      const second = await openRawWs(handle.port);
+      opened.push(second.socket);
+      expect(second.head).toContain('429 Too Many Requests');
+    } finally {
+      for (const socket of opened) socket.destroy();
+    }
+  });
+
+  it('/api/vector-image streams upstream bytes without buffering through arrayBuffer', async () => {
+    const originalFetch = globalThis.fetch;
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('chunk-a'));
+        controller.enqueue(new TextEncoder().encode('chunk-b'));
+        controller.close();
+      },
+    });
+    const upstream = new Response(upstreamBody, {
+      status: 200,
+      headers: { 'content-type': 'image/png' },
+    });
+    upstream.arrayBuffer = async () => {
+      throw new Error('vector image response must not buffer');
+    };
+    globalThis.fetch = (async () => upstream) as typeof fetch;
+
+    const backend = await startMockBackend((_req, res) => {
+      res.writeHead(500).end('should not reach backend');
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
+
+    try {
+      const body = await new Promise<string>((resolve, reject) => {
+        http
+          .get(`${handle?.localUrl}/api/vector-image?endpoint=http%3A%2F%2Fvector.local&path=x`, (res) => {
+            expect(res.statusCode).toBe(200);
+            expect(res.headers['content-type']).toBe('image/png');
+            let data = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+              data += chunk;
+            });
+            res.on('end', () => resolve(data));
+          })
+          .on('error', reject);
+      });
+      expect(body).toBe('chunk-achunk-b');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('blockTeamRoutes: 403s /api/teams* (Team edition removes 智囊团 at the API level)', async () => {
@@ -255,59 +464,6 @@ describe('static-server', () => {
     expect(r.status).toBe(200);
     const json = (await r.json()) as { user: { username: string } };
     expect(json.user.username).toBe('from-backend');
-  });
-
-  it('/api/settings/client hides API keys from browser clients', async () => {
-    const backend = await startMockBackend((req, res) => {
-      if (req.url === '/api/settings/client' && req.method === 'GET') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            data: {
-              'webui.imageWorkbenchConfig': {
-                profiles: [{ apiKey: 'REAL_KEY', api_key: 'REAL_SNAKE_KEY', baseUrl: 'https://api.example.com/v1' }],
-              },
-            },
-          })
-        );
-        return;
-      }
-      res.writeHead(404).end();
-    });
-    stopBackend = backend.close;
-    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
-
-    const r = await fetch(`${handle.localUrl}/api/settings/client`);
-    expect(r.status).toBe(200);
-    const text = await r.text();
-    expect(text).not.toContain('REAL_KEY');
-    expect(text).not.toContain('REAL_SNAKE_KEY');
-    expect(text).toContain('hasApiKey');
-    expect(text).toContain('has_api_key');
-  });
-
-  it('uses the runtime image workbench config resolver for the LAN entry redirect', async () => {
-    const backend = await startMockBackend((_req, res) => res.end('nope'));
-    stopBackend = backend.close;
-    handle = await startStaticServer({
-      staticDir,
-      backendPort: backend.port,
-      port: 0,
-      imageWorkbenchDir: staticDir,
-      imageWorkbenchConfigResolver: async () => ({
-        apiKey: 'RUNTIME_KEY',
-        model: 'runtime-image-model',
-        profileName: 'Runtime Image',
-      }),
-    });
-
-    const r = await fetch(`${handle.localUrl}/workbench/image/index.html`, { redirect: 'manual' });
-    expect(r.status).toBe(302);
-    const location = r.headers.get('location') ?? '';
-    expect(location).toContain('profileName=Runtime+Image');
-    expect(location).toContain('model=runtime-image-model');
-    expect(location).toContain('apiKey=centaur-lan-managed');
-    expect(location).not.toContain('RUNTIME_KEY');
   });
 
   it('LAN auth gate allows /api/auth/status before login', async () => {

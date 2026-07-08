@@ -14,6 +14,20 @@ const isConversationBusyError = (error: unknown): boolean => {
   return error.backendMessage.toLowerCase().includes('already processing');
 };
 
+const WEBHOST_CONCURRENCY_CODES = new Set([
+  'DEVICE_BUSY',
+  'QUEUE_FULL',
+  'RUN_QUEUED',
+  'RUN_CANCELLED',
+  'RUN_TIMEOUT',
+  'MEMORY_PRESSURE',
+  'PER_USER_LIMIT',
+  'PER_CONVERSATION_LIMIT',
+]);
+
+const isWebHostConcurrencyError = (error: unknown): boolean =>
+  isBackendHttpError(error) && WEBHOST_CONCURRENCY_CODES.has(error.code);
+
 export const buildSendFailureError = (error: unknown, message: string): AgentStreamErrorInfo => {
   const workspacePathErrorCode = normalizeWorkspacePathErrorCode(error);
   if (workspacePathErrorCode) {
@@ -37,6 +51,19 @@ export const buildSendFailureError = (error: unknown, message: string): AgentStr
       detail: message,
       retryable: true,
       feedback_recommended: true,
+    };
+  }
+
+  if (isWebHostConcurrencyError(error)) {
+    const code = isBackendHttpError(error) ? error.code : 'DEVICE_BUSY';
+    return {
+      message,
+      code,
+      ownership: 'aionui',
+      detail: message,
+      retryable: code !== 'RUN_QUEUED' && code !== 'RUN_CANCELLED',
+      feedback_recommended: false,
+      resolution: { kind: 'wait_for_current_response' },
     };
   }
 

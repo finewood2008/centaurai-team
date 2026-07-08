@@ -36,6 +36,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 const NAS_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
 /** Hidden recycle folder; deletes move here instead of hard-unlinking. */
 const TRASH_DIR = '.nas-trash';
+const NAS_LIST_STAT_CONCURRENCY = 16;
 // Path separators and Windows-reserved characters (spaces/unicode survive).
 const UNSAFE_NAME_CHARS = /[/\\:*?"<>|]/g;
 
@@ -119,7 +120,15 @@ export function resolveWithinRoot(rootDir: string, relPath: string | null | unde
 
 /** POSIX-style relative path from root, for stable URLs across platforms. */
 function toRelPosix(rootDir: string, full: string): string {
-  const rel = path.relative(path.resolve(rootDir), full);
+  let rel = path.relative(path.resolve(rootDir), full);
+  if (rel === '..' || rel.startsWith(`..${path.sep}`)) {
+    try {
+      rel = path.relative(fs.realpathSync.native(path.resolve(rootDir)), fs.realpathSync.native(full));
+    } catch {
+      // Fall back to the original path-relative value; callers still enforce
+      // containment before exposing entries.
+    }
+  }
   return rel.split(path.sep).join('/');
 }
 
@@ -175,6 +184,28 @@ async function exists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const boundedLimit = Math.max(1, Math.floor(limit));
+  const results = Array.from({ length: items.length }) as R[];
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(boundedLimit, items.length) }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index] as T, index);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 /** Append " (n)" before the extension until the name is free (bounded). */
@@ -766,30 +797,32 @@ export async function nasList(rootDir: string, relPath?: string | null): Promise
     return { path: toRelPosix(rootDir, dir), entries: [] };
   }
 
-  // Stat every visible entry in parallel — a NAS directory can hold thousands
-  // of files and a sequential walk would dominate the response time.
-  const statted = await Promise.all(
-    dirents
-      .filter((d) => !d.name.startsWith('.'))
-      .map(async (dirent): Promise<NasEntry | null> => {
-        const full = path.join(dir, dirent.name);
-        try {
-          // Skip entries whose real path escapes the root (escaping symlinks).
-          if (!(await isRealContained(rootDir, full))) return null;
-          const st = await fs.promises.stat(full);
-          const isDir = st.isDirectory();
-          return {
-            name: dirent.name,
-            relPath: toRelPosix(rootDir, full),
-            isDir,
-            size: isDir ? 0 : st.size,
-            modifiedAt: st.mtimeMs,
-          };
-        } catch {
-          // Broken symlink or permission error — skip rather than fail the listing.
-          return null;
-        }
-      })
+  // Stat visible entries with bounded parallelism. Large NAS directories can
+  // contain thousands of files; unbounded Promise.all can saturate libuv and
+  // spike memory under multi-user load.
+  const visibleDirents = dirents.filter((d) => !d.name.startsWith('.'));
+  const statted = await mapWithConcurrency(
+    visibleDirents,
+    NAS_LIST_STAT_CONCURRENCY,
+    async (dirent): Promise<NasEntry | null> => {
+      const full = path.join(dir, dirent.name);
+      try {
+        // Skip entries whose real path escapes the root (escaping symlinks).
+        if (!(await isRealContained(rootDir, full))) return null;
+        const st = await fs.promises.stat(full);
+        const isDir = st.isDirectory();
+        return {
+          name: dirent.name,
+          relPath: toRelPosix(rootDir, full),
+          isDir,
+          size: isDir ? 0 : st.size,
+          modifiedAt: st.mtimeMs,
+        };
+      } catch {
+        // Broken symlink or permission error — skip rather than fail the listing.
+        return null;
+      }
+    }
   );
   const entries = statted.filter((e): e is NasEntry => e != null);
 

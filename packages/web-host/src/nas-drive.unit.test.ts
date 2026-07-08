@@ -15,6 +15,7 @@ import {
   nasTrashRemove,
   nasTrashEmpty,
   nasWalk,
+  mapWithConcurrency,
   type NasListing,
 } from './nas-drive.js';
 
@@ -80,6 +81,25 @@ describe('resolveWithinRoot (path containment)', () => {
 });
 
 describe('/api/nas/list', () => {
+  it('bounds parallel stat-style work while preserving result order', async () => {
+    let active = 0;
+    let maxActive = 0;
+    const values = await mapWithConcurrency(
+      Array.from({ length: 20 }, (_, i) => i),
+      3,
+      async (value) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise<void>((resolve) => setTimeout(resolve, 1));
+        active -= 1;
+        return value * 2;
+      }
+    );
+
+    expect(maxActive).toBeLessThanOrEqual(3);
+    expect(values).toEqual(Array.from({ length: 20 }, (_, i) => i * 2));
+  });
+
   it('lists the root: dirs before files, hidden entries skipped', async () => {
     const root = await makeRoot();
     roots.push(root);

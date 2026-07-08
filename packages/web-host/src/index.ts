@@ -1,12 +1,6 @@
 import type { WebHostOptions, WebHostHandle } from './types.js';
 
-export type {
-  AppMetadata,
-  BackendBinaryResolver,
-  ImageWorkbenchConfig,
-  WebHostOptions,
-  WebHostHandle,
-} from './types.js';
+export type { AppMetadata, BackendBinaryResolver, WebHostOptions, WebHostHandle } from './types.js';
 export { startStaticServer, stopStaticServer } from './static-server.js';
 export type { StaticServerOptions, StaticServerHandle } from './static-server.js';
 export type { EntryGuard, EntryHealth, EntryHealthStatus } from './entry-html-guard.js';
@@ -86,10 +80,10 @@ export async function startWebHost(opts: WebHostOptions): Promise<WebHostHandle>
       sharedDriveDir: opts.sharedDriveDir,
       nasRootDir: opts.nasRootDir,
       imageWorkbenchDir: opts.imageWorkbenchDir,
-      imageWorkbenchConfig: opts.imageWorkbenchConfig,
-      imageWorkbenchConfigResolver: opts.imageWorkbenchConfigResolver,
       imageKey: opts.imageKey,
+      videoUpstreamUrl: opts.videoUpstreamUrl,
       blockTeamRoutes: opts.blockTeamRoutes,
+      concurrency: opts.concurrency ?? { profile: 'team-32g', memory: {} },
     });
   } catch (err) {
     // If static-server fails, clean up backend

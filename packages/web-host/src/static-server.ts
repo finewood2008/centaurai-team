@@ -17,6 +17,7 @@ import http, { type IncomingMessage, type Server, type ServerResponse } from 'no
 import { networkInterfaces } from 'node:os';
 import net, { type Socket } from 'node:net';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import serveHandler from 'serve-handler';
 import { handleDownloadGet, handleDownloadsList } from './downloads.js';
 import { handleAppDownloadGet, handleAppDownloadsList, handleAppstoreList } from './app-downloads.js';
@@ -37,10 +38,18 @@ import {
   handleNasRemove,
   handleNasUpload,
 } from './nas-drive.js';
-import { handleImageWorkbenchProxy, handleImageWorkbenchStatic, handleComfyUIProxy } from './image-workbench.js';
+import { handleImageWorkbenchProxy, handleImageWorkbenchStatic } from './image-workbench.js';
+import { handleVideoWorkbenchProxy } from './video-workbench.js';
 import { type AuthGate, createAuthGate } from './webui-auth-gate.js';
 import { createEntryGuard, type EntryGuard } from './entry-html-guard.js';
-import type { ImageWorkbenchConfig } from './types.js';
+import {
+  AdmissionController,
+  AdmissionRejectedError,
+  classifyRequest,
+  serializeAdmissionError,
+  type AdmissionTicket,
+  type ConcurrencyOptions,
+} from './concurrency.js';
 
 export type StaticServerOptions = {
   staticDir: string;
@@ -68,16 +77,18 @@ export type StaticServerOptions = {
    * (where the desktop build copies it); set explicitly for tests.
    */
   imageWorkbenchDir?: string;
-  /** Admin-owned image workbench config shared with LAN users via server proxy. */
-  imageWorkbenchConfig?: ImageWorkbenchConfig;
-  /** Optional runtime resolver so admin config changes apply without restarting WebUI. */
-  imageWorkbenchConfigResolver?: () => Promise<ImageWorkbenchConfig | undefined>;
   /**
    * Server-held API key for the image workbench's upstream model API, injected
    * by the /workbench/image/__proxy/* reverse proxy so it never reaches the
    * browser. Omit to pass the client's Authorization through instead.
    */
   imageKey?: string;
+  /**
+   * Origin of the host's opencut server (run with basePath=/workbench/video),
+   * reverse-proxied at /workbench/video/* for browser/LAN users. Defaults to
+   * http://localhost:3000. Omit to use the default / env override.
+   */
+  videoUpstreamUrl?: string;
   /**
    * When true, return 403 for the aioncore team/meeting API (`/api/teams*`).
    * Set by the Team edition: 智囊团 (decision meetings) is removed from the Team
@@ -86,6 +97,8 @@ export type StaticServerOptions = {
    * Decision box talks to the backend over IPC, not through this proxy.
    */
   blockTeamRoutes?: boolean;
+  /** Optional admission control for expensive WebHost routes. */
+  concurrency?: ConcurrencyOptions | false;
 };
 
 export type StaticServerHandle = {
@@ -143,6 +156,32 @@ function forwardToBackend(req: IncomingMessage, res: ServerResponse, backendPort
     }
   });
   req.pipe(proxy);
+}
+
+function sendJsonResponse(res: ServerResponse, status: number, body: unknown): void {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function releaseOnResponseDone(res: ServerResponse, ticket: AdmissionTicket): void {
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    ticket.release();
+  };
+  res.once('finish', release);
+  res.once('close', release);
+}
+
+function getAdmissionUserId(req: IncomingMessage): string {
+  const header = req.headers['x-user-id'];
+  if (Array.isArray(header)) return header[0] || 'anonymous';
+  return header || 'anonymous';
 }
 
 /**
@@ -420,52 +459,6 @@ function proxyProvidersSanitized(req: IncomingMessage, res: ServerResponse, back
   req.pipe(proxy);
 }
 
-/**
- * Proxy client settings to WebUI/browser clients without exposing secrets that
- * live in admin-owned settings blobs (for example the shared image workbench
- * profile synced from the desktop image app).
- */
-function proxySettingsSanitized(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
-  const options: http.RequestOptions = {
-    hostname: '127.0.0.1',
-    port: backendPort,
-    path: req.url,
-    method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${backendPort}`, 'accept-encoding': 'identity' },
-  };
-  const proxy = http.request(options, (proxyRes) => {
-    const chunks: Buffer[] = [];
-    proxyRes.on('data', (c: Buffer) => chunks.push(c));
-    proxyRes.on('end', () => {
-      const status = proxyRes.statusCode ?? 502;
-      const headers = { ...proxyRes.headers };
-      delete headers['content-length'];
-      delete headers['content-encoding'];
-      delete headers['transfer-encoding'];
-
-      let body = Buffer.concat(chunks);
-      if (status >= 200 && status < 300) {
-        try {
-          body = Buffer.from(JSON.stringify(stripProviderSecrets(JSON.parse(body.toString('utf-8')))), 'utf-8');
-        } catch {
-          // Non-JSON or unexpected shape — pass the original bytes through.
-        }
-      }
-      res.writeHead(status, { ...headers, 'content-length': Buffer.byteLength(body) });
-      res.end(body);
-    });
-  });
-  proxy.on('error', () => {
-    if (!res.headersSent) {
-      res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'BACKEND_UNREACHABLE' }));
-    } else {
-      res.destroy();
-    }
-  });
-  req.pipe(proxy);
-}
-
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -562,8 +555,12 @@ async function handleVectorImage(req: IncomingMessage, res: ServerResponse): Pro
       return;
     }
     res.writeHead(200, { 'content-type': upstream.headers.get('content-type') || 'application/octet-stream' });
-    const buf = Buffer.from(await upstream.arrayBuffer());
-    res.end(buf);
+    const stream = Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]);
+    stream.on('error', () => {
+      if (!res.headersSent) res.writeHead(502);
+      res.destroy();
+    });
+    stream.pipe(res);
   } catch {
     res.writeHead(502, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'VECTOR_DB_UNREACHABLE' }));
@@ -638,21 +635,13 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
   // Loopback-only deployments keep the existing (backend-trusted) behavior.
   const requireAuth = allowRemote;
   const gate = createAuthGate();
+  const admission =
+    opts.concurrency === false || opts.concurrency === undefined ? null : new AdmissionController(opts.concurrency);
+  let activeWebsocketConnections = 0;
 
   // The image workbench SPA dist lives under the served static dir by default
   // (the desktop build copies it to out/renderer/centaur-image-workbench).
   const imageWorkbenchDir = opts.imageWorkbenchDir ?? path.join(opts.staticDir, 'centaur-image-workbench');
-  const fallbackImageWorkbenchConfig =
-    opts.imageWorkbenchConfig ?? (opts.imageKey ? { apiKey: opts.imageKey } : undefined);
-  const resolveImageWorkbenchConfig = async (): Promise<ImageWorkbenchConfig | undefined> => {
-    if (!opts.imageWorkbenchConfigResolver) return fallbackImageWorkbenchConfig;
-    try {
-      return (await opts.imageWorkbenchConfigResolver()) ?? fallbackImageWorkbenchConfig;
-    } catch (error) {
-      console.error('[WebUI] Failed to resolve image workbench config:', error);
-      return fallbackImageWorkbenchConfig;
-    }
-  };
 
   // Self-healing guard for the SPA entry document. The WebUI is the only way LAN
   // users reach the app and it always serves staticDir/index.html; an empty or
@@ -681,7 +670,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // unauthenticated /api/* before any backend-bound or local API handler.
       if (requireAuth && enforceGate(req, res, gate, opts.backendPort)) return;
 
-      // /workbench/* (browser workbench) lives outside /api/, so the
+      // /workbench/* (browser image/video workbench) lives outside /api/, so the
       // gate above skips it — gate it explicitly when LAN-exposed.
       if (requireAuth && req.url.startsWith('/workbench/') && !isGateAuthorized(gate, req)) {
         res.writeHead(401, { 'content-type': 'application/json' });
@@ -698,8 +687,47 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         (req.url === '/api/teams' || req.url.startsWith('/api/teams/') || req.url.startsWith('/api/teams?'))
       ) {
         res.writeHead(403, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ success: false, error: 'EDITION_DISABLED' }));
+        res.end(JSON.stringify({ success: false, code: 'EDITION_DISABLED', error: 'EDITION_DISABLED' }));
         return;
+      }
+
+      if (req.url.startsWith('/api/system/concurrency-status')) {
+        if (!admission) {
+          sendJsonResponse(res, 200, { success: true, data: { enabled: false } });
+        } else {
+          sendJsonResponse(res, 200, {
+            success: true,
+            data: { ...admission.getStatus(), websocketConnections: activeWebsocketConnections },
+          });
+        }
+        return;
+      }
+
+      let admissionTicket: AdmissionTicket | null = null;
+      const classification = admission ? classifyRequest(req.method, req.url) : null;
+      if (admission && classification) {
+        const abortController = new AbortController();
+        const abort = (): void => abortController.abort();
+        req.once('aborted', abort);
+        try {
+          admissionTicket = await admission.acquire({
+            kind: classification.kind,
+            units: classification.units,
+            conversationId: classification.conversationId,
+            userId: getAdmissionUserId(req),
+            abortSignal: abortController.signal,
+          });
+        } catch (err) {
+          req.off('aborted', abort);
+          if (err instanceof AdmissionRejectedError) {
+            const serialized = serializeAdmissionError(err);
+            sendJsonResponse(res, serialized.status, serialized.body);
+            return;
+          }
+          throw err;
+        }
+        req.off('aborted', abort);
+        releaseOnResponseDone(res, admissionTicket);
       }
 
       // Hide desktop/admin-only assistants (the 管家) from WebUI browser clients.
@@ -707,11 +735,6 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // LAN exposure. Desktop talks to the backend directly, bypassing this.
       if (req.method === 'GET' && (req.url === '/api/assistants' || req.url.startsWith('/api/assistants?'))) {
         proxyAssistantsFiltered(req, res, opts.backendPort);
-        return;
-      }
-
-      if (req.method === 'GET' && (req.url === '/api/settings/client' || req.url.startsWith('/api/settings/client?'))) {
-        proxySettingsSanitized(req, res, opts.backendPort);
         return;
       }
 
@@ -834,14 +857,8 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // the same SPA over HTTP plus a key-injecting proxy. The __proxy sub-route
       // must be checked before the static catch (it is a sub-path), and matched
       // WITH a trailing slash so the upstream path always starts with '/'.
-      // ComfyUI local proxy — checked before the generic __proxy to avoid collision.
-      if (req.url.startsWith('/workbench/image/__proxy/comfyui/')) {
-        handleComfyUIProxy(req, res);
-        return;
-      }
       if (req.url.startsWith('/workbench/image/__proxy/')) {
-        const imageWorkbenchConfig = await resolveImageWorkbenchConfig();
-        handleImageWorkbenchProxy(req, res, imageWorkbenchConfig?.apiKey, imageWorkbenchConfig?.baseUrl);
+        handleImageWorkbenchProxy(req, res, opts.imageKey);
         return;
       }
       if (req.url === '/workbench/image') {
@@ -850,8 +867,14 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         return;
       }
       if (req.url.startsWith('/workbench/image/')) {
-        const imageWorkbenchConfig = await resolveImageWorkbenchConfig();
-        await handleImageWorkbenchStatic(req, res, imageWorkbenchDir, imageWorkbenchConfig);
+        await handleImageWorkbenchStatic(req, res, imageWorkbenchDir);
+        return;
+      }
+
+      // /workbench/video/* — reverse proxy to the host opencut server (Next.js
+      // with basePath=/workbench/video). The full path is forwarded unchanged.
+      if (req.url.startsWith('/workbench/video/') || req.url === '/workbench/video') {
+        handleVideoWorkbenchProxy(req, res, opts.videoUpstreamUrl);
         return;
       }
 
@@ -956,6 +979,26 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
           return;
         }
       }
+      if (decision === true && admission) {
+        const limit = admission.getStatus().limits.websocketConnections;
+        if (activeWebsocketConnections >= limit) {
+          cleanup();
+          const body = '{"success":false,"code":"DEVICE_BUSY","error":"Too many WebSocket connections"}';
+          client.end(
+            'HTTP/1.1 429 Too Many Requests\r\n' +
+              'Connection: close\r\n' +
+              'Content-Type: application/json\r\n' +
+              `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+              '\r\n' +
+              body
+          );
+          return;
+        }
+        activeWebsocketConnections += 1;
+        client.once('close', () => {
+          activeWebsocketConnections = Math.max(0, activeWebsocketConnections - 1);
+        });
+      }
       cleanup();
       const target = decision === true ? opts.backendPort : internalPort;
       spliceToTcpEndpoint(client, target, peeked);
@@ -996,9 +1039,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
     stop: () =>
       new Promise<void>((resolve) => {
         tcp_server.close(() => {
-          http_server.close(() => {
-            resolve();
-          });
+          http_server.close(() => resolve());
         });
       }),
     inspectEntry: entryGuard.inspect,
