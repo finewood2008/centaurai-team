@@ -27,8 +27,10 @@ vi.mock('@/renderer/utils/emitter', () => ({
 
 import {
   extractGeneratedArtifactPaths,
+  extractGeneratedArtifactPathsFromToolPayload,
   loadStandaloneGeneratedArtifactFiles,
   registerGeneratedArtifacts,
+  registerGeneratedArtifactsFromToolPayload,
 } from '@/renderer/utils/file/generatedArtifacts';
 
 describe('generatedArtifacts LAN/temp-space registration', () => {
@@ -108,5 +110,93 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
         nested: [{ text: '`/srv/tmp/决策书.docx`' }],
       })
     ).toEqual(['/srv/tmp/result.pptx', '/srv/tmp/poster.png', '/srv/tmp/决策书.docx']);
+  });
+
+  it('extracts generated office artifacts from completed ACP tool updates', () => {
+    expect(
+      extractGeneratedArtifactPathsFromToolPayload({
+        update: {
+          kind: 'execute',
+          status: 'completed',
+          title: 'word creator',
+          locations: [{ path: '/srv/tmp/conv-lan/output/计划书.docx' }],
+          content: [{ type: 'content', content: { type: 'text', text: 'Saved to /srv/tmp/conv-lan/output/deck.pptx' } }],
+          rawInput: { output_path: '/srv/tmp/conv-lan/output/report.pdf' },
+        },
+      })
+    ).toEqual([
+      '/srv/tmp/conv-lan/output/计划书.docx',
+      '/srv/tmp/conv-lan/output/deck.pptx',
+      '/srv/tmp/conv-lan/output/report.pdf',
+    ]);
+  });
+
+  it('extracts relative generated artifact paths from explicit tool path fields', () => {
+    expect(
+      extractGeneratedArtifactPathsFromToolPayload({
+        update: {
+          kind: 'execute',
+          status: 'completed',
+          locations: [{ path: 'outputs/summary.docx' }, { file: 'exports/deck.pptx' }],
+        },
+      })
+    ).toEqual(['outputs/summary.docx', 'exports/deck.pptx']);
+  });
+
+  it('ignores readonly ACP tool updates when collecting generated artifacts', () => {
+    expect(
+      extractGeneratedArtifactPathsFromToolPayload({
+        update: {
+          kind: 'read',
+          status: 'completed',
+          locations: [{ path: '/srv/tmp/conv-lan/input/客户资料.pdf' }],
+        },
+      })
+    ).toEqual([]);
+  });
+
+  it('archives generated files reported by regular tool output into the conversation workspace', async () => {
+    mocks.copyFilesToWorkspace.mockResolvedValueOnce({
+      copied_files: ['/srv/centaur/tmp/conv-lan/outputs/report.pdf'],
+    });
+
+    const files = await registerGeneratedArtifactsFromToolPayload(
+      {
+        name: 'office_export',
+        status: 'completed',
+        output: 'Exported PDF: /tmp/agent-output/archive-report.pdf',
+      },
+      {
+        workspace: '/srv/centaur/tmp/conv-lan',
+        conversationId: 'conv-lan',
+        source: 'conversation',
+      }
+    );
+
+    expect(mocks.copyFilesToWorkspace).toHaveBeenCalledWith({
+      file_paths: ['/tmp/agent-output/archive-report.pdf'],
+      workspace: '/srv/centaur/tmp/conv-lan',
+    });
+    expect(files).toEqual(['/srv/centaur/tmp/conv-lan/outputs/report.pdf']);
+  });
+
+  it('copies relative artifacts from a source workspace into the target workspace', async () => {
+    mocks.copyFilesToWorkspace.mockResolvedValueOnce({
+      copied_files: ['/srv/centaur/tmp/team-leader/outputs/summary.docx'],
+    });
+
+    const files = await registerGeneratedArtifacts({
+      paths: ['outputs/summary.docx'],
+      sourceWorkspace: '/srv/centaur/tmp/hidden-agent',
+      workspace: '/srv/centaur/tmp/team-leader',
+      conversationId: 'team-leader-conv',
+      source: 'meeting',
+    });
+
+    expect(mocks.copyFilesToWorkspace).toHaveBeenCalledWith({
+      file_paths: ['/srv/centaur/tmp/hidden-agent/outputs/summary.docx'],
+      workspace: '/srv/centaur/tmp/team-leader',
+    });
+    expect(files).toEqual(['/srv/centaur/tmp/team-leader/outputs/summary.docx']);
   });
 });

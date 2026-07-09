@@ -9,7 +9,11 @@ import { BackendHttpError } from '@/common/adapter/httpBridge';
 import { ipcBridge } from '@/common';
 import type { TChatConversation } from '@/common/config/storage';
 import { mutate } from 'swr';
-import { getConversationOrNull, refreshConversationCache } from '@/renderer/pages/conversation/utils/conversationCache';
+import {
+  getConversationOrNull,
+  mergeConversationWorkspace,
+  refreshConversationCache,
+} from '@/renderer/pages/conversation/utils/conversationCache';
 
 vi.mock('@/common', () => ({
   ipcBridge: {
@@ -119,6 +123,34 @@ describe('conversationCache', () => {
       await expect(refreshConversationCache('conv-1')).rejects.toBe(error);
 
       expect(mutate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mergeConversationWorkspace', () => {
+    it('fills the workspace path from runtime events', () => {
+      const result = mergeConversationWorkspace(mockConversation, '/tmp/centaurai-workspaces/conv-1');
+
+      expect(result.extra?.workspace).toBe('/tmp/centaurai-workspaces/conv-1');
+      expect(mockConversation.extra?.workspace).toBeUndefined();
+    });
+
+    it('preserves explicit temporary workspace classification for legacy rows without the flag', () => {
+      const result = mergeConversationWorkspace(
+        {
+          ...mockConversation,
+          extra: {
+            custom_workspace: false,
+          },
+        } as TChatConversation,
+        '/tmp/centaurai-workspaces/conv-1'
+      );
+
+      expect(result.extra?.workspace).toBe('/tmp/centaurai-workspaces/conv-1');
+      expect(result.extra?.is_temporary_workspace).toBe(true);
+    });
+
+    it('returns the original conversation when the runtime event has no workspace', () => {
+      expect(mergeConversationWorkspace(mockConversation, '   ')).toBe(mockConversation);
     });
   });
 });

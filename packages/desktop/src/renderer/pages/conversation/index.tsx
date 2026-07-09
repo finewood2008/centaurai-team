@@ -7,7 +7,11 @@ import useSWR from 'swr';
 import ChatConversation from './components/ChatConversation';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
-import { getConversationOrNull } from '@/renderer/pages/conversation/utils/conversationCache';
+import { getConversationOrNull, mergeConversationWorkspace } from '@/renderer/pages/conversation/utils/conversationCache';
+import {
+  registerGeneratedArtifactsFromPayload,
+  registerGeneratedArtifactsFromToolPayload,
+} from '@/renderer/utils/file/generatedArtifacts';
 
 const ChatConversationIndex: React.FC = () => {
   const { id } = useParams();
@@ -46,6 +50,42 @@ const ChatConversationIndex: React.FC = () => {
 
       void mutate();
     });
+  }, [id, mutate]);
+
+  useEffect(() => {
+    if (!id) return;
+
+    const registerToolArtifacts = (event: { type: string; data?: unknown; conversation_id?: string }) => {
+      if (event.conversation_id !== id || (event.type !== 'tool_call' && event.type !== 'acp_tool_call')) {
+        return;
+      }
+      void registerGeneratedArtifactsFromToolPayload(event.data, {
+        conversationId: id,
+        source: 'conversation',
+      });
+    };
+
+    const unsubscribeResponseStream = ipcBridge.conversation.responseStream.on(registerToolArtifacts);
+    const unsubscribeTurnCompleted = ipcBridge.conversation.turnCompleted.on((event) => {
+      if (event.session_id !== id) {
+        return;
+      }
+
+      if (event.workspace?.trim()) {
+        void mutate((current) => mergeConversationWorkspace(current, event.workspace), { revalidate: false });
+      } else {
+        void mutate();
+      }
+      void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
+        workspace: event.workspace,
+        conversationId: event.session_id,
+        source: 'conversation',
+      });
+    });
+    return () => {
+      unsubscribeResponseStream();
+      unsubscribeTurnCompleted();
+    };
   }, [id, mutate]);
 
   useEffect(() => {

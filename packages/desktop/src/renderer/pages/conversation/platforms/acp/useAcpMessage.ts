@@ -12,7 +12,7 @@ import type { IResponseMessage } from '@/common/adapter/ipcBridge';
 import type { TokenUsageData } from '@/common/config/storage';
 import { useAddOrUpdateMessage } from '@/renderer/pages/conversation/Messages/hooks';
 import { logStreamTerminalObserved } from '@/renderer/pages/conversation/runtime/useConversationRuntimeView';
-import { getConversationOrNull } from '@/renderer/pages/conversation/utils/conversationCache';
+import { getConversationOrNull, refreshConversationCache } from '@/renderer/pages/conversation/utils/conversationCache';
 import { isConversationProcessing } from '@/renderer/pages/conversation/utils/conversationRuntime';
 import { warmupConversation } from '@/renderer/pages/conversation/utils/warmupConversation';
 import type { ThoughtData } from '@/renderer/components/chat/ThoughtDisplay';
@@ -567,7 +567,11 @@ export const useAcpMessage = (conversation_id: string, options?: { skipWarmup?: 
     if (options?.skipWarmup) return;
     let cancelled = false;
     void warmupConversation(conversation_id)
-      .then(() => {
+      .then(async () => {
+        if (cancelled) return;
+        await refreshConversationCache(conversation_id).catch((error) => {
+          console.warn('[useAcpMessage] Failed to refresh conversation after warmup:', error);
+        });
         if (cancelled) return;
         return ipcBridge.conversation.getSlashCommands.invoke({ conversation_id });
       })

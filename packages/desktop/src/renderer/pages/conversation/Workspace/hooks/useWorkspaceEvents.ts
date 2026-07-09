@@ -6,7 +6,6 @@
 
 import { ipcBridge } from '@/common';
 import type { IConversationTurnCompletedEvent, IDirOrFile } from '@/common/adapter/ipcBridge';
-import { registerGeneratedArtifactsFromPayload } from '@/renderer/utils/file/generatedArtifacts';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 import type { ContextMenuState } from '../types';
@@ -155,25 +154,19 @@ export function useWorkspaceEvents(options: UseWorkspaceEventsOptions) {
   }, [conversation_id, eventPrefix, throttledRefresh]);
 
   /**
-   * Some generators report saved files in the final assistant message instead
-   * of through a file-tool event. Copy external generated artifacts into this
-   * workspace so the temporary-space tree and Content Hub can see them.
+   * Always refresh after a turn completes. Some generators write directly into
+   * the workspace without emitting a file-tool event or mentioning the path in
+   * the final message; the completed turn is the most reliable catch-all signal.
    */
   useEffect(() => {
     const unsubscribe = ipcBridge.conversation.turnCompleted.on((event: IConversationTurnCompletedEvent) => {
       if (event.session_id !== conversation_id) return;
-      void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
-        workspace: event.workspace || workspace,
-        conversationId: conversation_id,
-        source: 'conversation',
-      }).then((registered) => {
-        if (registered.length > 0) throttledRefresh();
-      });
+      throttledRefresh();
     });
     return () => {
       unsubscribe();
     };
-  }, [conversation_id, throttledRefresh, workspace]);
+  }, [conversation_id, throttledRefresh]);
 
   /**
    * 监听手动刷新工作空间事件
