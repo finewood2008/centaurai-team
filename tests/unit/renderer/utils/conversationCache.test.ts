@@ -13,6 +13,7 @@ import {
   getConversationOrNull,
   mergeConversationWorkspace,
   refreshConversationCache,
+  sanitizeConversationWorkspace,
 } from '@/renderer/pages/conversation/utils/conversationCache';
 
 vi.mock('@/common', () => ({
@@ -131,7 +132,31 @@ describe('conversationCache', () => {
       const result = mergeConversationWorkspace(mockConversation, '/tmp/centaurai-workspaces/conv-1');
 
       expect(result.extra?.workspace).toBe('/tmp/centaurai-workspaces/conv-1');
+      expect(result.extra?.is_temporary_workspace).toBe(true);
       expect(mockConversation.extra?.workspace).toBeUndefined();
+    });
+
+    it('does not merge a home directory as a temporary runtime workspace', () => {
+      const result = mergeConversationWorkspace(mockConversation, '/home/user');
+
+      expect(result).toBe(mockConversation);
+      expect(result.extra?.workspace).toBeUndefined();
+    });
+
+    it('allows a user-picked home directory workspace', () => {
+      const result = mergeConversationWorkspace(
+        {
+          ...mockConversation,
+          extra: {
+            custom_workspace: true,
+            is_temporary_workspace: false,
+          },
+        } as TChatConversation,
+        '/home/user'
+      );
+
+      expect(result.extra?.workspace).toBe('/home/user');
+      expect(result.extra?.is_temporary_workspace).toBe(false);
     });
 
     it('preserves explicit temporary workspace classification for legacy rows without the flag', () => {
@@ -151,6 +176,22 @@ describe('conversationCache', () => {
 
     it('returns the original conversation when the runtime event has no workspace', () => {
       expect(mergeConversationWorkspace(mockConversation, '   ')).toBe(mockConversation);
+    });
+  });
+
+  describe('sanitizeConversationWorkspace', () => {
+    it('hides an unsafe temporary workspace from API responses', () => {
+      const result = sanitizeConversationWorkspace({
+        ...mockConversation,
+        extra: {
+          workspace: '/home/user',
+          custom_workspace: false,
+          is_temporary_workspace: true,
+        },
+      } as TChatConversation);
+
+      expect(result.extra?.workspace).toBe('');
+      expect(result.extra?.is_temporary_workspace).toBe(true);
     });
   });
 });

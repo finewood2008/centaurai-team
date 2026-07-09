@@ -76,6 +76,28 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
     expect(localStorage.getItem('centaurai.generated-artifacts.v1')).toBeNull();
   });
 
+  it('does not copy generated artifacts into a home directory reported as a temporary workspace', async () => {
+    mocks.conversationGet.mockResolvedValueOnce({
+      id: 'conv-home',
+      extra: {
+        workspace: '/home/user',
+        custom_workspace: false,
+        is_temporary_workspace: true,
+      },
+    });
+
+    const files = await registerGeneratedArtifacts({
+      paths: ['/tmp/agent-output/home-leak.pdf'],
+      workspace: '/home/user',
+      conversationId: 'conv-home',
+      source: 'conversation',
+    });
+
+    expect(mocks.copyFilesToWorkspace).not.toHaveBeenCalled();
+    expect(files).toEqual(['/tmp/agent-output/home-leak.pdf']);
+    expect(localStorage.getItem('centaurai.generated-artifacts.v1')).toContain('/tmp/agent-output/home-leak.pdf');
+  });
+
   it('keeps standalone generated artifacts visible to Content Hub when there is no conversation workspace', async () => {
     await registerGeneratedArtifacts({
       paths: ['/srv/centaur/temp/toolbox/img-1.png'],

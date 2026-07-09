@@ -11,6 +11,25 @@
 
 const splitPathSegments = (targetPath: string): string[] => targetPath.split(/[\\/]+/).filter(Boolean);
 
+const normalizeWorkspacePathForSafety = (workspacePath: string): string =>
+  workspacePath.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+
+/**
+ * Runtime "temporary workspace" events must never point at broad user roots.
+ * If a backend accidentally reports its process cwd (for example `/home/user`)
+ * as the temp workspace, the sidebar would enumerate the whole home directory.
+ * User-picked custom workspaces are handled by callers and are not blocked by
+ * this helper by themselves.
+ */
+export const isUnsafeTemporaryWorkspacePath = (workspacePath: string): boolean => {
+  const path = normalizeWorkspacePathForSafety(workspacePath);
+  if (!path || path === '/' || path === '~') return true;
+  if (path === '/home' || path === '/Users') return true;
+  if (/^\/(?:home|Users)\/[^/]+$/i.test(path)) return true;
+  if (/^[A-Za-z]:\/?$/.test(path) || /^[A-Za-z]:\/Users\/[^/]+$/i.test(path)) return true;
+  return false;
+};
+
 /**
  * Get the display name for a workspace path.
  *

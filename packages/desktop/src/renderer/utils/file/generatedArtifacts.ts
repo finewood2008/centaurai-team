@@ -7,6 +7,7 @@
 import { ipcBridge } from '@/common';
 import { emitter } from '@/renderer/utils/emitter';
 import type { FileEntry } from '@/renderer/pages/guid/components/RecentFiles';
+import { isUnsafeTemporaryWorkspacePath } from '@/renderer/utils/workspace/workspace';
 
 const STANDALONE_ARTIFACTS_KEY = 'centaurai.generated-artifacts.v1';
 const MAX_STANDALONE_ARTIFACTS = 300;
@@ -55,6 +56,11 @@ type StoredGeneratedArtifact = {
   addedAt: number;
 };
 
+type ConversationWorkspaceInfo = {
+  workspace: string;
+  isTemporary: boolean;
+};
+
 export type RegisterGeneratedArtifactsOptions = {
   paths: Array<string | null | undefined>;
   workspace?: string | null;
@@ -68,6 +74,17 @@ const copiedExternalArtifactPaths = new Map<string, string>();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function inferConversationWorkspaceInfo(conversation: unknown): ConversationWorkspaceInfo | null {
+  if (!isRecord(conversation) || !isRecord(conversation.extra)) return null;
+  const extra = conversation.extra;
+  const workspace = typeof extra.workspace === 'string' && extra.workspace.trim() ? extra.workspace.trim() : '';
+  const isTemporary =
+    extra.is_temporary_workspace === true ||
+    extra.custom_workspace === false ||
+    (extra.is_temporary_workspace !== false && extra.custom_workspace !== true);
+  return { workspace, isTemporary };
 }
 
 function stripTrailingSlash(path: string): string {
@@ -317,17 +334,27 @@ export async function registerGeneratedArtifacts({
   const registered: string[] = [];
   let workspacePath = typeof workspace === 'string' && workspace.trim() ? workspace.trim() : '';
   const sourceWorkspacePath = typeof sourceWorkspace === 'string' && sourceWorkspace.trim() ? sourceWorkspace.trim() : '';
+  let conversationWorkspaceInfo: ConversationWorkspaceInfo | null = null;
 
-  if (!workspacePath && conversationId) {
+  if (conversationId && (!workspacePath || isUnsafeTemporaryWorkspacePath(workspacePath))) {
     try {
       const conversation = await ipcBridge.conversation.get.invoke({ id: conversationId });
-      const conversationWorkspace = (conversation?.extra as { workspace?: string } | undefined)?.workspace;
-      if (typeof conversationWorkspace === 'string' && conversationWorkspace.trim()) {
-        workspacePath = conversationWorkspace.trim();
+      conversationWorkspaceInfo = inferConversationWorkspaceInfo(conversation);
+      if (!workspacePath && conversationWorkspaceInfo?.workspace) {
+        workspacePath = conversationWorkspaceInfo.workspace;
       }
     } catch {
       // Keep the standalone fallback below when the conversation is no longer readable.
     }
+  }
+
+  if (
+    workspacePath &&
+    isUnsafeTemporaryWorkspacePath(workspacePath) &&
+    source !== 'toolbox' &&
+    (conversationWorkspaceInfo?.isTemporary ?? true)
+  ) {
+    workspacePath = '';
   }
 
   if (workspacePath) {
