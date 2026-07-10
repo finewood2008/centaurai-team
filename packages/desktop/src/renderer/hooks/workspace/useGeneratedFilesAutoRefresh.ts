@@ -7,6 +7,7 @@
 import { ipcBridge } from '@/common';
 import type { IConversationTurnCompletedEvent } from '@/common/adapter/ipcBridge';
 import {
+  registerGeneratedArtifacts,
   registerGeneratedArtifactsFromPayload,
   registerGeneratedArtifactsFromToolPayload,
 } from '@/renderer/utils/file/generatedArtifacts';
@@ -56,6 +57,20 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
 
   useEffect(() => {
     const handleGeneratedFilesChanged = () => throttled();
+    const handleGeneratedWorkspaceFile = (event: { file_path?: string; workspace?: string; operation?: string }) => {
+      if (event.operation === 'delete') {
+        throttled();
+        return;
+      }
+
+      if (!event.file_path) return;
+      void registerGeneratedArtifacts({
+        paths: [event.file_path],
+        workspace: event.workspace,
+        source: 'conversation',
+      });
+      throttled();
+    };
     const handleTurnCompleted = (event: IConversationTurnCompletedEvent) => {
       void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
         workspace: event.workspace,
@@ -91,10 +106,16 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
     emitter.on('generated-files.changed', handleGeneratedFilesChanged);
     const unsubscribe = ipcBridge.acpConversation.responseStream.on(handleResponse);
     const unsubscribeTurnCompleted = ipcBridge.conversation.turnCompleted.on(handleTurnCompleted);
+    const unsubscribeFileStream = ipcBridge.fileStream.contentUpdate.on(handleGeneratedWorkspaceFile);
+    const unsubscribeOfficeAdded = ipcBridge.workspaceOfficeWatch.fileAdded.on((event) => {
+      handleGeneratedWorkspaceFile({ file_path: event.file_path, workspace: event.workspace, operation: 'write' });
+    });
     return () => {
       emitter.off('generated-files.changed', handleGeneratedFilesChanged);
       unsubscribe();
       unsubscribeTurnCompleted();
+      unsubscribeFileStream();
+      unsubscribeOfficeAdded();
       if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
     };
   }, [throttled]);

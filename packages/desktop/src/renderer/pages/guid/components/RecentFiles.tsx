@@ -9,7 +9,7 @@
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import { Message } from '@arco-design/web-react';
-import { Copy, FolderOpen } from '@icon-park/react';
+import { Copy, Download, FolderOpen } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
 import { ipcBridge } from '@/common';
 import type { IDirOrFile } from '@/common/adapter/ipcBridge';
@@ -17,6 +17,8 @@ import type { TChatConversation } from '@/common/config/storage';
 import { getCurrentFrontendUserId } from '@/common/utils/frontendUserScope';
 import { filterConversationsWithChannelScope } from '@/renderer/utils/user/conversationVisibility';
 import { useGeneratedFilesAutoRefresh } from '@/renderer/hooks/workspace/useGeneratedFilesAutoRefresh';
+import { downloadFileFromPath } from '@/renderer/utils/file/download';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import styles from '../index.module.css';
 
 export interface FileEntry {
@@ -302,11 +304,21 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
   // files) so outputs from a freshly created conversation also appear.
   useGeneratedFilesAutoRefresh(loadVisibleConversations);
 
-  const handleOpen = async (path: string) => {
+  const handleOpen = async (file: FileEntry) => {
     try {
-      await ipcBridge.shell.openFile.invoke(path);
+      if (isElectronDesktop()) await ipcBridge.shell.openFile.invoke(file.path);
+      else await downloadFileFromPath(file.path, file.name);
     } catch {
-      Message.error('无法打开');
+      Message.error(t('contentHub.toast.openFailed', { defaultValue: '无法打开' }));
+    }
+  };
+
+  const handleDownload = async (e: React.MouseEvent, file: FileEntry) => {
+    e.stopPropagation();
+    try {
+      await downloadFileFromPath(file.path, file.name);
+    } catch {
+      Message.error(t('contentHub.toast.downloadFailed', { defaultValue: '下载失败' }));
     }
   };
 
@@ -344,7 +356,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
           <div
             key={idx}
             className={styles.recentItem}
-            onClick={() => handleOpen(file.path)}
+            onClick={() => handleOpen(file)}
             title={`${file.name}\n${file.conversation}\n${formatSize(file.size)} · ${formatTime(file.mtime)}`}
           >
             <span className={styles.recentItemIcon}>{getFileIcon(file.name)}</span>
@@ -357,6 +369,9 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
               </div>
             </div>
             <div className={styles.recentItemActions}>
+              <span onClick={(e) => handleDownload(e, file)} className={styles.recentItemAction} title='Download'>
+                <Download size='12' />
+              </span>
               <span onClick={(e) => handleCopy(e, file.path)} className={styles.recentItemAction} title='Copy path'>
                 <Copy size='12' />
               </span>
@@ -399,18 +414,27 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
             key={idx}
             className='flex flex-col items-center gap-4px w-84px px-4px py-10px rd-10px cursor-pointer
               bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative'
-            onClick={() => handleOpen(file.path)}
+            onClick={() => handleOpen(file)}
             title={`${file.name}\n对话: ${file.conversation}\n${formatSize(file.size)} · ${formatTime(file.mtime)}`}
           >
             <div className='absolute -top-4px right-0 flex gap-2px opacity-0 group-hover:opacity-100 transition-opacity'>
               <span
+                onClick={(e) => handleDownload(e, file)}
+                title='Download'
+                className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
+              >
+                <Download size='10' />
+              </span>
+              <span
                 onClick={(e) => handleCopy(e, file.path)}
+                title='Copy path'
                 className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
               >
                 <Copy size='10' />
               </span>
               <span
                 onClick={(e) => handleShowFolder(e, file.path)}
+                title='Show in folder'
                 className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
               >
                 <FolderOpen size='10' />

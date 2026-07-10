@@ -6,6 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import type { IConversationTurnCompletedEvent, IDirOrFile } from '@/common/adapter/ipcBridge';
+import { registerGeneratedArtifacts } from '@/renderer/utils/file/generatedArtifacts';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 import type { ContextMenuState } from '../types';
@@ -228,6 +229,45 @@ export function useWorkspaceEvents(options: UseWorkspaceEventsOptions) {
       return Promise.resolve();
     });
   }, [setFiles]);
+
+  /**
+   * Listen to direct file-write events from the backend. Some generators stream
+   * file writes without an ACP tool payload, so responseStream alone can miss
+   * new deliverables until a manual refresh.
+   */
+  useEffect(() => {
+    const normalize = (value?: string) => (value || '').replace(/\\/g, '/').replace(/[\\/]+$/, '');
+    const normalizedWorkspace = normalize(workspace);
+
+    const handleGeneratedWorkspaceFile = (event: { file_path?: string; workspace?: string; operation?: string }) => {
+      const eventWorkspace = normalize(event.workspace);
+      if (eventWorkspace && eventWorkspace !== normalizedWorkspace) return;
+
+      if (event.operation === 'delete') {
+        throttledRefresh();
+        return;
+      }
+
+      if (!event.file_path) return;
+      void registerGeneratedArtifacts({
+        paths: [event.file_path],
+        workspace,
+        conversationId: conversation_id,
+        source: 'conversation',
+      });
+      throttledRefresh();
+    };
+
+    const unsubscribeFileStream = ipcBridge.fileStream.contentUpdate.on(handleGeneratedWorkspaceFile);
+    const unsubscribeOfficeAdded = ipcBridge.workspaceOfficeWatch.fileAdded.on((event) => {
+      handleGeneratedWorkspaceFile({ file_path: event.file_path, workspace: event.workspace, operation: 'write' });
+    });
+
+    return () => {
+      unsubscribeFileStream();
+      unsubscribeOfficeAdded();
+    };
+  }, [conversation_id, throttledRefresh, workspace]);
 
   /**
    * 监听右键菜单外部点击 - 关闭菜单
