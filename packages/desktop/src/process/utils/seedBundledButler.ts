@@ -5,7 +5,7 @@
  */
 
 import { ipcBridge } from '@/common';
-import type { CreateAssistantRequest } from '@/common/types/agent/assistantTypes';
+import type { Assistant, CreateAssistantRequest, UpdateAssistantRequest } from '@/common/types/agent/assistantTypes';
 import { existsSync, promises as fs } from 'fs';
 import path from 'path';
 import type { ProcessConfig as ProcessConfigType } from './initStorage';
@@ -32,9 +32,10 @@ import type { ProcessConfig as ProcessConfigType } from './initStorage';
  * already-present skill. Gated by {@link SEED_VERSION}; bump it to re-seed.
  */
 
-const SEED_VERSION = 1;
+const SEED_VERSION = 2;
 const SEED_FLAG = 'migration.bundledButlerSeeded';
-const RULE_LOCALES = ['zh-CN', 'en-US'] as const;
+const RULE_LOCALES = ['zh-CN', 'zh-TW', 'en-US'] as const;
+const METADATA_LOCALES = ['zh-CN', 'zh-TW', 'en-US'] as const;
 
 type ConfigFile = typeof ProcessConfigType;
 
@@ -48,6 +49,94 @@ type ButlerManifest = {
   skills: string[];
   assistant: CreateAssistantRequest & { id: string };
 };
+
+function pickSupportedStrings(value: Record<string, string> | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const locale of METADATA_LOCALES) {
+    const text = value?.[locale];
+    if (typeof text === 'string' && text.trim()) result[locale] = text;
+  }
+  return result;
+}
+
+function pickSupportedPromptArrays(value: Record<string, string[]> | undefined): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const locale of METADATA_LOCALES) {
+    const prompts = value?.[locale];
+    if (Array.isArray(prompts) && prompts.length > 0) result[locale] = prompts;
+  }
+  return result;
+}
+
+function mergeMissingStrings(
+  existing: Record<string, string> | undefined,
+  bundled: Record<string, string> | undefined
+): { value: Record<string, string>; changed: boolean } {
+  const value = pickSupportedStrings(existing);
+  let changed = Object.keys(existing ?? {}).some(
+    (locale) => !METADATA_LOCALES.includes(locale as (typeof METADATA_LOCALES)[number])
+  );
+  for (const locale of METADATA_LOCALES) {
+    if (value[locale]) continue;
+    const text = bundled?.[locale];
+    if (typeof text === 'string' && text.trim()) {
+      value[locale] = text;
+      changed = true;
+    }
+  }
+  return { value, changed };
+}
+
+function mergeMissingPromptArrays(
+  existing: Record<string, string[]> | undefined,
+  bundled: Record<string, string[]> | undefined
+): { value: Record<string, string[]>; changed: boolean } {
+  const value = pickSupportedPromptArrays(existing);
+  let changed = Object.keys(existing ?? {}).some(
+    (locale) => !METADATA_LOCALES.includes(locale as (typeof METADATA_LOCALES)[number])
+  );
+  for (const locale of METADATA_LOCALES) {
+    if (value[locale]?.length) continue;
+    const prompts = bundled?.[locale];
+    if (Array.isArray(prompts) && prompts.length > 0) {
+      value[locale] = prompts;
+      changed = true;
+    }
+  }
+  return { value, changed };
+}
+
+async function syncButlerMetadata(assistant: ButlerManifest['assistant']): Promise<boolean> {
+  let existing: Assistant | undefined;
+  try {
+    const assistants = await ipcBridge.assistants.list.invoke();
+    existing = assistants.find((item) => item.id === assistant.id);
+  } catch (error) {
+    console.error('[CentaurAI] Failed to read assistant catalog for butler metadata sync:', error);
+    return false;
+  }
+  if (!existing) return true;
+
+  const name = mergeMissingStrings(existing.name_i18n, assistant.name_i18n);
+  const description = mergeMissingStrings(existing.description_i18n, assistant.description_i18n);
+  const prompts = mergeMissingPromptArrays(existing.prompts_i18n, assistant.prompts_i18n);
+  if (!name.changed && !description.changed && !prompts.changed) return true;
+
+  const update: UpdateAssistantRequest = {
+    id: assistant.id,
+    name_i18n: name.value,
+    description_i18n: description.value,
+    prompts_i18n: prompts.value,
+  };
+  try {
+    await ipcBridge.assistants.update.invoke(update);
+    console.log('[CentaurAI] Synced localized metadata for butler assistant');
+    return true;
+  } catch (error) {
+    console.error('[CentaurAI] Butler metadata sync failed:', error);
+    return false;
+  }
+}
 
 /**
  * Locate the bundled butler directory. In production electron-builder copies
@@ -173,6 +262,10 @@ export async function seedBundledButler(configFile: ConfigFile): Promise<boolean
     }
   } catch (error) {
     console.error('[CentaurAI] Butler assistant import threw:', error);
+    return false;
+  }
+
+  if (!(await syncButlerMetadata(manifest.assistant))) {
     return false;
   }
 

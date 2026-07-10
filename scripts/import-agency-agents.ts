@@ -17,6 +17,8 @@ import path from 'path';
 
 const DEFAULT_AGENCY_REPO = 'https://github.com/msitarzewski/agency-agents.git';
 const DEFAULT_SOURCE_DIR = path.join(os.tmpdir(), 'agency-agents');
+const SUPPORTED_RULE_LOCALES = ['en-US', 'zh-CN', 'zh-TW'] as const;
+const UCONV_MAX_BUFFER = 64 * 1024 * 1024;
 
 type Frontmatter = Record<string, string>;
 
@@ -164,6 +166,17 @@ function runGit(args: string[], cwd?: string): void {
   }
 }
 
+function toTraditionalChinese(input: string): string {
+  if (!input) return input;
+  const result = spawnSync('uconv', ['-x', 'Simplified-Traditional'], {
+    input,
+    encoding: 'utf8',
+    maxBuffer: UCONV_MAX_BUFFER,
+  });
+  if (result.status === 0) return result.stdout;
+  return input;
+}
+
 function ensureSourceDir(args: Map<string, string | boolean>): string {
   const explicitSource = args.get('--source');
   const sourceDir = path.resolve(typeof explicitSource === 'string' ? explicitSource : DEFAULT_SOURCE_DIR);
@@ -283,13 +296,14 @@ async function importViaApi(baseUrl: string, docsByKey: Map<string, AgentDoc>, d
 
     matched++;
     if (!dryRun) {
-      for (const locale of ['en-US', 'zh-CN']) {
+      for (const locale of SUPPORTED_RULE_LOCALES) {
+        const content = locale === 'zh-TW' ? toTraditionalChinese(doc.body) : doc.body;
         await fetchJson<boolean>(normalizedBaseUrl, '/api/skills/assistant-rule/write', {
           method: 'POST',
           body: JSON.stringify({
             assistant_id: assistant.id,
             locale,
-            content: doc.body,
+            content,
           }),
         });
       }
@@ -299,7 +313,7 @@ async function importViaApi(baseUrl: string, docsByKey: Map<string, AgentDoc>, d
 
   console.log(`Agency assistants: ${agencyAssistants.length}`);
   console.log(`Matched          : ${matched}`);
-  console.log(`${dryRun ? 'Would write' : 'Wrote'}          : ${updated} rules x 2 locales`);
+  console.log(`${dryRun ? 'Would write' : 'Wrote'}          : ${updated} rules x ${SUPPORTED_RULE_LOCALES.length} locales`);
   console.log(`Missing          : ${missing.length}`);
   if (missing.length > 0) {
     console.log('');
@@ -429,6 +443,7 @@ async function main(): Promise<void> {
             ...descriptionI18n,
             'en-US': doc.description,
             'zh-CN': zhDescription,
+            'zh-TW': toTraditionalChinese(zhDescription),
           }),
           emoji: doc.emoji ?? '',
           rule_inline_content: doc.body,
