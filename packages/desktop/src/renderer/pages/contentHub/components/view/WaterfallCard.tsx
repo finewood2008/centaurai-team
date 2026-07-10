@@ -70,9 +70,11 @@ const WaterfallCard: React.FC<WaterfallCardProps> = ({ file, size, onOpen, onDir
         <ActionChip onClick={handleDownload}>
           <Download size='11' />
         </ActionChip>
-        <ActionChip onClick={handleShowFolder}>
-          <FolderOpen size='11' />
-        </ActionChip>
+        {actions.canReveal && (
+          <ActionChip onClick={handleShowFolder}>
+            <FolderOpen size='11' />
+          </ActionChip>
+        )}
       </div>
       <FileThumb name={file.name} loadImage={loadImage} variant='natural' emojiClass={WATERFALL_EMOJI[size]} />
       <div className='px-8px py-8px'>

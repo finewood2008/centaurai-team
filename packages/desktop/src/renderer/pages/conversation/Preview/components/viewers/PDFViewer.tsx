@@ -5,6 +5,8 @@
  */
 
 import { ipcBridge } from '@/common';
+import { downloadFileFromPath } from '@/renderer/utils/file/download';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import { buildPdfSrc } from '../../previewUrls';
 import { usePreviewToolbarExtras } from '../../context/PreviewToolbarExtrasContext';
 import { Button, Message } from '@arco-design/web-react';
@@ -17,6 +19,8 @@ interface PDFPreviewProps {
    * PDF 文件路径（磁盘上的绝对路径）
    */
   file_path?: string;
+  file_name?: string;
+  workspace?: string;
   /**
    * PDF content as base64 or blob URL
    * PDF 内容（base64 或 blob URL）
@@ -30,7 +34,11 @@ interface ElectronWebView extends HTMLElement {
   src: string;
 }
 
-const PDFPreview: React.FC<PDFPreviewProps> = ({ file_path, content, hideToolbar = false }) => {
+function nameFromPath(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+const PDFPreview: React.FC<PDFPreviewProps> = ({ file_path, file_name, workspace, content, hideToolbar = false }) => {
   const { t } = useTranslation();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -46,12 +54,21 @@ const PDFPreview: React.FC<PDFPreviewProps> = ({ file_path, content, hideToolbar
     }
 
     try {
-      await ipcBridge.shell.openFile.invoke(file_path);
-      messageApi.success(t('preview.openInSystemSuccess'));
-    } catch (err) {
+      const desktop = isElectronDesktop();
+      if (desktop) {
+        await ipcBridge.shell.openFile.invoke(file_path);
+      } else {
+        await downloadFileFromPath(file_path, file_name || nameFromPath(file_path), workspace);
+      }
+      messageApi.success(
+        desktop
+          ? t('preview.openInSystemSuccess')
+          : t('messages.downloadSuccess', { defaultValue: 'Download successful' })
+      );
+    } catch {
       messageApi.error(t('preview.openInSystemFailed'));
     }
-  }, [file_path, messageApi, t]);
+  }, [file_name, file_path, messageApi, t, workspace]);
 
   useEffect(() => {
     try {

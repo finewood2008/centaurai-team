@@ -17,10 +17,7 @@ import type { TChatConversation } from '@/common/config/storage';
 import { getCurrentFrontendUserId } from '@/common/utils/frontendUserScope';
 import { filterConversationsWithChannelScope } from '@/renderer/utils/user/conversationVisibility';
 import { useGeneratedFilesAutoRefresh } from '@/renderer/hooks/workspace/useGeneratedFilesAutoRefresh';
-import { downloadFileFromPath } from '@/renderer/utils/file/download';
-import { openOfficePreviewForFile } from '@/renderer/utils/file/officePreview';
-import { isElectronDesktop } from '@/renderer/utils/platform';
-import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
+import { useFileActions } from '@/renderer/hooks/file/useFileActions';
 import styles from '../index.module.css';
 
 export interface FileEntry {
@@ -262,7 +259,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
   verticalLimit = 6,
 }) => {
   const { t } = useTranslation();
-  const { openPreview } = usePreviewContext();
+  const fileActions = useFileActions();
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [visibleConversations, setVisibleConversations] = useState<TChatConversation[] | null>(null);
@@ -309,8 +306,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
 
   const handleOpen = async (file: FileEntry) => {
     try {
-      if (isElectronDesktop()) await ipcBridge.shell.openFile.invoke(file.path);
-      else if (!openOfficePreviewForFile(openPreview, file)) await downloadFileFromPath(file.path, file.name);
+      await fileActions.openFile(file);
     } catch {
       Message.error(t('contentHub.toast.openFailed', { defaultValue: '无法打开' }));
     }
@@ -319,7 +315,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
   const handleDownload = async (e: React.MouseEvent, file: FileEntry) => {
     e.stopPropagation();
     try {
-      await downloadFileFromPath(file.path, file.name);
+      await fileActions.downloadFile(file);
     } catch {
       Message.error(t('contentHub.toast.downloadFailed', { defaultValue: '下载失败' }));
     }
@@ -338,7 +334,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
   const handleShowFolder = async (e: React.MouseEvent, path: string) => {
     e.stopPropagation();
     try {
-      await ipcBridge.shell.showItemInFolder.invoke(path);
+      await fileActions.revealFile({ path, name: path.split(/[\\/]/).pop() || path });
     } catch {
       Message.error('无法打开');
     }
@@ -378,13 +374,15 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
               <span onClick={(e) => handleCopy(e, file.path)} className={styles.recentItemAction} title='Copy path'>
                 <Copy size='12' />
               </span>
-              <span
-                onClick={(e) => handleShowFolder(e, file.path)}
-                className={styles.recentItemAction}
-                title='Show in folder'
-              >
-                <FolderOpen size='12' />
-              </span>
+              {fileActions.canReveal && (
+                <span
+                  onClick={(e) => handleShowFolder(e, file.path)}
+                  className={styles.recentItemAction}
+                  title='Show in folder'
+                >
+                  <FolderOpen size='12' />
+                </span>
+              )}
             </div>
           </div>
         ))}
@@ -435,13 +433,15 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
               >
                 <Copy size='10' />
               </span>
-              <span
-                onClick={(e) => handleShowFolder(e, file.path)}
-                title='Show in folder'
-                className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
-              >
-                <FolderOpen size='10' />
-              </span>
+              {fileActions.canReveal && (
+                <span
+                  onClick={(e) => handleShowFolder(e, file.path)}
+                  title='Show in folder'
+                  className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
+                >
+                  <FolderOpen size='10' />
+                </span>
+              )}
             </div>
             <span className='text-32px leading-none'>{getFileIcon(file.name)}</span>
             <span className='text-11px text-t-primary text-center w-full truncate leading-tight'>{file.name}</span>

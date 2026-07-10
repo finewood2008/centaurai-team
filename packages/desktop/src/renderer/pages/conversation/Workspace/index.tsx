@@ -114,7 +114,6 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
     closeContextMenu: modalsHook.closeContextMenu,
     setRenameModal: modalsHook.setRenameModal,
     setDeleteModal: modalsHook.setDeleteModal,
-    openPreview,
   });
 
   // Setup events
@@ -322,6 +321,7 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
               style={contextMenuStyle}
               node={modalsHook.contextMenu.node}
               t={t}
+              canReveal={fileOpsHook.canReveal}
               handleAddToChat={fileOpsHook.handleAddToChat}
               handleOpenNode={fileOpsHook.handleOpenNode}
               handleRevealNode={fileOpsHook.handleRevealNode}

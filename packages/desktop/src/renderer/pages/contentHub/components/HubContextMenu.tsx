@@ -5,16 +5,7 @@
  */
 import React from 'react';
 import { Button } from '@arco-design/web-react';
-import {
-  Copy,
-  Delete,
-  Download,
-  FolderOpen,
-  InboxOut,
-  PreviewOpen,
-  Save,
-  Share,
-} from '@icon-park/react';
+import { Copy, Delete, Download, FolderOpen, InboxOut, PreviewOpen, Save, Share } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
 import type { ContentAsset, FileEntry } from '../types';
 
@@ -27,6 +18,7 @@ type HubContextMenuProps = {
   onCopyPath: (file: FileEntry) => void;
   onDownload: (file: FileEntry) => void;
   onReveal: (file: FileEntry) => void;
+  canReveal?: boolean;
   onShare: (file: FileEntry, asset?: ContentAsset) => void;
   onArchive?: (asset: ContentAsset) => void;
   onDiscardDraft?: (file: FileEntry) => void;
@@ -44,6 +36,7 @@ const HubContextMenu: React.FC<HubContextMenuProps> = ({
   onCopyPath,
   onDownload,
   onReveal,
+  canReveal = true,
   onShare,
   onArchive,
   onDiscardDraft,
@@ -109,9 +102,11 @@ const HubContextMenu: React.FC<HubContextMenuProps> = ({
           <Button type='text' className={BTN} icon={<Download size='14' />} onClick={runFile(onDownload)}>
             {t('contentHub.actions.download')}
           </Button>
-          <Button type='text' className={BTN} icon={<FolderOpen size='14' />} onClick={runFile(onReveal)}>
-            {t('contentHub.actions.showInFolder')}
-          </Button>
+          {canReveal && (
+            <Button type='text' className={BTN} icon={<FolderOpen size='14' />} onClick={runFile(onReveal)}>
+              {t('contentHub.actions.showInFolder')}
+            </Button>
+          )}
           {asset && !draft && onArchive && (
             <Button type='text' className={BTN} icon={<InboxOut size='14' />} onClick={runAsset(onArchive)}>
               {t('contentHub.actions.archive')}

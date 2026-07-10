@@ -72,9 +72,11 @@ const FileCard: React.FC<FileCardProps> = ({ file, size, onOpen, onDirectOpen, o
         <ActionChip onClick={handleDownload}>
           <Download size='10' />
         </ActionChip>
-        <ActionChip onClick={handleShowFolder}>
-          <FolderOpen size='10' />
-        </ActionChip>
+        {actions.canReveal && (
+          <ActionChip onClick={handleShowFolder}>
+            <FolderOpen size='10' />
+          </ActionChip>
+        )}
       </div>
       <FileThumb
         name={file.name}

@@ -7,8 +7,8 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Button, Message, Modal } from '@arco-design/web-react';
 import { Book, Copy, Delete, Open, Upload } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
-import { ipcBridge } from '@/common';
 import { isElectronDesktop } from '@/renderer/utils/platform';
+import { useFileActions } from '@/renderer/hooks/file/useFileActions';
 import EmptyState from '../components/EmptyState';
 import BatchActionBar from '../components/manage/BatchActionBar';
 import HubFileList from '../components/manage/HubFileList';
@@ -41,6 +41,7 @@ const KnowledgeBasePanel: React.FC<KnowledgeBasePanelProps> = ({ controls }) => 
   const [uploading, setUploading] = useState(false);
   const [urlPreview, setUrlPreview] = useState<HubUrlPreview | null>(null);
   const previewLocalFile = useHubPreview();
+  const fileActions = useFileActions();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const records = useMemo<HubFileRecord<KnowledgeDoc>[]>(
@@ -75,29 +76,26 @@ const KnowledgeBasePanel: React.FC<KnowledgeBasePanelProps> = ({ controls }) => 
   );
 
   const openDoc = (doc: KnowledgeDoc) => {
-    if (!isElectronDesktop()) {
-      Message.info(t('contentHub.knowledge.openDesktopOnly'));
-      return;
-    }
-    void ipcBridge.shell.openFile.invoke(doc.path).catch(() => Message.error(t('contentHub.toast.openFailed')));
+    void fileActions
+      .openFile({
+        name: doc.name,
+        path: doc.path,
+      })
+      .catch(() => Message.error(t('contentHub.toast.openFailed')));
   };
 
   const previewDoc = (doc: KnowledgeDoc) => {
-    if (isElectronDesktop()) {
-      void previewLocalFile({
-        name: doc.name,
-        path: doc.path,
-        size: doc.size,
-        mtime: doc.mtime,
-        conversation: t('contentHub.tabs.knowledge'),
-      } satisfies FileEntry);
-      return;
-    }
-    if (classifyHubFile(doc.name) === 'image') {
+    if (!isElectronDesktop() && classifyHubFile(doc.name) === 'image') {
       setUrlPreview({ title: doc.name, url: knowledgeImageUrl(doc.path) });
       return;
     }
-    Message.info(t('contentHub.knowledge.openDesktopOnly'));
+    void previewLocalFile({
+      name: doc.name,
+      path: doc.path,
+      size: doc.size,
+      mtime: doc.mtime,
+      conversation: t('contentHub.tabs.knowledge'),
+    } satisfies FileEntry);
   };
 
   const copyPaths = async (selected: readonly KnowledgeDoc[]) => {

@@ -1,8 +1,7 @@
 /**
  * KnowledgeCard — one read-only document from the vector DB, in either the
  * uniform grid or the masonry waterfall layout. Images load a real thumbnail;
- * a chunk-count badge hints how much of the file is indexed. Click opens the
- * source file (desktop only — the path is local to the DB host).
+ * a chunk-count badge hints how much of the file is indexed.
  */
 import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';

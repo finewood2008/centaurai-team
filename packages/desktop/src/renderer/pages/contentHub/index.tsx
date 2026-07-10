@@ -37,9 +37,6 @@ import { useHubPreview } from './useHubPreview';
 import { useHubFileActions } from './useHubFileActions';
 import { useHubViewPrefs } from './useHubViewPrefs';
 import { isAdminFrontendUser } from '@/common/utils/frontendUserScope';
-import { PreviewPanel, usePreviewContext } from '@/renderer/pages/conversation/Preview';
-import { isOfficePreviewFile } from '@/renderer/utils/file/officePreview';
-import { isElectronDesktop } from '@/renderer/utils/platform';
 import { markAssetArchived, saveAssetToNas, saveDraftToContent } from './components/manage/contentAssets';
 import type {
   ContentAsset,
@@ -88,15 +85,8 @@ const ContentHubPage: React.FC = () => {
 
   const hub = useHubFiles(search, kind, sortKey, sortDirection);
   const preview = useHubPreview();
-  const { isOpen: isPreviewOpen } = usePreviewContext();
   const actions = useHubFileActions();
-  const directOpen = (file: FileEntry): void => {
-    if (!isElectronDesktop() && isOfficePreviewFile(file.name || file.path)) {
-      void preview(file);
-      return;
-    }
-    void actions.openFile(file);
-  };
+  const directOpen = (file: FileEntry): void => void actions.openFile(file);
   const { size, setSize } = viewPrefs;
   const [menu, setMenu] = useState<HubMenuState>(null);
   const canManageKnowledge = isAdminFrontendUser();
@@ -686,13 +676,6 @@ const ContentHubPage: React.FC = () => {
           />
           {renderBody()}
         </main>
-        {isPreviewOpen && (
-          <aside className='w-[min(720px,42vw)] min-w-360px h-full min-h-0 shrink-0 border-l border-l-solid border-l-[var(--color-border-2)] bg-[var(--color-bg-1)] p-8px'>
-            <div className='h-full min-h-0 overflow-hidden'>
-              <PreviewPanel />
-            </div>
-          </aside>
-        )}
       </div>
       <HubContextMenu
         state={menu}
@@ -707,6 +690,7 @@ const ContentHubPage: React.FC = () => {
         onCopyPath={(f) => void actions.copyPath(f)}
         onDownload={(f) => void actions.download(f)}
         onReveal={(f) => void actions.reveal(f)}
+        canReveal={actions.canReveal}
         onClose={() => setMenu(null)}
       />
     </div>

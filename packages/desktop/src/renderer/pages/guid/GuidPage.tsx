@@ -33,7 +33,6 @@ import { ensureBackendMcpCatalog } from '@/renderer/hooks/mcp/catalog';
 import { resolveAgentLogo } from '@/renderer/utils/model/agentLogo';
 import { getAgentDisplayName } from '@/renderer/utils/model/agentTypes';
 import { normalizeBrandText } from '@/renderer/utils/brandText';
-import { PreviewPanel, usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import { Button, Checkbox, ConfigProvider, Dropdown, Menu, Message } from '@arco-design/web-react';
 import { Down, Left, Robot, Write } from '@icon-park/react';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -51,7 +50,6 @@ const GuidPage: React.FC = () => {
   const openAssistantDetailsRef = useRef<(() => void) | null>(null);
   const descriptionTextRef = useRef<HTMLDivElement>(null);
   const { activeBorderColor, inactiveBorderColor, activeShadow } = useInputFocusRing();
-  const { isOpen: isPreviewOpen } = usePreviewContext();
   const { user } = useAuth();
   const greeting = useTimeGreeting({ username: user?.username });
 
@@ -898,16 +896,6 @@ const GuidPage: React.FC = () => {
             </div>
           )}
         </div>
-        {isPreviewOpen && (
-          <aside
-            className='fixed right-12px top-12px bottom-12px z-30 max-w-[calc(100vw-24px)] rounded-[16px] border border-solid border-[var(--color-border-2)] bg-[var(--color-bg-1)] shadow-[0_18px_60px_rgba(15,23,42,0.18)] p-8px'
-            style={{ width: 'min(720px, max(360px, 44vw), calc(100vw - 24px))' }}
-          >
-            <div className='h-full min-h-0 overflow-hidden rounded-[15px]'>
-              <PreviewPanel />
-            </div>
-          </aside>
-        )}
       </div>
     </ConfigProvider>
   );
