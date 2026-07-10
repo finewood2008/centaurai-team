@@ -6,6 +6,7 @@
 
 import type { ICreateConversationParams } from '@/common/adapter/ipcBridge';
 import type { TProviderWithModel } from '@/common/config/storage';
+import { normalizeAcpModelIdForCreate } from '@/common/utils/acpModelIds';
 
 export type BuildAgentConversationPresetResources = {
   rules?: string;
@@ -121,7 +122,8 @@ export function buildAgentConversationParams(input: BuildAgentConversationInput)
   }
 
   if (session_mode) extra.session_mode = session_mode;
-  if (current_model_id) extra.current_model_id = current_model_id;
+  const normalizedModelId = normalizeAcpModelIdForCreate(backend, current_model_id);
+  if (normalizedModelId) extra.current_model_id = normalizedModelId;
 
   return {
     type,

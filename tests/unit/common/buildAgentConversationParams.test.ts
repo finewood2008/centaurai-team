@@ -81,4 +81,28 @@ describe('buildAgentConversationParams workspace defaults', () => {
     expect(params.extra.custom_workspace).toBe(false);
     expect(params.extra.is_temporary_workspace).toBe(true);
   });
+
+  it('normalizes Codex synthetic model ids before persisting create params', () => {
+    const params = buildAgentConversationParams({
+      backend: 'codex',
+      name: 'codex run',
+      workspace: '/tmp/project',
+      model,
+      current_model_id: 'gpt-5.6-sol/xhigh',
+    });
+
+    expect(params.extra.current_model_id).toBe('gpt-5.6-sol');
+  });
+
+  it('does not normalize non-Codex model ids with slashes', () => {
+    const params = buildAgentConversationParams({
+      backend: 'claude',
+      name: 'claude run',
+      workspace: '/tmp/project',
+      model,
+      current_model_id: 'default/default',
+    });
+
+    expect(params.extra.current_model_id).toBe('default/default');
+  });
 });
