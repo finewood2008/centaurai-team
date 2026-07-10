@@ -134,6 +134,14 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
     ).toEqual(['/srv/tmp/result.pptx', '/srv/tmp/poster.png', '/srv/tmp/决策书.docx']);
   });
 
+  it('extracts unquoted generated file paths that contain spaces', () => {
+    expect(
+      extractGeneratedArtifactPaths(
+        '图片已经保存到 /home/user/图片/截图/截图 2026-07-10 02-28-02.png，可以在工作空间查看。'
+      )
+    ).toEqual(['/home/user/图片/截图/截图 2026-07-10 02-28-02.png']);
+  });
+
   it('extracts generated office artifacts from completed ACP tool updates', () => {
     expect(
       extractGeneratedArtifactPathsFromToolPayload({
@@ -200,6 +208,27 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
       workspace: '/srv/centaur/tmp/conv-lan',
     });
     expect(files).toEqual(['/srv/centaur/tmp/conv-lan/outputs/report.pdf']);
+  });
+
+  it('archives generated files from assistant text when the returned path contains spaces', async () => {
+    mocks.copyFilesToWorkspace.mockResolvedValueOnce({
+      copied_files: ['/srv/centaur/tmp/conv-lan/截图 2026-07-10 02-28-02.png'],
+    });
+
+    const files = await registerGeneratedArtifacts({
+      paths: extractGeneratedArtifactPaths(
+        '已生成 /home/user/图片/截图/截图 2026-07-10 02-28-02.png，可直接使用。'
+      ),
+      workspace: '/srv/centaur/tmp/conv-lan',
+      conversationId: 'conv-lan',
+      source: 'conversation',
+    });
+
+    expect(mocks.copyFilesToWorkspace).toHaveBeenCalledWith({
+      file_paths: ['/home/user/图片/截图/截图 2026-07-10 02-28-02.png'],
+      workspace: '/srv/centaur/tmp/conv-lan',
+    });
+    expect(files).toEqual(['/srv/centaur/tmp/conv-lan/截图 2026-07-10 02-28-02.png']);
   });
 
   it('copies relative artifacts from a source workspace into the target workspace', async () => {

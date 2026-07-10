@@ -16,7 +16,7 @@ import FeedbackReportModal from './FeedbackReportModal';
 
 // Per-edition identity + update source. Each edition installs from — and auto-updates
 // against — its OWN downstream repo (see electron-builder.{decision,team}.yml publish).
-const EDITION_LABEL = IS_DECISION ? '决策版' : IS_TEAM ? '团队版' : '';
+const EDITION_LABEL = IS_DECISION ? '决策版' : IS_TEAM ? '超级知识库版' : '';
 const EDITION_REPO = IS_DECISION ? 'finewood2008/centaurai-decision' : IS_TEAM ? 'finewood2008/centaurai-team' : 'finewood2008/centaurai-station';
 const EDITION_REPO_URL = `https://github.com/${EDITION_REPO}`;
 

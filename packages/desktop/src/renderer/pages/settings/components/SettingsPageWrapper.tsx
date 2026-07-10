@@ -1,9 +1,13 @@
 import classNames from 'classnames';
 import React from 'react';
+import { Button } from '@arco-design/web-react';
 import { useLayoutContext } from '@/renderer/hooks/context/LayoutContext';
 import { SettingsViewModeProvider } from '@/renderer/components/settings/SettingsModal/settingsViewContext';
 import { isElectronDesktop, resolveExtensionAssetUrl } from '@/renderer/utils/platform';
 import { type IExtensionSettingsTab } from '@/common/adapter/ipcBridge';
+import { isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
+import { IS_DECISION, MULTI_USER_ENABLED } from '@/common/config/constants';
+import { useAuth } from '@/renderer/hooks/context/AuthContext';
 import { useExtensionSettingsTabs } from '@/renderer/hooks/system/useExtensionSettingsTabs';
 import {
   Communication,
@@ -37,7 +41,14 @@ type NavItem = { label: string; icon: React.ReactElement; path: string; id: stri
 type TranslateFn = (key: string, options?: { defaultValue?: string }) => string;
 
 export function getBuiltinSettingsNavItems(isDesktop: boolean, t: TranslateFn): NavItem[] {
+  const isDesktopAdmin = isDesktop && !isRemoteClientBridgeMode();
   const builtinMap: Record<string, NavItem> = {
+    account: {
+      id: 'account',
+      label: t('settings.account'),
+      icon: <User theme='outline' size='16' />,
+      path: 'account',
+    },
     model: { id: 'model', label: t('settings.model'), icon: <LinkCloud theme='outline' size='16' />, path: 'model' },
     'local-models': {
       id: 'local-models',
@@ -103,9 +114,17 @@ export function getBuiltinSettingsNavItems(isDesktop: boolean, t: TranslateFn): 
     about: { id: 'about', label: t('settings.about'), icon: <Info theme='outline' size='16' />, path: 'about' },
   };
 
-  return BUILTIN_TAB_IDS.filter((id) =>
-    id === 'client' ? !isDesktop : isDesktop || (id !== 'users' && id !== 'local-models')
-  )
+  return BUILTIN_TAB_IDS.filter((id) => {
+    if (
+      IS_DECISION &&
+      (id === 'account' || id === 'users' || id === 'webui' || id === 'client' || id === 'assistants')
+    ) {
+      return false;
+    }
+    if (id === 'client') return !isDesktop;
+    if (id === 'users' || id === 'local-models') return isDesktopAdmin;
+    return true;
+  })
     .map((id) => builtinMap[id])
     .filter((item): item is NavItem => Boolean(item));
 }
@@ -117,6 +136,10 @@ const SettingsPageWrapper: React.FC<SettingsPageWrapperProps> = ({ children, cla
   const { pathname } = useLocation();
   const { t } = useTranslation();
   const isDesktop = isElectronDesktop();
+  const isDesktopAdmin = isDesktop && !isRemoteClientBridgeMode();
+  const { user } = useAuth();
+  const showAccountCenterEntry =
+    MULTI_USER_ENABLED && !IS_DECISION && !isDesktopAdmin && !pathname.includes('/settings/account');
 
   const extensionTabs = useExtensionSettingsTabs();
 
@@ -213,6 +236,28 @@ const SettingsPageWrapper: React.FC<SettingsPageWrapperProps> = ({ children, cla
                 </button>
               );
             })}
+          </div>
+        )}
+        {showAccountCenterEntry && (
+          <div className='mb-16px flex items-center justify-between gap-12px rd-8px border border-solid border-[var(--color-border-2)] bg-fill-1 px-14px py-10px'>
+            <div className='min-w-0 flex items-center gap-8px'>
+              <span className='size-22px flex shrink-0 items-center justify-center text-t-secondary'>
+                <User theme='outline' size='16' />
+              </span>
+              <div className='min-w-0'>
+                <div className='text-14px font-600 text-t-primary'>{t('settings.account')}</div>
+                {user?.username && <div className='truncate text-12px text-t-secondary'>{user.username}</div>}
+              </div>
+            </div>
+            <Button
+              size='small'
+              type='primary'
+              onClick={() => {
+                void navigate('/settings/account', { replace: true });
+              }}
+            >
+              {t('settings.account')}
+            </Button>
           </div>
         )}
         <div className={contentClass}>{children}</div>

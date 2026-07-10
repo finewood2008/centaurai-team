@@ -113,4 +113,29 @@ describe('MessageText attachment paths', () => {
 
     expect(screen.getByTestId('file-preview')).toHaveTextContent('/Users/demo/Desktop/photo.png');
   });
+
+  it('renders knowledge retrieval context as the unified retrieval card', () => {
+    const message: IMessageText = {
+      id: 'msg-3',
+      msg_id: 'msg-3',
+      conversation_id: 'conv-1',
+      type: 'text',
+      position: 'right',
+      createdAt: Date.now(),
+      content: {
+        content: '【知识库检索结果】\n[知识库 1] policy.md:\n报销需要提交发票。\n\n---\n用户问题：怎么报销？',
+      },
+    };
+
+    render(
+      <ConversationProvider value={{ conversationId: 'conv-1', workspace: '/workspace/demo', type: 'acp' }}>
+        <MessageText message={message} />
+      </ConversationProvider>
+    );
+
+    expect(screen.getByText('怎么报销？')).toBeInTheDocument();
+    expect(screen.getByText('知识库检索')).toBeInTheDocument();
+    expect(screen.getByText('policy.md')).toBeInTheDocument();
+    expect(screen.queryByText('【知识库检索结果】')).not.toBeInTheDocument();
+  });
 });

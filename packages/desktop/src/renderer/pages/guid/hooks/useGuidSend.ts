@@ -6,7 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import type { IMcpServer, TProviderWithModel } from '@/common/config/storage';
-import { retrieveKnowledgeContext } from '@/renderer/services/knowledgeBaseSearch';
+import { buildKnowledgeAugmentedPrompt, retrieveKnowledgeContext } from '@/renderer/services/knowledgeBaseSearch';
 import { buildAgentConversationParams } from '@/common/utils/buildAgentConversationParams';
 import { toSessionMcpServer } from '@/renderer/hooks/mcp/catalog';
 import { emitter } from '@/renderer/utils/emitter';
@@ -133,7 +133,7 @@ export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {
       try {
         const { context, count } = await retrieveKnowledgeContext(input);
         if (count > 0 && context) {
-          enrichedInput = `【知识库检索结果】\n${context}\n\n---\n用户问题：${input}`;
+          enrichedInput = buildKnowledgeAugmentedPrompt(input, context);
         } else {
           Message.info('知识库中未找到相关内容，已按原始问题发送');
         }
@@ -248,6 +248,7 @@ export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {
             default_files: files,
             workspace: finalWorkspace,
             custom_workspace: isCustomWorkspace,
+            is_temporary_workspace: !isCustomWorkspace,
             preset_rules: is_preset ? preset_rules : undefined,
             preset_enabled_skills: enabled_skills_to_send,
             exclude_auto_inject_skills: excludeBuiltinSkills,
@@ -392,6 +393,7 @@ export const useGuidSend = (deps: GuidSendDeps): GuidSendResult => {
     selectedMcpServerIds,
     navigate,
     t,
+    searchKnowledgeBase,
   ]);
 
   const sendMessageHandler = useCallback(() => {

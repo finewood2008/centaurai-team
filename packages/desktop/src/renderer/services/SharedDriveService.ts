@@ -88,24 +88,62 @@ export async function sharedPreviewUrl(id: string): Promise<string> {
   return `${base}/api/shared-drive/preview?id=${encodeURIComponent(id)}`;
 }
 
-/** Open a shared item for viewing (admin: system handler; web: new tab). */
-export async function openShared(id: string): Promise<void> {
+function openResolvedUrl(resolveUrl: () => Promise<string>): Promise<void> {
+  const target = window.open('', '_blank');
+  return resolveUrl()
+    .then((url) => {
+      if (target) target.location.href = url;
+      else window.location.assign(url);
+    })
+    .catch((error: unknown) => {
+      target?.close();
+      throw error;
+    });
+}
+
+export async function getSharedLocalInfo(id: string): Promise<{ path: string; name: string; mime: string } | null> {
+  if (!isAdminElectron()) return null;
+  return ipcBridge.sharedDriveLocal.blobInfo.invoke({ id });
+}
+
+/** Open a shared item preview (admin: system handler; web: inline preview tab). */
+export async function previewShared(id: string): Promise<void> {
   if (isAdminElectron()) {
-    const info = await ipcBridge.sharedDriveLocal.blobInfo.invoke({ id });
+    const info = await getSharedLocalInfo(id);
     if (info) await ipcBridge.shell.openFile.invoke(info.path);
     return;
   }
-  window.open(await sharedPreviewUrl(id), '_blank');
+  return openResolvedUrl(() => sharedPreviewUrl(id));
+}
+
+/** Open the original shared file (admin: OS handler; web: attachment URL). */
+export async function openSharedDirect(id: string): Promise<void> {
+  if (isAdminElectron()) {
+    const info = await getSharedLocalInfo(id);
+    if (info) await ipcBridge.shell.openFile.invoke(info.path);
+    return;
+  }
+  return openResolvedUrl(() => sharedDownloadUrl(id));
+}
+
+/** Open a shared item for viewing (admin: system handler; web: new tab). */
+export async function openShared(id: string): Promise<void> {
+  if (isAdminElectron()) {
+    const info = await getSharedLocalInfo(id);
+    if (info) await ipcBridge.shell.openFile.invoke(info.path);
+    return;
+  }
+  return openResolvedUrl(() => sharedPreviewUrl(id));
 }
 
 /** Download a shared item to the user's machine. */
 export async function downloadShared(id: string, name: string): Promise<void> {
   if (isAdminElectron()) {
-    const info = await ipcBridge.sharedDriveLocal.blobInfo.invoke({ id });
+    const info = await getSharedLocalInfo(id);
     if (info) await downloadFileFromPath(info.path, name);
     return;
   }
-  window.open(await sharedDownloadUrl(id), '_blank');
+  return openResolvedUrl(() => sharedDownloadUrl(id));
 }
 
 export type ShareToTeamInput = {

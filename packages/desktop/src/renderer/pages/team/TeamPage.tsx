@@ -56,7 +56,7 @@ const TeamPageContent: React.FC<TeamPageContentProps> = ({ team, onRenameTeam })
   );
 
   // Merge the 会议产出 list INTO the existing right workspace sider (it sits above
-  // the 临时空间 file tree — not a separate sidebar).
+  // the 待整理生成物 file tree — not a separate sidebar).
   const sider = useMemo(() => {
     if (!workspaceEnabled || !dispatchConversation) return <div />;
     return (

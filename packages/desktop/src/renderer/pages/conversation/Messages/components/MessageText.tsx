@@ -94,7 +94,8 @@ const useFormatContent = (content: string) => {
   }, [content]);
 };
 
-const LOCAL_VECTOR_DB_DISPLAY_MARK = '【local-vector-db 检索结果】';
+const KNOWLEDGE_CONTEXT_DISPLAY_MARK = '【知识库检索结果】';
+const LEGACY_LOCAL_VECTOR_DB_DISPLAY_MARK = '【local-vector-db 检索结果】';
 
 type LocalVectorDbDisplay = {
   question: string;
@@ -139,7 +140,8 @@ const localVectorPreview = (value: string): string =>
         !/^[-—]{3,}$/.test(line) &&
         !/^用户问题[：:]/.test(line) &&
         !/^##\s*/.test(line) &&
-        !/^\[\d+\]\s+/.test(line)
+        !/^\[\d+\]\s+/.test(line) &&
+        !/^\[知识库\s*\d+\]/.test(line)
     )
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -152,12 +154,17 @@ const clampLocalVectorText = (value: string): string => {
 
 const parseLocalVectorDisplay = (content: string): LocalVectorDbDisplay | null => {
   const text = String(content || '');
-  if (!text.startsWith(LOCAL_VECTOR_DB_DISPLAY_MARK)) return null;
+  const marker = text.startsWith(KNOWLEDGE_CONTEXT_DISPLAY_MARK)
+    ? KNOWLEDGE_CONTEXT_DISPLAY_MARK
+    : text.startsWith(LEGACY_LOCAL_VECTOR_DB_DISPLAY_MARK)
+      ? LEGACY_LOCAL_VECTOR_DB_DISPLAY_MARK
+      : null;
+  if (!marker) return null;
 
   const questionMatch = text.match(/\n---\n(?:#{1,6}\s*)?用户问题(?:[：:]?\s*\n|[：:]\s*)([\s\S]*)$/);
   const question = questionMatch ? questionMatch[1].trim() : '';
-  const body = text.slice(LOCAL_VECTOR_DB_DISPLAY_MARK.length, questionMatch?.index ?? text.length).trim();
-  const mode = ((body.match(/(?:检索模式|模式)[：:]\s*([^·\n<]+)/) || [])[1] || '本地检索').trim();
+  const body = text.slice(marker.length, questionMatch?.index ?? text.length).trim();
+  const mode = ((body.match(/(?:检索模式|模式)[：:]\s*([^·\n<]+)/) || [])[1] || '知识库检索').trim();
 
   let sources: string[] = [];
   for (const match of body.matchAll(/local-vector-db-source-name[^>]*>([\s\S]*?)<\/span>/g)) {
@@ -165,6 +172,9 @@ const parseLocalVectorDisplay = (content: string): LocalVectorDbDisplay | null =
   }
   for (const match of body.matchAll(/^\[(\d+)\]\s*([^\n]+)/gm)) {
     sources.push(cleanLocalVectorText(match[2]).replace(/\s*·\s*score.*$/, ''));
+  }
+  for (const match of body.matchAll(/^\[知识库\s*\d+\]\s*([^:\n]+):/gm)) {
+    sources.push(cleanLocalVectorText(match[1]));
   }
   for (const match of body.matchAll(/^##\s+(.+)$/gm)) {
     const source = cleanLocalVectorText(match[1]).replace(/（\d+\s*条）$/, '').trim();
@@ -174,7 +184,12 @@ const parseLocalVectorDisplay = (content: string): LocalVectorDbDisplay | null =
   }
   sources = [...new Set(sources.map((source) => source.trim()).filter(Boolean))].slice(0, 6);
 
-  const count = ((body.match(/(\d+)\s*条/) || [])[1] || sources.length || '').toString();
+  const count = (
+    (body.match(/(\d+)\s*条/) || [])[1] ||
+    body.match(/^\[知识库\s*\d+\]/gm)?.length ||
+    sources.length ||
+    ''
+  ).toString();
   const snippet = cleanLocalVectorText(body).slice(0, 2200);
   const preview = clampLocalVectorText(localVectorPreview(body) || snippet);
 
@@ -231,7 +246,7 @@ const renderLocalVectorUserMessage = (content: string): React.ReactNode => {
               KB
             </span>
             <div className='min-w-0'>
-              <div className='text-13px font-700 text-t-primary truncate'>本地知识库检索</div>
+              <div className='text-13px font-700 text-t-primary truncate'>知识库检索</div>
               <div className='text-11px text-t-secondary mt-1px'>已选取相关片段作为回答依据</div>
             </div>
           </div>

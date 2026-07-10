@@ -54,8 +54,8 @@ const useNanobotSendBoxDraft = getSendBoxDraftHook('nanobot', {
 const EMPTY_AT_PATH: Array<string | FileOrFolderItem> = [];
 const EMPTY_UPLOAD_FILES: string[] = [];
 
-const NanobotSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }) => {
-  const [workspacePath, setWorkspacePath] = useState('');
+const NanobotSendBox: React.FC<{ conversation_id: string; workspace?: string }> = ({ conversation_id, workspace }) => {
+  const [workspacePath, setWorkspacePath] = useState(workspace ?? '');
   const { t } = useTranslation();
   const teamPermission = useTeamPermission();
   const { checkAndUpdateTitle } = useAutoTitle();
@@ -137,6 +137,12 @@ const NanobotSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id
     },
     [mutateDraft]
   );
+
+  useEffect(() => {
+    if (workspace) {
+      setWorkspacePath(workspace);
+    }
+  }, [workspace]);
 
   const handleContentChange = useCallback(
     (val: string) => {
@@ -260,7 +266,6 @@ const NanobotSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id
       const displayMessage = buildDisplayMessage(input, files, workspacePath);
 
       setAiProcessing(true);
-      let msg_id: string | null = null;
       try {
         void checkAndUpdateTitle(conversation_id, input);
         // Team-owned conversations must go through the Team API (aioncore ≥0.1.29).

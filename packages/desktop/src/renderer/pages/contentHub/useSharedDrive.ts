@@ -1,5 +1,5 @@
 /**
- * useSharedDrive — loads and mutates the enterprise LAN shared library.
+ * useSharedDrive — legacy Enterprise NAS-compatible shared-drive client.
  */
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -57,7 +57,7 @@ export function useSharedDrive() {
     [reload]
   );
 
-  // Upload OS files dropped directly onto the shared library. Uses the current
+  // Upload OS files dropped directly onto the Enterprise NAS-compatible store. Uses the current
   // category filter as the default tag so drops land where the user is looking.
   const addFiles = useCallback(
     async (files: File[]) => {

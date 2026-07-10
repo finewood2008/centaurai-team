@@ -29,13 +29,36 @@ const DEFAULT_TTL_SEC = 7 * 24 * 60 * 60;
 
 const nowSec = (): number => Math.floor(Date.now() / 1000);
 
+export type AuthGateIdentity = {
+  userId: string;
+  username?: string;
+};
+
+type AuthGatePayload = {
+  exp?: number;
+  user_id?: string;
+  username?: string;
+};
+
+function identityFromPayload(payload: AuthGatePayload | null): AuthGateIdentity | null {
+  const userId = typeof payload?.user_id === 'string' ? payload.user_id.trim() : '';
+  if (!userId) return null;
+  const username =
+    typeof payload?.username === 'string' && payload.username.trim() ? payload.username.trim() : undefined;
+  return { userId, username };
+}
+
 export type AuthGate = {
   /** Build the raw bearer token used by the cookie or native-client header. */
-  mintToken: (ttlSec?: number) => string;
+  mintToken: (identityOrTtlSec?: AuthGateIdentity | number, ttlSec?: number) => string;
   /** Build a `Set-Cookie` value authorizing the bearer for `ttlSec` seconds. */
-  mintCookie: (ttlSec?: number) => string;
+  mintCookie: (identityOrTtlSec?: AuthGateIdentity | number, ttlSec?: number) => string;
   /** Build a `Set-Cookie` value that immediately clears the gate cookie. */
   clearCookie: () => string;
+  /** Return the trusted identity embedded in a valid bearer token, when present. */
+  getAuthorizedTokenIdentity: (token: string | undefined | null) => AuthGateIdentity | null;
+  /** Return the trusted identity embedded in a valid cookie token, when present. */
+  getAuthorizedIdentity: (cookieHeader: string | undefined) => AuthGateIdentity | null;
   /** True if a raw bearer token is valid and unexpired. */
   isAuthorizedToken: (token: string | undefined | null) => boolean;
   /** True if the raw `Cookie` header carries a valid, unexpired gate token. */
@@ -70,38 +93,66 @@ export function createAuthGate(opts?: { secret?: Buffer; secure?: boolean }): Au
     return attrs.join('; ');
   };
 
+  const parseTokenPayload = (token: string | undefined | null): AuthGatePayload | null => {
+    if (!token) return null;
+    const dot = token.indexOf('.');
+    if (dot <= 0) return null;
+
+    const payload = token.slice(0, dot);
+    const sig = Buffer.from(token.slice(dot + 1));
+    const expected = Buffer.from(sign(payload));
+    // Constant-time compare; bail before timingSafeEqual on length mismatch
+    // (it throws on differing lengths).
+    if (sig.length !== expected.length || !timingSafeEqual(sig, expected)) return null;
+
+    try {
+      const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as AuthGatePayload;
+      if (typeof decoded.exp !== 'number' || decoded.exp <= nowSec()) return null;
+      return decoded;
+    } catch {
+      return null;
+    }
+  };
+
+  const normalizeMintArgs = (
+    identityOrTtlSec?: AuthGateIdentity | number,
+    ttlSec?: number
+  ): { identity?: AuthGateIdentity; ttlSec: number } => {
+    if (typeof identityOrTtlSec === 'number') return { ttlSec: identityOrTtlSec };
+    return { identity: identityOrTtlSec, ttlSec: ttlSec ?? DEFAULT_TTL_SEC };
+  };
+
   return {
-    mintToken(ttlSec = DEFAULT_TTL_SEC): string {
-      const payload = Buffer.from(JSON.stringify({ exp: nowSec() + ttlSec })).toString('base64url');
+    mintToken(identityOrTtlSec?: AuthGateIdentity | number, ttlSec?: number): string {
+      const args = normalizeMintArgs(identityOrTtlSec, ttlSec);
+      const body: AuthGatePayload = { exp: nowSec() + args.ttlSec };
+      if (args.identity?.userId) {
+        body.user_id = args.identity.userId;
+        if (args.identity.username) body.username = args.identity.username;
+      }
+      const payload = Buffer.from(JSON.stringify(body)).toString('base64url');
       return `${payload}.${sign(payload)}`;
     },
 
-    mintCookie(ttlSec = DEFAULT_TTL_SEC): string {
-      return `${GATE_COOKIE_NAME}=${this.mintToken(ttlSec)}; ${cookieAttrs(ttlSec)}`;
+    mintCookie(identityOrTtlSec?: AuthGateIdentity | number, ttlSec?: number): string {
+      const args = normalizeMintArgs(identityOrTtlSec, ttlSec);
+      return `${GATE_COOKIE_NAME}=${this.mintToken(args.identity, args.ttlSec)}; ${cookieAttrs(args.ttlSec)}`;
     },
 
     clearCookie(): string {
       return `${GATE_COOKIE_NAME}=; ${cookieAttrs(0)}`;
     },
 
+    getAuthorizedTokenIdentity(token): AuthGateIdentity | null {
+      return identityFromPayload(parseTokenPayload(token));
+    },
+
+    getAuthorizedIdentity(cookieHeader): AuthGateIdentity | null {
+      return this.getAuthorizedTokenIdentity(parseCookie(cookieHeader, GATE_COOKIE_NAME));
+    },
+
     isAuthorizedToken(token): boolean {
-      if (!token) return false;
-      const dot = token.indexOf('.');
-      if (dot <= 0) return false;
-
-      const payload = token.slice(0, dot);
-      const sig = Buffer.from(token.slice(dot + 1));
-      const expected = Buffer.from(sign(payload));
-      // Constant-time compare; bail before timingSafeEqual on length mismatch
-      // (it throws on differing lengths).
-      if (sig.length !== expected.length || !timingSafeEqual(sig, expected)) return false;
-
-      try {
-        const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
-        return typeof decoded.exp === 'number' && decoded.exp > nowSec();
-      } catch {
-        return false;
-      }
+      return parseTokenPayload(token) !== null;
     },
 
     isAuthorized(cookieHeader): boolean {

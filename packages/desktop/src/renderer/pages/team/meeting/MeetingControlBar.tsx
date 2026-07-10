@@ -59,7 +59,7 @@ const MeetingControlBar: React.FC<Props> = ({ orchestrator, topic, onTopicChange
             onClick={() => setPickerOpen(true)}
             data-testid='meeting-shared-attach'
           >
-            {t('team.meeting.attachShared', { defaultValue: '引用共享库' })}
+            {t('team.meeting.attachShared', { defaultValue: '引用企业 NAS' })}
           </Button>
           {attachments.length > 0 && (
             <div className='flex items-center gap-4px overflow-x-auto [scrollbar-width:none]'>

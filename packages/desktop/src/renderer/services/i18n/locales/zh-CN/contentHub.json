@@ -1,29 +1,35 @@
 {
   "nav": {
-    "title": "内容中心"
+    "title": "工作空间"
   },
-  "title": "内容中心",
+  "title": "工作空间",
   "search": {
     "placeholder": "搜索文件名..."
   },
   "tabs": {
-    "mine": "我的产物",
+    "mine": "生成物",
     "byConversation": "按会话",
     "byType": "按类型",
-    "shared": "共享库",
-    "knowledge": "知识库",
-    "nas": "网盘"
+    "shared": "企业 NAS",
+    "knowledge": "超级知识库",
+    "nas": "企业 NAS"
   },
   "mineView": {
-    "all": "全部",
+    "all": "我的资产",
     "byConversation": "按会话",
-    "byType": "按类型"
+    "byType": "按类型",
+    "drafts": "待整理",
+    "archived": "归档"
   },
   "knowledge": {
     "chunks": "{{n}} 块",
-    "readonly": "知识库 · 共 {{n}} 个文件 · 只读",
+    "readonly": "超级知识库 · 共 {{n}} 个文件",
+    "upload": "上传到超级知识库",
+    "uploading": "上传中...",
+    "uploadDone": "已上传 {{count}} 个文件",
+    "uploadFailed": "上传到超级知识库失败",
     "refresh": "刷新",
-    "empty": "知识库为空",
+    "empty": "超级知识库为空",
     "unreachable": "无法连接向量库，请确认服务已启动",
     "openDesktopOnly": "仅桌面端可打开源文件"
   },
@@ -39,15 +45,25 @@
     "waterfall": "瀑布流",
     "sizeSmall": "小",
     "sizeMedium": "中",
-    "sizeLarge": "大"
+    "sizeLarge": "大",
+    "list": "列表"
   },
   "actions": {
     "open": "打开",
     "copyPath": "复制路径",
     "download": "下载",
     "showInFolder": "在文件夹中显示",
-    "shareToTeam": "共享到团队",
-    "saveToNas": "另存到网盘"
+    "shareToTeam": "发布到企业 NAS",
+    "saveToNas": "发布到企业 NAS",
+    "publishToNas": "发布到企业 NAS",
+    "back": "返回",
+    "openSource": "打开源文件",
+    "delete": "删除",
+    "refresh": "刷新",
+    "saveToContent": "保存到个人内容",
+    "indexToKnowledge": "加入超级知识库",
+    "archive": "归档",
+    "discardDraft": "丢弃草稿"
   },
   "share": {
     "uploading": "正在共享...",
@@ -58,17 +74,19 @@
   "empty": {
     "noFiles": "暂无生成文件",
     "noMatch": "无匹配文件",
-    "loading": "加载中..."
+    "loading": "加载中...",
+    "noAssets": "暂无已保存的个人资产",
+    "noDrafts": "暂无待整理草稿"
   },
   "shared": {
     "allVisible": "局域网内全员可见",
     "categories": "分类",
     "all": "全部",
     "uncategorized": "未分类",
-    "upload": "上传到共享库",
+    "upload": "上传到企业 NAS",
     "download": "下载",
-    "empty": "共享库为空",
-    "comingSoon": "共享库即将上线"
+    "empty": "企业 NAS 为空",
+    "comingSoon": "企业 NAS 即将上线"
   },
   "toast": {
     "copied": "已复制",
@@ -80,8 +98,14 @@
     "root": "全部文件",
     "empty": "此文件夹为空",
     "loading": "加载中…",
-    "disabled": "管理员尚未配置共享磁盘",
-    "unavailable": "网盘不可用 —— WebUI 服务未运行",
+    "disabled": "管理员尚未配置企业 NAS 存储地址",
+    "unavailable": "企业 NAS 不可用 —— WebUI 服务未运行",
+    "setupStorageDesc": "企业 NAS 的存储地址在「设置 → 系统 → 企业 NAS 存储地址」中配置。选择一个本机已挂载的企业 NAS 目录或文件夹后，这里会显示其中的文件。",
+    "startWebuiHint": "请先确认 WebUI 服务已启动，并在「设置 → 系统」配置企业 NAS 存储地址。",
+    "openNasSettings": "设置企业 NAS 存储地址",
+    "aiGenerated": "AI生成",
+    "allFiles": "全部文件",
+    "aiEmpty": "暂无发布到企业 NAS 的 AI 生成内容",
     "refresh": "刷新",
     "download": "下载",
     "colName": "名称",
@@ -112,18 +136,66 @@
     "purgeConfirm": "永久删除「{{name}}」？此操作不可恢复。",
     "trashEmpty": "回收站为空",
     "deletedAt": "删除时间",
-    "index": "索引到知识库",
-    "indexTitle": "把文件夹索引到知识库",
-    "indexDesc": "递归索引「{{folder}}」下的可识别文件到知识库，使其可被检索。重复执行是安全的（未变更的文件会跳过）。",
+    "index": "索引到超级知识库",
+    "indexTitle": "把文件夹索引到超级知识库",
+    "indexDesc": "递归索引「{{folder}}」下的可识别文件到超级知识库，使其可被检索。重复执行是安全的（未变更的文件会跳过）。",
     "indexVideo": "包含视频（较慢：转写 + OCR）",
     "indexScanning": "正在扫描文件夹…",
-    "indexProgress": "正在索引到知识库… {{done}}/{{total}}（跳过 {{skipped}}，失败 {{failed}}）",
+    "indexProgress": "正在索引到超级知识库… {{done}}/{{total}}（跳过 {{skipped}}，失败 {{failed}}）",
     "indexDone": "索引完成：成功 {{done}}，跳过 {{skipped}}，失败 {{failed}}",
     "indexFailed": "索引失败",
-    "pickFolderTitle": "选择网盘目标文件夹",
+    "pickFolderTitle": "选择企业 NAS 目标文件夹",
     "saveHere": "保存到此处",
     "noSubfolders": "没有子文件夹",
-    "savedToNas": "已保存到网盘",
-    "saveToNasFailed": "保存到网盘失败"
+    "savedToNas": "已发布到企业 NAS",
+    "saveToNasFailed": "发布到企业 NAS 失败",
+    "publishedToNas": "已发布到企业 NAS",
+    "publishFailed": "发布到企业 NAS 失败"
+  },
+  "sort": {
+    "modified": "最近修改",
+    "name": "名称",
+    "size": "大小",
+    "directionAsc": "升序",
+    "directionDesc": "降序"
+  },
+  "list": {
+    "name": "名称",
+    "size": "大小",
+    "modified": "修改时间"
+  },
+  "selection": {
+    "selected": "已选择 {{count}} 项",
+    "clear": "清除选择"
+  },
+  "batch": {
+    "downloadDone": "已下载 {{count}} 个文件",
+    "shareDone": "已共享 {{count}} 个文件",
+    "publishDone": "已发布 {{count}} 个文件到企业 NAS",
+    "deleteTitle": "批量删除",
+    "deleteConfirm": "删除选中的 {{count}} 项？此操作不可恢复。",
+    "deleteDone": "已删除 {{count}} 项",
+    "deleteFailed": "删除失败"
+  },
+  "stats": {
+    "visible": "当前 {{count}} 项",
+    "total": "共 {{count}} 项"
+  },
+  "asset": {
+    "saveDone": "已保存 {{count}} 个文件到个人内容",
+    "saveFailed": "保存到个人内容失败",
+    "indexDone": "已加入超级知识库 {{count}} 个文件",
+    "indexFailed": "加入超级知识库失败",
+    "archiveDone": "已归档",
+    "archiveFailed": "归档失败"
+  },
+  "draft": {
+    "deleteTitle": "丢弃草稿文件",
+    "deleteConfirm": "从当前临时工作区丢弃「{{name}}」？已保存或已发布到企业 NAS 的副本不会受影响。",
+    "batchDeleteTitle": "批量丢弃草稿",
+    "batchDeleteConfirm": "从当前临时工作区丢弃选中的 {{count}} 个草稿？已保存或已发布到企业 NAS 的副本不会受影响。",
+    "deleted": "已丢弃草稿",
+    "batchDeleted": "已丢弃 {{count}} 个草稿",
+    "deleteFailed": "丢弃草稿失败"
   }
 }

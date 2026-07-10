@@ -25,6 +25,7 @@ export interface FileEntry {
   size: number;
   mtime: number;
   conversation: string;
+  sourceConversationId?: string;
 }
 
 export const FILE_ICONS: Record<string, string> = {
@@ -146,7 +147,12 @@ function toEpochSeconds(ts: number): number {
  * The backend fs API exposes no per-file mtime/size, so every file inherits the
  * owning entity's timestamp (`mtimeSec`, newest first) and size 0.
  */
-async function collectWorkspaceFiles(workspace: string, label: string, mtimeSec: number): Promise<FileEntry[]> {
+async function collectWorkspaceFiles(
+  workspace: string,
+  label: string,
+  mtimeSec: number,
+  sourceConversationId?: string
+): Promise<FileEntry[]> {
   if (!workspace) return [];
 
   const out: FileEntry[] = [];
@@ -168,7 +174,14 @@ async function collectWorkspaceFiles(workspace: string, label: string, mtimeSec:
         const children = node.children && node.children.length > 0 ? node.children : await fetchDir(node.fullPath);
         await walk(children, depth + 1);
       } else if (node.isFile) {
-        out.push({ name: node.name, path: node.fullPath, size: 0, mtime: mtimeSec, conversation: label });
+        out.push({
+          name: node.name,
+          path: node.fullPath,
+          size: 0,
+          mtime: mtimeSec,
+          conversation: label,
+          sourceConversationId,
+        });
       }
     }
   };
@@ -199,7 +212,7 @@ function collectConversationFiles(
     (conversation.extra as { team_id?: string } | undefined)?.team_id;
   const teamName = teamId ? teamNames.get(teamId) : undefined;
   const label = teamName ? `${teamName} · 圆桌会议` : conversation.name || workspace.split('/').pop() || '';
-  return collectWorkspaceFiles(workspace, label, mtimeSec);
+  return collectWorkspaceFiles(workspace, label, mtimeSec, conversation.id);
 }
 
 /** Fetch the current frontend user's teams (id → name), swallowing any error. */

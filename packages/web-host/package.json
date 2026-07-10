@@ -12,6 +12,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "officeparser": "^5.2.2",
     "serve-handler": "^6.1.5"
   },
   "devDependencies": {

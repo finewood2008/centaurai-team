@@ -55,6 +55,8 @@ export type WebHostOptions = {
   installerDir?: string;
   /** Directory hosting the enterprise LAN shared library, served at /api/shared-drive/*. */
   sharedDriveDir?: string;
+  /** Directory hosting the generated asset registry, served at /api/content-assets/*. */
+  contentAssetsDir?: string;
   /** Root of the enterprise LAN network drive, browsed read-only at /api/nas/*. */
   nasRootDir?: string;
   /** Image workbench SPA dist dir, served to browser/LAN users at /workbench/image/*. */

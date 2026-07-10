@@ -1,7 +1,7 @@
 /**
- * NasFolderPicker — a modal that browses the network drive's folder tree and
+ * NasFolderPicker — a modal that browses the Enterprise NAS folder tree and
  * returns a chosen destination directory (relPath). Folders only; used by
- * "另存到网盘" to pick where an AI artifact should be copied.
+ * "发布到企业 NAS" to pick where an AI artifact should be copied.
  */
 import React, { useEffect, useState } from 'react';
 import { Button, Modal } from '@arco-design/web-react';

@@ -104,7 +104,7 @@ export type MeetingOrchestrator = {
   cancel: () => void;
   /** Boss picks a final option. */
   decide: (optionId: string) => void;
-  /** Ask the leader to archive the 方案书 as docx/pptx/md into the Content Hub. */
+  /** Ask the leader to archive the 方案书 as docx/pptx/md into Workspace. */
   exportPlan: () => boolean;
   /** Reopen a past meeting's 方案书 from history. */
   openRecord: (rec: MeetingRecord) => void;
@@ -468,12 +468,12 @@ class MeetingEngine {
       }
 
       if (!dir) {
-        Message.error('生成 Word 文档失败：未找到当前会议的临时空间');
+        Message.error('生成 Word 文档失败：未找到当前会议的待整理生成物空间');
         return;
       }
 
       if (!savedPath) {
-        Message.error('生成 Word 文档失败：未找到可用的临时空间');
+        Message.error('生成 Word 文档失败：未找到可用的待整理生成物空间');
         return;
       }
 
@@ -486,7 +486,7 @@ class MeetingEngine {
           standaloneLabel: `${this.team.name} · 圆桌会议`,
         });
         if (savedToWorkspace) {
-          Message.success(`已生成 Word 决策文档：${fileName}（已存入内容中心）`);
+          Message.success(`已生成 Word 决策文档：${fileName}（已存入工作空间）`);
         }
       }
     } catch {

@@ -705,6 +705,60 @@ export const sharedDriveLocal = {
   ),
 };
 
+export type ContentAssetKindDTO = 'image' | 'document' | 'code' | 'other';
+export type ContentAssetVisibilityDTO = 'private' | 'team' | 'public';
+export type ContentAssetStorageProviderDTO = 'workspace' | 'personal_content' | 'nas' | 'shared_drive' | 'knowledge';
+export type ContentAssetStatusFlagDTO =
+  | 'draft'
+  | 'saved'
+  | 'shared'
+  | 'stored_in_nas'
+  | 'indexed'
+  | 'archived'
+  | 'missing';
+
+export type ContentAssetDTO = {
+  id: string;
+  title: string;
+  kind: ContentAssetKindDTO;
+  ownerUserId: string;
+  teamId?: string;
+  visibility: ContentAssetVisibilityDTO;
+  sourceConversationId?: string;
+  sourceWorkspacePath: string;
+  storageProvider: ContentAssetStorageProviderDTO;
+  storagePath: string;
+  tags: string[];
+  category?: string;
+  statusFlags: ContentAssetStatusFlagDTO[];
+  createdAt: number;
+  updatedAt: number;
+  sharedDriveId?: string;
+  nasStoragePath?: string;
+};
+
+export type ContentAssetSaveFromPathInput = {
+  sourcePath: string;
+  name: string;
+  ownerUserId: string;
+  sourceConversationId?: string;
+  category?: string;
+  kind?: ContentAssetKindDTO;
+  tags?: string[];
+};
+
+export const contentAssetsLocal = {
+  list: bridge.buildProvider<ContentAssetDTO[], { ownerUserId?: string }>('content-assets.list'),
+  saveFromPath: bridge.buildProvider<ContentAssetDTO, ContentAssetSaveFromPathInput>('content-assets.save-from-path'),
+  archive: bridge.buildProvider<ContentAssetDTO | null, { id: string; ownerUserId?: string }>(
+    'content-assets.archive'
+  ),
+  publishToNas: bridge.buildProvider<
+    ContentAssetDTO | null,
+    { id: string; ownerUserId?: string; userLabel?: string; conversationLabel?: string }
+  >('content-assets.publish-to-nas'),
+};
+
 export type NasEntryDTO = {
   name: string;
   /** Path relative to the drive root, POSIX-separated. */
@@ -1419,6 +1473,19 @@ export interface IWebUIStartResult {
   initialPassword?: string;
 }
 
+export interface IWebUIMemoryFile {
+  path: string;
+  size?: number;
+  updated_at?: string;
+  source_agent?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface IWebUIMemoryDocument {
+  content: string;
+  updated_at?: string;
+}
+
 export const webui = {
   getStatus: bridge.buildProvider<IWebUIStatus, void>('webui.get-status'),
   start: bridge.buildProvider<IWebUIStartResult, { port?: number; allowRemote?: boolean }>('webui.start'),
@@ -1443,6 +1510,19 @@ export const webui = {
   })),
   resetPassword: httpPost<{ new_password: string }, void>('/api/webui/reset-password'),
   generateQRToken: httpPost<{ token: string; expires_at_ms: number }, void>('/api/webui/generate-qr-token'),
+  memoryRead: bridge.buildProvider<IWebUIMemoryDocument, { endpoint: string; relPath: string; scope?: string }>(
+    'webui.memory-read'
+  ),
+  memoryList: bridge.buildProvider<{ files: IWebUIMemoryFile[] }, { endpoint: string; scope?: string }>(
+    'webui.memory-list'
+  ),
+  memoryWrite: bridge.buildProvider<
+    void,
+    { endpoint: string; relPath: string; content: string; sourceAgent?: string; scope?: string }
+  >('webui.memory-write'),
+  memoryDelete: bridge.buildProvider<void, { endpoint: string; relPath: string; scope?: string }>(
+    'webui.memory-delete'
+  ),
 };
 
 /** A per-OS downloadable standalone build, as exposed to the renderer. */
@@ -1701,6 +1781,7 @@ export interface ICreateConversationParams {
   extra: {
     workspace?: string;
     custom_workspace?: boolean;
+    is_temporary_workspace?: boolean;
     default_files?: string[];
     backend?: string;
     cli_path?: string;

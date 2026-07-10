@@ -98,7 +98,7 @@
   },
   "fileAttach.addFiles": "添加文件",
   "fileAttach.myDevice": "从设备上传",
-  "fileAttach.fromSharedLibrary": "从共享库添加",
+  "fileAttach.fromSharedLibrary": "从企业 NAS 添加",
   "fileAttach.attachSelected": "添加所选 ({{count}})",
   "fileAttach.failed": "上传失败",
   "fileAttach.uploading": "上传中...",
@@ -113,5 +113,9 @@
   "import": "导入",
   "processing": "处理中...",
   "optional": "（可选）",
-  "clear": "清除"
+  "clear": "清除",
+  "unit": {
+    "minute_short": "分",
+    "second_short": "秒"
+  }
 }

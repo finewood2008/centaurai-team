@@ -7,12 +7,41 @@
 import type { IUserRecord } from '@/common/adapter/ipcBridge';
 import { ipcBridge } from '@/common';
 import { ADMIN_FRONTEND_USER_ID } from '@/common/utils/frontendUserScope';
+import { normalizeVectorDbEndpoint } from '@/common/config/constants';
+import { configService } from '@/common/config/configService';
 import { Button, Input, Message, Modal, Popconfirm, Table, Tag, Typography } from '@arco-design/web-react';
-import { Delete, Plus, Refresh, User } from '@icon-park/react';
+import { Delete, Plus, Refresh, Save, User } from '@icon-park/react';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
+const { TextArea } = Input;
+
+const vectorEndpoint = (): string => normalizeVectorDbEndpoint(configService.get('vectorDB.endpoint'));
+
+const userMemoryPath = (userId: string, file: 'USER.md' | 'MEMORY.md'): string =>
+  `users/${encodeURIComponent(userId).replace(/%/g, '_')}/${file}`;
+
+const encodeMemoryPath = (relPath: string): string => relPath.split('/').map(encodeURIComponent).join('/');
+
+async function readMemoryFile(relPath: string): Promise<string> {
+  const response = await fetch(`${vectorEndpoint()}/api/memory/files/${encodeMemoryPath(relPath)}`, {
+    cache: 'no-store',
+  });
+  if (response.status === 404) return '';
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const data = (await response.json()) as { content?: string };
+  return data.content ?? '';
+}
+
+async function writeMemoryFile(relPath: string, content: string): Promise<void> {
+  const response = await fetch(`${vectorEndpoint()}/api/memory/files/${encodeMemoryPath(relPath)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'centaur-vdb' },
+    body: JSON.stringify({ content, source_agent: 'centaurai-admin-users' }),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+}
 
 const formatDate = (ts: number | null) => {
   if (!ts) return '-';
@@ -27,6 +56,12 @@ const UsersModalContent: React.FC = () => {
   const [createLoading, setCreateLoading] = useState(false);
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [memoryVisible, setMemoryVisible] = useState(false);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<IUserRecord | null>(null);
+  const [userMarkdown, setUserMarkdown] = useState('');
+  const [memoryMarkdown, setMemoryMarkdown] = useState('');
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -102,6 +137,43 @@ const UsersModalContent: React.FC = () => {
     }
   };
 
+  const openIdentityMemory = async (record: IUserRecord) => {
+    setSelectedUser(record);
+    setMemoryVisible(true);
+    setMemoryLoading(true);
+    try {
+      const [userContent, memoryContent] = await Promise.all([
+        readMemoryFile(userMemoryPath(record.id, 'USER.md')),
+        readMemoryFile(userMemoryPath(record.id, 'MEMORY.md')),
+      ]);
+      setUserMarkdown(userContent || `# USER.md — 个人身份\n\n- 用户名: ${record.username}\n`);
+      setMemoryMarkdown(memoryContent || '# MEMORY.md — 个人长期记忆\n\n');
+    } catch (err) {
+      console.error('Failed to load user identity memory:', err);
+      Message.error(t('settings.users.identityMemoryLoadFailed'));
+    } finally {
+      setMemoryLoading(false);
+    }
+  };
+
+  const saveIdentityMemory = async () => {
+    if (!selectedUser) return;
+    setMemorySaving(true);
+    try {
+      await Promise.all([
+        writeMemoryFile(userMemoryPath(selectedUser.id, 'USER.md'), userMarkdown),
+        writeMemoryFile(userMemoryPath(selectedUser.id, 'MEMORY.md'), memoryMarkdown),
+      ]);
+      Message.success(t('settings.users.identityMemorySaved'));
+      setMemoryVisible(false);
+    } catch (err) {
+      console.error('Failed to save user identity memory:', err);
+      Message.error(t('settings.users.identityMemorySaveFailed'));
+    } finally {
+      setMemorySaving(false);
+    }
+  };
+
   const columns = [
     {
       title: t('settings.users.username'),
@@ -130,9 +202,12 @@ const UsersModalContent: React.FC = () => {
     },
     {
       title: t('settings.users.actions'),
-      width: 200,
+      width: 280,
       render: (_: unknown, record: IUserRecord) => (
         <div className='flex items-center gap-8px'>
+          <Button type='text' size='small' onClick={() => void openIdentityMemory(record)}>
+            {t('settings.users.identityMemory')}
+          </Button>
           <Button type='text' size='small' onClick={() => handleResetPassword(record.id)}>
             {t('settings.users.resetPassword')}
           </Button>
@@ -195,6 +270,44 @@ const UsersModalContent: React.FC = () => {
               onChange={setNewPassword}
             />
           </div>
+        </div>
+      </Modal>
+
+      <Modal
+        visible={memoryVisible}
+        title={t('settings.users.identityMemoryTitle', { username: selectedUser?.username ?? '' })}
+        onCancel={() => setMemoryVisible(false)}
+        onOk={saveIdentityMemory}
+        confirmLoading={memorySaving}
+        style={{ width: 760 }}
+      >
+        <div className='flex flex-col gap-14px py-4px'>
+          <div className='text-12px text-t-secondary break-all'>
+            {selectedUser
+              ? `${userMemoryPath(selectedUser.id, 'USER.md')} · ${userMemoryPath(selectedUser.id, 'MEMORY.md')}`
+              : ''}
+          </div>
+          <label className='flex flex-col gap-6px'>
+            <span className='text-13px text-t-secondary'>USER.md</span>
+            <TextArea
+              autoSize={{ minRows: 8, maxRows: 14 }}
+              value={userMarkdown}
+              disabled={memoryLoading}
+              onChange={setUserMarkdown}
+            />
+          </label>
+          <label className='flex flex-col gap-6px'>
+            <span className='text-13px text-t-secondary'>MEMORY.md</span>
+            <TextArea
+              autoSize={{ minRows: 8, maxRows: 14 }}
+              value={memoryMarkdown}
+              disabled={memoryLoading}
+              onChange={setMemoryMarkdown}
+            />
+          </label>
+          <Button icon={<Save />} loading={memorySaving} onClick={saveIdentityMemory}>
+            {t('common.save')}
+          </Button>
         </div>
       </Modal>
     </div>

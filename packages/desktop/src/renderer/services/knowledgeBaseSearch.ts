@@ -6,6 +6,7 @@
  * goes through the co-located server proxy (the DB binds loopback server-side).
  */
 import { configService } from '@/common/config/configService';
+import { normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { getBaseUrl } from '@/common/adapter/httpBridge';
 import { isElectronDesktop } from '@/renderer/utils/platform';
 
@@ -17,12 +18,22 @@ export type KnowledgeSearchResult = {
 
 type VectorHit = { text?: string; metadata?: { file_name?: string } };
 
+export const KNOWLEDGE_CONTEXT_MARK = '【知识库检索结果】';
+
+export function hasKnowledgeContextBlock(input: string): boolean {
+  return String(input || '').includes(KNOWLEDGE_CONTEXT_MARK);
+}
+
+export function buildKnowledgeAugmentedPrompt(question: string, context: string): string {
+  return `${KNOWLEDGE_CONTEXT_MARK}\n${context}\n\n---\n用户问题：${question}`;
+}
+
 /** Run the knowledge-base search for `query`. Throws if the DB is unreachable. */
 export async function retrieveKnowledgeContext(query: string): Promise<KnowledgeSearchResult> {
   const q = query.trim();
   if (!q) return { context: null, count: 0 };
 
-  const endpoint = (configService.get('vectorDB.endpoint') ?? 'http://127.0.0.1:8618').replace(/\/+$/, '');
+  const endpoint = normalizeVectorDbEndpoint(configService.get('vectorDB.endpoint'));
   const nResults = configService.get('vectorDB.searchCount') ?? 5;
   const mode = configService.get('vectorDB.searchMode') ?? 'text';
 

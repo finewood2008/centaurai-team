@@ -15,11 +15,12 @@ type FileGridProps = {
   view: HubViewMode;
   size: HubCardSize;
   onOpen: (file: FileEntry) => void;
+  onDirectOpen?: (file: FileEntry) => void;
   onShare?: (file: FileEntry) => void;
   onContextMenu?: (file: FileEntry, e: React.MouseEvent) => void;
 };
 
-const FileGrid: React.FC<FileGridProps> = ({ files, view, size, onOpen, onShare, onContextMenu }) => {
+const FileGrid: React.FC<FileGridProps> = ({ files, view, size, onOpen, onDirectOpen, onShare, onContextMenu }) => {
   if (view === 'waterfall') {
     return (
       <div style={{ columnWidth: WATERFALL_COL_WIDTH[size], columnGap: 12 }}>
@@ -29,6 +30,7 @@ const FileGrid: React.FC<FileGridProps> = ({ files, view, size, onOpen, onShare,
             file={file}
             size={size}
             onOpen={onOpen}
+            onDirectOpen={onDirectOpen}
             onShare={onShare}
             onContextMenu={onContextMenu}
           />
@@ -45,6 +47,7 @@ const FileGrid: React.FC<FileGridProps> = ({ files, view, size, onOpen, onShare,
           file={file}
           size={size}
           onOpen={onOpen}
+          onDirectOpen={onDirectOpen}
           onShare={onShare}
           onContextMenu={onContextMenu}
         />

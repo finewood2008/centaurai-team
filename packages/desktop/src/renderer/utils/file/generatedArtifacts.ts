@@ -36,12 +36,13 @@ const GENERATED_ARTIFACT_EXTENSIONS = [
   'svg',
 ] as const;
 
-const GENERATED_ARTIFACT_EXT_RE = new RegExp(`\\.(${GENERATED_ARTIFACT_EXTENSIONS.join('|')})\\b`, 'i');
+const GENERATED_ARTIFACT_EXT_PATTERN = GENERATED_ARTIFACT_EXTENSIONS.join('|');
+const GENERATED_ARTIFACT_EXT_RE = new RegExp(`\\.(${GENERATED_ARTIFACT_EXT_PATTERN})\\b`, 'i');
 const GENERATED_ARTIFACT_PATH_RE = new RegExp(
   [
-    String.raw`file:\/\/[^\s<>"'\`]+\.(?:${GENERATED_ARTIFACT_EXTENSIONS.join('|')})\b`,
-    String.raw`["'\`]([^"'\`]+?\.(?:${GENERATED_ARTIFACT_EXTENSIONS.join('|')}))["'\`]`,
-    String.raw`(?:~|\/|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^<>"'\`\s]*?\.(?:${GENERATED_ARTIFACT_EXTENSIONS.join('|')})\b`,
+    String.raw`file:\/\/[^<>"'\`\r\n]+?\.(?:${GENERATED_ARTIFACT_EXT_PATTERN})\b`,
+    String.raw`["'\`]([^"'\`]+?\.(?:${GENERATED_ARTIFACT_EXT_PATTERN}))["'\`]`,
+    String.raw`(?:~|\/|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^<>"'\`\r\n]*?\.(?:${GENERATED_ARTIFACT_EXT_PATTERN})\b`,
   ].join('|'),
   'gi'
 );

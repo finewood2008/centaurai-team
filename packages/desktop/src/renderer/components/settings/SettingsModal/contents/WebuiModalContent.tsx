@@ -5,7 +5,7 @@
  */
 
 import { WEBUI_DEFAULT_PORT } from '@/common/config/constants';
-import { dialog, shell, webui, type IWebUIStatus, type IWebUIConnectivity } from '@/common/adapter/ipcBridge';
+import { shell, webui, type IWebUIStatus, type IWebUIConnectivity } from '@/common/adapter/ipcBridge';
 import { isBackendHttpError } from '@/common/adapter/httpBridge';
 import { configService } from '@/common/config/configService';
 import AionModal from '@/renderer/components/base/AionModal';
@@ -19,9 +19,10 @@ import ChannelWecomLogo from '@/renderer/assets/channel-logos/wecom.svg';
 import ChannelWeixinLogo from '@/renderer/assets/channel-logos/weixin.svg';
 import { isElectronDesktop } from '@/renderer/utils/platform';
 import { Button, Form, Input, Message, Switch, Tabs, Tooltip } from '@arco-design/web-react';
-import { CheckOne, Communication, Copy, Earth, EditTwo, Refresh } from '@icon-park/react';
+import { CheckOne, Communication, Copy, Earth, EditTwo, Refresh, User } from '@icon-park/react';
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useSettingsViewMode } from '../settingsViewContext';
 
 /**
@@ -56,6 +57,11 @@ const CHANNEL_LOGOS = [
   { src: ChannelDiscordLogo, alt: 'Discord' },
 ] as const;
 
+const formatExpiresAt = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+};
+
 const ChannelModalContentLazy = React.lazy(() => import('./channels/ChannelModalContent'));
 const QRCodeSVGLazy = React.lazy(async () => {
   const mod = await import('qrcode.react');
@@ -64,7 +70,6 @@ const QRCodeSVGLazy = React.lazy(async () => {
 
 const DESKTOP_WEBUI_ENABLED_KEY = 'webui.desktop.enabled';
 const DESKTOP_WEBUI_ALLOW_REMOTE_KEY = 'webui.desktop.allowRemote';
-const DESKTOP_NAS_ROOT_KEY = 'webui.desktop.nasRootDir';
 
 /**
  * WebUI 设置内容组件
@@ -72,6 +77,7 @@ const DESKTOP_NAS_ROOT_KEY = 'webui.desktop.nasRootDir';
  */
 const WebuiModalContent: React.FC = () => {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const viewMode = useSettingsViewMode();
   const isPageMode = viewMode === 'page';
   const [activeTab, setActiveTab] = useState<'webui' | 'channels'>('webui');
@@ -87,7 +93,6 @@ const WebuiModalContent: React.FC = () => {
   const port = WEBUI_DEFAULT_PORT;
   const [webuiEnabled, setWebuiEnabled] = useState(false);
   const [allowRemotePreference, setAllowRemotePreference] = useState(false);
-  const [nasRootDir, setNasRootDir] = useState<string>('');
   const [cachedIP, setCachedIP] = useState<string | null>(null);
   const [cachedPassword, setCachedPassword] = useState<string | null>(null);
   // 标记密码是否可以明文显示（首次启动且未复制过）/ Flag for plaintext password display (first startup and not copied)
@@ -112,9 +117,6 @@ const WebuiModalContent: React.FC = () => {
     try {
       const savedAllowRemote = configService.get(DESKTOP_WEBUI_ALLOW_REMOTE_KEY) ?? false;
       setAllowRemotePreference(savedAllowRemote === true);
-
-      const savedNasRoot = configService.get(DESKTOP_NAS_ROOT_KEY);
-      setNasRootDir(typeof savedNasRoot === 'string' ? savedNasRoot : '');
 
       // getStatus goes via IPC to the Electron main process which tracks the
       // WebUI lifecycle; backend does not know it's being wrapped.
@@ -389,36 +391,6 @@ const WebuiModalContent: React.FC = () => {
     }
   };
 
-  // 网盘根目录：持久化后若服务在运行则重启以重新读取根目录 /
-  // Network-drive root: persist, then restart the running WebUI so the static
-  // server re-reads nasRootDir (it is read only at startup).
-  const persistNasRoot = async (dir: string) => {
-    setNasRootDir(dir);
-    try {
-      await configService.set(DESKTOP_NAS_ROOT_KEY, dir);
-      if (status?.running) {
-        await webui.start.invoke({ port, allowRemote: allowRemotePreference });
-      }
-      Message.success(t('settings.webui.nasRootSaved'));
-    } catch (error) {
-      console.error('[WebuiModal] Failed to persist NAS root:', error);
-      Message.error(t('settings.webui.operationFailed'));
-    }
-  };
-
-  const handlePickNasRoot = () => {
-    dialog.showOpen
-      .invoke({ defaultPath: nasRootDir || undefined, properties: ['openDirectory'] })
-      .then((paths) => {
-        if (paths?.[0]) void persistNasRoot(paths[0]);
-      })
-      .catch((error) => console.error('Failed to open directory dialog:', error));
-  };
-
-  const handleClearNasRoot = () => {
-    void persistNasRoot('');
-  };
-
   // 复制内容 / Copy content
   const handleCopy = (text: string) => {
     void navigator.clipboard.writeText(text);
@@ -612,12 +584,6 @@ const WebuiModalContent: React.FC = () => {
     }
   }, [status?.allowRemote, status?.running]);
 
-  // 格式化过期时间 / Format expiration time
-  const formatExpiresAt = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  };
-
   // 获取实际密码 / Get actual password
   const actualPassword = status?.initialPassword || cachedPassword;
   // 获取显示的密码 / Get display password
@@ -696,6 +662,26 @@ const WebuiModalContent: React.FC = () => {
           <div className='mb-8px rd-10px border border-line bg-fill-1 px-10px py-8px flex items-start gap-6px'>
             <Earth theme='outline' size='16' className='mt-1px text-[rgb(var(--primary-6))]' />
             <div className='text-12px text-t-secondary leading-relaxed'>{t('settings.webui.featureRemoteDesc')}</div>
+          </div>
+
+          <div className='mb-8px rd-10px border border-line bg-fill-1 px-10px py-8px flex items-center justify-between gap-10px'>
+            <div className='min-w-0 flex items-center gap-8px'>
+              <User theme='outline' size='18' className='shrink-0 text-[rgb(var(--primary-6))]' />
+              <div className='min-w-0'>
+                <div className='text-13px font-500 text-t-primary'>{t('settings.webui.lanUsersTitle')}</div>
+                <div className='text-12px text-t-secondary truncate'>{t('settings.webui.lanUsersDesc')}</div>
+              </div>
+            </div>
+            <Button
+              type='primary'
+              size='small'
+              className='rd-100px shrink-0'
+              onClick={() => {
+                void navigate('/settings/users', { replace: true });
+              }}
+            >
+              {t('settings.webui.manageLanUsers')}
+            </Button>
           </div>
 
           {/* 启用 WebUI / Enable WebUI */}
@@ -800,9 +786,13 @@ const WebuiModalContent: React.FC = () => {
               <div className='flex items-center gap-6px text-t-secondary'>
                 <span
                   className='inline-block w-8px h-8px rd-50%'
-                  style={{ backgroundColor: connectivity.backendReachable ? 'rgb(var(--success-6))' : 'rgb(var(--danger-6))' }}
+                  style={{
+                    backgroundColor: connectivity.backendReachable ? 'rgb(var(--success-6))' : 'rgb(var(--danger-6))',
+                  }}
                 />
-                {connectivity.backendReachable ? t('settings.webui.diagBackendOk') : t('settings.webui.diagBackendDown')}
+                {connectivity.backendReachable
+                  ? t('settings.webui.diagBackendOk')
+                  : t('settings.webui.diagBackendDown')}
               </div>
               {!connectivity.allowRemote && (
                 <div className='text-[color:rgb(var(--warning-6))]'>{t('settings.webui.diagLoopbackOnly')}</div>
@@ -843,24 +833,6 @@ const WebuiModalContent: React.FC = () => {
             <Switch checked={allowRemotePreference} onChange={handleAllowRemoteChange} />
           </PreferenceRow>
 
-          {/* 网盘根目录 / Network-drive root */}
-          <PreferenceRow label={t('settings.webui.nasRoot')} description={t('settings.webui.nasRootDesc')}>
-            <div className='flex items-center gap-8px min-w-0'>
-              <Tooltip content={nasRootDir || t('settings.webui.nasRootNotSet')}>
-                <span className='text-12px text-t-secondary font-mono truncate max-w-180px'>
-                  {nasRootDir || t('settings.webui.nasRootNotSet')}
-                </span>
-              </Tooltip>
-              <Button size='small' className='rd-100px' onClick={handlePickNasRoot}>
-                {t('settings.webui.nasRootSelect')}
-              </Button>
-              {nasRootDir && (
-                <Button size='small' type='text' onClick={handleClearNasRoot}>
-                  {t('settings.webui.nasRootClear')}
-                </Button>
-              )}
-            </div>
-          </PreferenceRow>
         </div>
 
         {/* 登录信息卡片 / Login Info Card */}

@@ -516,6 +516,8 @@ export async function startDesktopWebUI(opts: { port?: number; allowRemote?: boo
     installerDir: resolveInstallerDir(),
     // Enterprise LAN shared library, served at /api/shared-drive/*.
     sharedDriveDir: path.join(getDataPath(), 'sharedDrive'),
+    // AI generated asset registry, served at /api/content-assets/*.
+    contentAssetsDir: path.join(getDataPath(), 'contentAssets'),
     // Enterprise LAN network drive (the company's large shared disk), browsed
     // read-only at /api/nas/*. Undefined when unconfigured → endpoints disabled.
     nasRootDir: await resolveNasRootDir(),

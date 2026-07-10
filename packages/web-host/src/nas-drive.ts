@@ -31,6 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createVectorUploadPayloadFromPath } from './vector-upload.js';
 
 /** Per-file upload cap. A NAS holds large media/datasets, so this is generous. */
 const NAS_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
@@ -430,8 +431,11 @@ export async function nasTrashEmpty(rootDir: string): Promise<boolean> {
 // wipes the whole collection, including office-assistant outputs).
 // ---------------------------------------------------------------------------
 
-/** File types the local vector DB can ingest (mirrors its config). */
-const INDEXABLE_TEXT_EXT = ['pdf', 'docx', 'md', 'txt'];
+/**
+ * File types the local vector DB can ingest. PPTX is pre-extracted to Markdown
+ * before upload so the vector DB only needs its existing text pipeline.
+ */
+const INDEXABLE_TEXT_EXT = ['pdf', 'docx', 'md', 'txt', 'pptx'];
 const INDEXABLE_IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp'];
 const INDEXABLE_VIDEO_EXT = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'];
 /** Per-file cap for indexing uploads — read fully into memory, so kept modest. */
@@ -684,9 +688,9 @@ export async function indexNasFolder(
       continue;
     }
     try {
-      const buf = await fs.promises.readFile(f.absPath);
+      const upload = await createVectorUploadPayloadFromPath(f.absPath, f.relPath);
       const form = new FormData();
-      form.append('file', new Blob([buf]), path.basename(f.absPath));
+      form.append('file', upload.blob, upload.filename);
       const resp = await fetch(`${endpoint}/api/upload`, {
         method: 'POST',
         headers: { 'X-Requested-By': 'centaur-vdb' },

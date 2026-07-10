@@ -1,5 +1,5 @@
 /**
- * ShareToTeamModal — confirm sharing an artifact to the LAN shared library,
+ * ShareToTeamModal — confirm publishing an artifact to Enterprise NAS,
  * optionally tagging it with a category.
  */
 import React, { useState } from 'react';

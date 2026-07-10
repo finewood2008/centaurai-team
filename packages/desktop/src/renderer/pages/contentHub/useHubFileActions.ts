@@ -7,6 +7,7 @@ import { Message } from '@arco-design/web-react';
 import { useTranslation } from 'react-i18next';
 import { ipcBridge } from '@/common';
 import { downloadFileFromPath } from '@/renderer/utils/file/download';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import type { FileEntry } from './types';
 
 export function useHubFileActions() {
@@ -32,6 +33,14 @@ export function useHubFileActions() {
       reveal: async (file: FileEntry) => {
         try {
           await ipcBridge.shell.showItemInFolder.invoke(file.path);
+        } catch {
+          Message.error(t('contentHub.toast.openFailed'));
+        }
+      },
+      openFile: async (file: FileEntry) => {
+        try {
+          if (isElectronDesktop()) await ipcBridge.shell.openFile.invoke(file.path);
+          else await downloadFileFromPath(file.path, file.name);
         } catch {
           Message.error(t('contentHub.toast.openFailed'));
         }

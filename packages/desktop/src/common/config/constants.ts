@@ -101,6 +101,17 @@ export const OFFICE_ASSISTANTS_ENABLED = EDITION !== 'decision';
 /** Desktop pet: disabled for the CentaurAI product shell. */
 export const DESKTOP_PET_ENABLED: boolean = false;
 
+export const PERSONAL_VECTOR_DB_ENDPOINT = 'http://127.0.0.1:8618';
+export const TEAM_VECTOR_DB_ENDPOINT = 'http://127.0.0.1:8619';
+export const DEFAULT_VECTOR_DB_ENDPOINT = IS_TEAM ? TEAM_VECTOR_DB_ENDPOINT : PERSONAL_VECTOR_DB_ENDPOINT;
+
+export function normalizeVectorDbEndpoint(endpoint?: string | null): string {
+  const value = (endpoint ?? '').trim().replace(/\/+$/, '');
+  if (!value) return DEFAULT_VECTOR_DB_ENDPOINT;
+  if (IS_TEAM && value === PERSONAL_VECTOR_DB_ENDPOINT) return TEAM_VECTOR_DB_ENDPOINT;
+  return value;
+}
+
 // ===== AI Provider 相关常量 =====
 
 // Stable ID for the Google Auth virtual provider.

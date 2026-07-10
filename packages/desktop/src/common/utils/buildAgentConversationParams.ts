@@ -74,7 +74,7 @@ export function buildAgentConversationParams(input: BuildAgentConversationInput)
     model,
     cli_path,
     custom_agent_id,
-    custom_workspace = true,
+    custom_workspace: customWorkspaceOverride,
     is_preset = false,
     preset_agent_type,
     preset_resources,
@@ -86,9 +86,11 @@ export function buildAgentConversationParams(input: BuildAgentConversationInput)
   const effectivePresetType = preset_agent_type || backend;
   const effectivePresetAssistantId = preset_assistant_id || custom_agent_id;
   const type = getConversationTypeForBackend(is_preset ? effectivePresetType : backend);
+  const custom_workspace = customWorkspaceOverride ?? workspace.trim().length > 0;
   const extra: ICreateConversationParams['extra'] = {
     workspace,
     custom_workspace,
+    is_temporary_workspace: !custom_workspace,
     ...extraOverrides,
   };
 

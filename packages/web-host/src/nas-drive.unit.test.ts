@@ -239,6 +239,7 @@ describe('nasWalk (knowledge-base indexing enumeration)', () => {
     await fs.mkdir(path.join(root, '.nas-trash'), { recursive: true });
     await fs.writeFile(path.join(root, 'a.md'), '# a');
     await fs.writeFile(path.join(root, 'notes.txt'), 'n');
+    await fs.writeFile(path.join(root, 'slides.pptx'), 'pptx payload');
     await fs.writeFile(path.join(root, 'pic.png'), 'p');
     await fs.writeFile(path.join(root, 'ignore.log'), 'x'); // unsupported ext
     await fs.writeFile(path.join(root, 'docs/sub/deep.pdf'), 'd');
@@ -247,7 +248,7 @@ describe('nasWalk (knowledge-base indexing enumeration)', () => {
 
     const noVideo = await nasWalk(root, '');
     const rels = noVideo.map((f) => f.relPath).sort();
-    expect(rels).toEqual(['a.md', 'docs/sub/deep.pdf', 'notes.txt', 'pic.png']);
+    expect(rels).toEqual(['a.md', 'docs/sub/deep.pdf', 'notes.txt', 'pic.png', 'slides.pptx']);
     expect(rels).not.toContain('ignore.log');
     expect(rels.some((r) => r.includes('.nas-trash'))).toBe(false);
 

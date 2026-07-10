@@ -75,7 +75,7 @@ describe('RecentFiles generated artifact enumeration', () => {
     const files = await fetchRecentFiles([
       {
         id: 'conv-lan',
-        name: 'LAN 临时空间',
+        name: 'LAN 待整理生成物',
         type: 'aionrs',
         extra: {
           workspace: '/srv/centaur/tmp/conv-lan',
@@ -92,14 +92,16 @@ describe('RecentFiles generated artifact enumeration', () => {
         path: '/srv/centaur/tmp/conv-lan/poster.png',
         size: 0,
         mtime: 1_720_000_100,
-        conversation: 'LAN 临时空间',
+        conversation: 'LAN 待整理生成物',
+        sourceConversationId: 'conv-lan',
       },
       {
         name: '决策书.docx',
         path: '/srv/centaur/tmp/conv-lan/uploads/决策书.docx',
         size: 0,
         mtime: 1_720_000_100,
-        conversation: 'LAN 临时空间',
+        conversation: 'LAN 待整理生成物',
+        sourceConversationId: 'conv-lan',
       },
     ]);
     expect(files.some((file) => file.path.includes('node_modules'))).toBe(false);

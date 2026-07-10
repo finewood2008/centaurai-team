@@ -313,7 +313,7 @@ const FileAttachButton: React.FC<FileAttachButtonProps> = ({
         />
         <MenuItem
           icon={<FolderOpen theme='outline' size={15} strokeWidth={2.5} />}
-          label={t('common.fileAttach.fromSharedLibrary', { defaultValue: 'Add from shared library' })}
+          label={t('common.fileAttach.fromSharedLibrary', { defaultValue: 'Add from Enterprise NAS' })}
           onClick={() => {
             setSharedPickerVisible(true);
             setOpen(false);

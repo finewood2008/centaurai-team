@@ -7,6 +7,7 @@ import { Copy, Download, FolderOpen, Share } from '@icon-park/react';
 import { formatSize, formatTime, shortConversation } from '@/renderer/pages/guid/components/RecentFiles';
 import { ipcBridge } from '@/common';
 import FileThumb from './FileThumb';
+import { useSingleDoubleClick } from './clickIntent';
 import { GRID_SIZE } from './viewConfig';
 import { useHubFileActions } from '../../useHubFileActions';
 import type { FileEntry, HubCardSize } from '../../types';
@@ -15,6 +16,7 @@ type FileCardProps = {
   file: FileEntry;
   size: HubCardSize;
   onOpen: (file: FileEntry) => void;
+  onDirectOpen?: (file: FileEntry) => void;
   /** When provided, renders a "share to team" hover action. */
   onShare?: (file: FileEntry) => void;
   /** Right-click handler — opens the hub context menu at the cursor. */
@@ -27,15 +29,17 @@ const ActionChip: React.FC<{ onClick: (e: React.MouseEvent) => void; children: R
 }) => (
   <span
     onClick={onClick}
+    onDoubleClick={(event) => event.stopPropagation()}
     className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
   >
     {children}
   </span>
 );
 
-const FileCard: React.FC<FileCardProps> = ({ file, size, onOpen, onShare, onContextMenu }) => {
+const FileCard: React.FC<FileCardProps> = ({ file, size, onOpen, onDirectOpen, onShare, onContextMenu }) => {
   const actions = useHubFileActions();
   const dim = GRID_SIZE[size];
+  const clickIntent = useSingleDoubleClick(onOpen, onDirectOpen);
 
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -51,7 +55,8 @@ const FileCard: React.FC<FileCardProps> = ({ file, size, onOpen, onShare, onCont
     <div
       className={`flex flex-col items-center gap-4px ${dim.card} rd-10px cursor-pointer
         bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative`}
-      onClick={() => onOpen(file)}
+      onClick={() => clickIntent.handleClick(file)}
+      onDoubleClick={() => clickIntent.handleDoubleClick(file)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(file, e) : undefined}
       title={`${file.name}\n${file.conversation}\n${formatSize(file.size)} · ${formatTime(file.mtime)}`}
     >

@@ -87,5 +87,79 @@
       "interview": "策劃一場深度訪談",
       "expert_review": "多位專家會診同一個問題"
     }
+  },
+  "meeting": {
+    "attachShared": "引用企業 NAS",
+    "boardTitle": "智囊團",
+    "cancel": "取消會議",
+    "continue": "繼續討論 →",
+    "emptyTitle": "智囊團 · 召集 AI 專家開會",
+    "extraExpertLabel": "加專家",
+    "needAgents": "需要 1 位主持人（隊長）和至少 1 位專家才能開會。",
+    "newMeeting": "開一場新會議",
+    "newShort": "新會議",
+    "pickHint": "請在上方選擇一個方案拍板",
+    "planTitle": "本場方案書",
+    "reset": "重開",
+    "runningHint": "主持人正在帶領專家討論…可隨時舉手插話",
+    "searchKnowledgeBase": "檢索知識庫",
+    "speaking": "發言中",
+    "start": "開會",
+    "step1": "① 在下方輸入主題",
+    "step3": "② 開始討論",
+    "topicLabel": "議題：",
+    "topicPlaceholder": "拋出一個議題，讓一群 AI 專家幫你開會論證…",
+    "interjectPausePlaceholder": "💡 想補充什麼？說給主持人和專家們…",
+    "interjectPlaceholder": "✋ 舉手插話：隨時補充想法或糾偏…",
+    "export": {
+      "archive": "匯出歸檔",
+      "copied": "已複製方案書",
+      "copy": "複製",
+      "copyFailed": "複製失敗",
+      "openHub": "在工作空間查看"
+    },
+    "extraExpert": {
+      "title": "加入更多專家（國產模型 / OpenClaw / Hermes 等）",
+      "titleShort": "加入更多專家",
+      "groupBackends": "其他後端",
+      "groupModels": "直連模型"
+    },
+    "history": {
+      "untitled": "未命名議題"
+    },
+    "outputs": {
+      "section": "會議產出"
+    },
+    "resolution": {
+      "pick": "就選這個",
+      "picked": "已拍板",
+      "title": "候選方案 — 請老闆拍板"
+    },
+    "role": {
+      "moderator": "主持人",
+      "panelist": "專家"
+    },
+    "status": {
+      "decided": "已拍板",
+      "resolution": "討論結束，請拍板",
+      "running": "會議進行中"
+    },
+    "turn": {
+      "failed": "未發言"
+    },
+    "boardSubtitle": "AI 圓桌會議",
+    "stage": {
+      "opening": "開場",
+      "position": "立論",
+      "debate": "交鋒",
+      "synthesis": "綜合",
+      "decision": "拍板",
+      "draft": "起草",
+      "redteam": "紅隊",
+      "revise": "修訂",
+      "proposal": "提案",
+      "diverge": "發散",
+      "converge": "收斂"
+    }
   }
 }

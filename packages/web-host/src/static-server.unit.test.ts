@@ -257,6 +257,271 @@ describe('static-server', () => {
     expect(json.user.username).toBe('from-backend');
   });
 
+  it('returns the WebHost gate user for LAN /api/auth/user', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'user-a', username: 'alice' } }));
+        return;
+      }
+      if (req.url === '/api/auth/user' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'system_default_user', username: 'admin' } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+
+    const login = await fetch(`${handle.localUrl}/login`, { method: 'POST' });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(`${handle.localUrl}/api/auth/user`, { headers: { 'x-webui-gate-token': gateToken } });
+    expect(r.status).toBe(200);
+    const json = (await r.json()) as { success: boolean; user: { id: string; username: string } };
+    expect(json).toEqual({ success: true, user: { id: 'user-a', username: 'alice' } });
+  });
+
+  it('scopes /api/memory/files/USER.md to the authenticated LAN user', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'user-a', username: 'alice' } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+
+    const vectorDb = await startMockBackend((req, res) => {
+      if (req.url === '/api/memory/files/users/user-a/USER.md' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ path: 'users/user-a/USER.md', content: 'Alice profile' }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+    const login = await fetch(`${handle.localUrl}/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'alice', password: 'pw' }),
+    });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(
+      `${handle.localUrl}/api/memory/files/USER.md?endpoint=${encodeURIComponent(`http://127.0.0.1:${vectorDb.port}`)}`,
+      { headers: { 'x-webui-gate-token': gateToken } }
+    );
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as { content: string }).content).toBe('Alice profile');
+    await vectorDb.close();
+  });
+
+  it('forwards /api/memory/files writes to the authenticated LAN user path', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'user-a', username: 'alice' } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+
+    let receivedPath = '';
+    let receivedBody = '';
+    let receivedUser = '';
+    const vectorDb = await startMockBackend(async (req, res) => {
+      receivedPath = req.url || '';
+      receivedUser = String(req.headers['x-centaurai-user-id'] || '');
+      for await (const chunk of req) receivedBody += String(chunk);
+      if (req.url === '/api/memory/files/users/user-a/MEMORY.md' && req.method === 'PUT') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+    const login = await fetch(`${handle.localUrl}/login`, { method: 'POST' });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(
+      `${handle.localUrl}/api/memory/files/MEMORY.md?endpoint=${encodeURIComponent(`http://127.0.0.1:${vectorDb.port}`)}`,
+      {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json', 'x-webui-gate-token': gateToken },
+        body: JSON.stringify({ content: 'Alice memory', source_agent: 'test' }),
+      }
+    );
+    expect(r.status).toBe(200);
+    expect(receivedPath).toBe('/api/memory/files/users/user-a/MEMORY.md');
+    expect(receivedUser).toBe('user-a');
+    expect(JSON.parse(receivedBody)).toEqual({ content: 'Alice memory', source_agent: 'test' });
+    await vectorDb.close();
+  });
+
+  it('filters /api/memory/search results to the current user plus shared company memory', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'user-a', username: 'alice' } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+
+    const vectorDb = await startMockBackend((req, res) => {
+      if (req.url === '/api/memory/search' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            results: [
+              { rel_path: 'users/user-a/MEMORY.md', text: 'Alice memory' },
+              { rel_path: 'users/user-b/MEMORY.md', text: 'Bob memory' },
+              { rel_path: 'company/policy.md', text: 'Shared policy' },
+            ],
+          })
+        );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+    const login = await fetch(`${handle.localUrl}/login`, { method: 'POST' });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(`${handle.localUrl}/api/memory/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-webui-gate-token': gateToken },
+      body: JSON.stringify({ endpoint: `http://127.0.0.1:${vectorDb.port}`, query: 'memory', n_results: 5 }),
+    });
+    expect(r.status).toBe(200);
+    const json = (await r.json()) as { results: Array<{ text: string }> };
+    expect(json.results.map((item) => item.text)).toEqual(['Alice memory', 'Shared policy']);
+    await vectorDb.close();
+  });
+
+  it('rejects non-admin cross-user memory access', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'user-a', username: 'alice' } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+    const login = await fetch(`${handle.localUrl}/login`, { method: 'POST' });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(`${handle.localUrl}/api/memory/users/user-b/profile`, {
+      headers: { 'x-webui-gate-token': gateToken },
+    });
+    expect(r.status).toBe(403);
+  });
+
+  it('allows admin cross-user profile reads and records an audit line', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'system_default_user', username: 'admin' } }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+
+    const vectorDb = await startMockBackend((req, res) => {
+      if (req.url === '/api/memory/files/users/user-a/USER.md' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ content: '# USER.md\n\nAlice' }));
+        return;
+      }
+      if (req.url === '/api/memory/files/users/user-a/MEMORY.md' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ content: '# MEMORY.md\n\nAlice memory' }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ws-memory-audit-'));
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      allowRemote: true,
+      dataDir,
+    });
+    const login = await fetch(`${handle.localUrl}/login`, { method: 'POST' });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(
+      `${handle.localUrl}/api/memory/users/user-a/profile?endpoint=${encodeURIComponent(`http://127.0.0.1:${vectorDb.port}`)}`,
+      { headers: { 'x-webui-gate-token': gateToken } }
+    );
+    expect(r.status).toBe(200);
+    const audit = await fs.readFile(path.join(dataDir, 'memory-audit.ndjson'), 'utf-8');
+    expect(audit).toContain('"actor_user_id":"system_default_user"');
+    expect(audit).toContain('"target_user_id":"user-a"');
+    await vectorDb.close();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  it('lists LAN users with vector memory status for admin memory center', async () => {
+    const backend = await startMockBackend((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: 'system_default_user', username: 'admin' } }));
+        return;
+      }
+      if (req.url === '/api/auth/internal/users' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ id: 'user-a', username: 'alice' }] }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    stopBackend = backend.close;
+
+    const vectorDb = await startMockBackend((req, res) => {
+      if (req.url === '/api/memory/files?scope=all' && req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            files: [
+              { path: 'USER.md', updated_at: '2026-07-09T01:00:00' },
+              { path: 'users/user-a/USER.md', updated_at: '2026-07-09T02:00:00' },
+              { path: 'users/user-b/MEMORY.md', updated_at: '2026-07-09T03:00:00' },
+            ],
+          })
+        );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+    const login = await fetch(`${handle.localUrl}/login`, { method: 'POST' });
+    const gateToken = login.headers.get('x-webui-gate-token') ?? '';
+    const r = await fetch(
+      `${handle.localUrl}/api/memory/admin/users?endpoint=${encodeURIComponent(`http://127.0.0.1:${vectorDb.port}`)}`,
+      { headers: { 'x-webui-gate-token': gateToken } }
+    );
+    expect(r.status).toBe(200);
+    const json = (await r.json()) as { users: Array<{ id: string; source: string; has_user_md?: boolean }>; shared: { has_user_md?: boolean } };
+    expect(json.shared.has_user_md).toBe(true);
+    expect(json.users).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'user-a', source: 'webui', has_user_md: true }),
+        expect.objectContaining({ id: 'user-b', source: 'memory' }),
+      ])
+    );
+    await vectorDb.close();
+  });
+
   it('/api/settings/client hides API keys from browser clients', async () => {
     const backend = await startMockBackend((req, res) => {
       if (req.url === '/api/settings/client' && req.method === 'GET') {
@@ -494,6 +759,42 @@ describe('static-server', () => {
       body: JSON.stringify({ endpoint: 'file:///etc/passwd', query: 'x' }),
     });
     expect(r.status).toBe(400);
+  });
+
+  it('POST /api/vector-documents deletes documents through the vector DB proxy', async () => {
+    const backend = await startMockBackend((_req, res) => res.end('nope'));
+    stopBackend = backend.close;
+
+    let receivedMethod = '';
+    let receivedPath = '';
+    let receivedHeader = '';
+    const vectorDb = await startMockBackend((req, res) => {
+      receivedMethod = req.method || '';
+      receivedPath = req.url || '';
+      receivedHeader = String(req.headers['x-requested-by'] || '');
+      if (req.method === 'DELETE' && req.url === '/api/documents/doc%2F1') {
+        res.writeHead(204).end();
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
+    const r = await fetch(`${handle.localUrl}/api/vector-documents`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: `http://127.0.0.1:${vectorDb.port}`,
+        action: 'delete',
+        docId: 'doc/1',
+      }),
+    });
+
+    expect(r.status).toBe(204);
+    expect(receivedMethod).toBe('DELETE');
+    expect(receivedPath).toBe('/api/documents/doc%2F1');
+    expect(receivedHeader).toBe('centaur-vdb');
+    await vectorDb.close();
   });
 
   it('self-heals a 0-byte index.html: LAN users still get the real page', async () => {

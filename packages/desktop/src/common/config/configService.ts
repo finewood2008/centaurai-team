@@ -1,4 +1,5 @@
 import type { ConfigKey, ConfigKeyMap } from './configKeys';
+import { normalizeVectorDbEndpoint } from './constants';
 
 type Subscriber = (value: unknown) => void;
 
@@ -88,6 +89,14 @@ class ConfigServiceImpl {
         this.cache.set('theme.userThemes', migrated['theme.userThemes']);
         // Persist asynchronously; ignore failure (will re-run next launch).
         void fetchJson<void>('PUT', '/api/settings/client', migrated).catch(() => {});
+      }
+      const vectorEndpoint = this.cache.get('vectorDB.endpoint');
+      if (typeof vectorEndpoint === 'string') {
+        const normalized = normalizeVectorDbEndpoint(vectorEndpoint);
+        if (normalized !== vectorEndpoint) {
+          this.cache.set('vectorDB.endpoint', normalized);
+          void fetchJson<void>('PUT', '/api/settings/client', { 'vectorDB.endpoint': normalized }).catch(() => {});
+        }
       }
       this.initialized = true;
     })();

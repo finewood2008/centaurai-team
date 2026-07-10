@@ -22,7 +22,7 @@ export interface TimeGreetingOptions {
 }
 
 export function useTimeGreeting({ username }: TimeGreetingOptions = {}): string {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [slot, setSlot] = useState<Slot>(() => resolveSlot(new Date().getHours()));
 
   useEffect(() => {
@@ -40,5 +40,9 @@ export function useTimeGreeting({ username }: TimeGreetingOptions = {}): string 
     }[slot],
   });
 
-  return username ? `${base}, ${username}` : base;
+  const name = username?.trim();
+  if (!name) return base;
+
+  const separator = /^(zh|ja|ko)\b/i.test(i18n.language) ? '，' : ', ';
+  return `${base}${separator}${name}`;
 }

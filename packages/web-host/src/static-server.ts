@@ -14,9 +14,12 @@
  */
 
 import http, { type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { promises as fs } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import net, { type Socket } from 'node:net';
 import path from 'node:path';
+import { Readable } from 'node:stream';
+import bcrypt from 'bcryptjs';
 import serveHandler from 'serve-handler';
 import { handleDownloadGet, handleDownloadsList } from './downloads.js';
 import { handleAppDownloadGet, handleAppDownloadsList, handleAppstoreList } from './app-downloads.js';
@@ -29,6 +32,14 @@ import {
   handleSharedUpload,
 } from './shared-drive.js';
 import {
+  handleContentAssetArchive,
+  handleContentAssetDownload,
+  handleContentAssetPreview,
+  handleContentAssetPublishToNas,
+  handleContentAssetsList,
+  handleContentAssetUpload,
+} from './content-assets.js';
+import {
   handleNasDownload,
   handleNasList,
   handleNasMkdir,
@@ -38,8 +49,9 @@ import {
   handleNasUpload,
 } from './nas-drive.js';
 import { handleImageWorkbenchProxy, handleImageWorkbenchStatic, handleComfyUIProxy } from './image-workbench.js';
-import { type AuthGate, createAuthGate } from './webui-auth-gate.js';
+import { type AuthGate, type AuthGateIdentity, createAuthGate } from './webui-auth-gate.js';
 import { createEntryGuard, type EntryGuard } from './entry-html-guard.js';
+import { createVectorUploadPayloadFromFile } from './vector-upload.js';
 import type { ImageWorkbenchConfig } from './types.js';
 
 export type StaticServerOptions = {
@@ -57,6 +69,11 @@ export type StaticServerOptions = {
    * /api/shared-drive/*. Omit to disable sharing (list returns []).
    */
   sharedDriveDir?: string;
+  /**
+   * Directory hosting the AI generated asset registry. Omit to disable the
+   * generated-assets endpoints (list returns []).
+   */
+  contentAssetsDir?: string;
   /**
    * Root of the enterprise LAN network drive (the company's large shared disk),
    * browsed read-only at /api/nas/*. Omit to disable (list returns []).
@@ -86,6 +103,8 @@ export type StaticServerOptions = {
    * Decision box talks to the backend over IPC, not through this proxy.
    */
   blockTeamRoutes?: boolean;
+  /** Backend/user data directory. Used for admin audit logs. */
+  dataDir?: string;
 };
 
 export type StaticServerHandle = {
@@ -145,6 +164,73 @@ function forwardToBackend(req: IncomingMessage, res: ServerResponse, backendPort
   req.pipe(proxy);
 }
 
+type AuthUser = {
+  id: string;
+  username?: string;
+};
+
+type AuthUserEnvelope = {
+  success?: boolean;
+  user?: Partial<AuthUser> | null;
+  data?: Partial<AuthUser> | { user?: Partial<AuthUser> | null } | null;
+};
+
+function sendJsonResponse(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+function normalizeAuthUser(value: unknown): AuthGateIdentity | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Partial<AuthUser>;
+  const userId = typeof record.id === 'string' ? record.id.trim() : '';
+  if (!userId) return null;
+  const username = typeof record.username === 'string' && record.username.trim() ? record.username.trim() : undefined;
+  return { userId, username };
+}
+
+function extractAuthIdentityFromBody(body: Buffer): AuthGateIdentity | null {
+  try {
+    const json = JSON.parse(body.toString('utf-8')) as AuthUserEnvelope;
+    const direct = normalizeAuthUser(json.user);
+    if (direct) return direct;
+    if (json.data && typeof json.data === 'object') {
+      const fromData = normalizeAuthUser(json.data);
+      if (fromData) return fromData;
+      return normalizeAuthUser((json.data as { user?: unknown }).user);
+    }
+  } catch {
+    // Non-JSON login response. The backend set-cookie still gets forwarded.
+  }
+  return null;
+}
+
+function setCookieHeaderToCookie(setCookie: string | string[] | number | undefined): string {
+  const list = Array.isArray(setCookie) ? setCookie : setCookie ? [String(setCookie)] : [];
+  return list
+    .map((item) => item.split(';')[0]?.trim() ?? '')
+    .filter(Boolean)
+    .join('; ');
+}
+
+function mergeCookieHeaders(existing: string | undefined, addition: string): string {
+  const parts = [existing, addition].filter((item): item is string => Boolean(item && item.trim()));
+  return parts.join('; ');
+}
+
+async function fetchBackendCurrentUser(backendPort: number, cookieHeader?: string): Promise<AuthGateIdentity | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${backendPort}/api/auth/user`, {
+      headers: cookieHeader ? { cookie: cookieHeader } : undefined,
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as AuthUserEnvelope;
+    return normalizeAuthUser(json.user) ?? normalizeAuthUser(json.data);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Proxy `POST /login` to the backend and, on a 2xx response, mint the gate
  * session cookie alongside whatever the backend set. The backend's login
@@ -162,18 +248,43 @@ function proxyLoginWithGate(req: IncomingMessage, res: ServerResponse, gate: Aut
   const proxy = http.request(options, (proxyRes) => {
     const headers = { ...proxyRes.headers };
     const status = proxyRes.statusCode ?? 502;
-    if (status >= 200 && status < 300) {
-      const existing = headers['set-cookie'];
-      const list = Array.isArray(existing) ? existing : existing ? [existing] : [];
-      const gateToken = gate.mintToken();
-      headers['set-cookie'] = [...list, gate.mintCookie()];
-      headers['x-webui-gate-token'] = gateToken;
-      headers['access-control-expose-headers'] = appendCsvHeader(headers['access-control-expose-headers'], [
-        'X-WebUI-Gate-Token',
-      ]);
-    }
-    res.writeHead(status, headers);
-    proxyRes.pipe(res);
+    const chunks: Buffer[] = [];
+    proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+    proxyRes.on('end', () => {
+      void (async () => {
+        const body = Buffer.concat(chunks);
+        if (status >= 200 && status < 300) {
+          const existing = headers['set-cookie'];
+          const list = Array.isArray(existing) ? existing : existing ? [existing] : [];
+          const responseCookies = setCookieHeaderToCookie(existing);
+          const identity =
+            extractAuthIdentityFromBody(body) ??
+            (await fetchBackendCurrentUser(
+              backendPort,
+              mergeCookieHeaders(
+                Array.isArray(req.headers.cookie) ? req.headers.cookie[0] : req.headers.cookie,
+                responseCookies
+              )
+            ));
+          const gateToken = gate.mintToken(identity ?? undefined);
+          headers['set-cookie'] = [...list, gate.mintCookie(identity ?? undefined)];
+          headers['x-webui-gate-token'] = gateToken;
+          headers['access-control-expose-headers'] = appendCsvHeader(headers['access-control-expose-headers'], [
+            'X-WebUI-Gate-Token',
+          ]);
+        }
+        headers['content-length'] = String(Buffer.byteLength(body));
+        delete headers['transfer-encoding'];
+        res.writeHead(status, headers);
+        res.end(body);
+      })().catch(() => {
+        if (!res.headersSent) {
+          sendJsonResponse(res, 502, { error: 'BACKEND_UNREACHABLE' });
+        } else {
+          res.destroy();
+        }
+      });
+    });
   });
   proxy.on('error', () => {
     if (!res.headersSent) {
@@ -208,6 +319,30 @@ function isGateAuthorized(gate: AuthGate, req: IncomingMessage): boolean {
   return gate.isAuthorized(req.headers.cookie) || gate.isAuthorizedToken(requestGateToken(req));
 }
 
+function requestPathFromUrl(url: string): string {
+  return (url.split('?')[0] || '/').split('#')[0];
+}
+
+async function resolveRequestIdentity(
+  gate: AuthGate,
+  req: IncomingMessage,
+  backendPort: number,
+  requireAuth: boolean
+): Promise<AuthGateIdentity | null> {
+  const tokenIdentity =
+    gate.getAuthorizedIdentity(req.headers.cookie) ?? gate.getAuthorizedTokenIdentity(requestGateToken(req));
+  if (tokenIdentity) return tokenIdentity;
+
+  const cookie = Array.isArray(req.headers.cookie) ? req.headers.cookie[0] : req.headers.cookie;
+  const backendIdentity = await fetchBackendCurrentUser(backendPort, cookie);
+  if (backendIdentity) return backendIdentity;
+
+  if (!requireAuth) {
+    return { userId: 'system_default_user', username: 'admin' };
+  }
+  return null;
+}
+
 /**
  * Enforce the WebUI auth gate for LAN-exposed deployments. Returns true when the
  * response was fully handled (the caller must then stop processing the request).
@@ -220,13 +355,13 @@ function isGateAuthorized(gate: AuthGate, req: IncomingMessage): boolean {
  * the login page itself always loads.
  */
 function enforceGate(req: IncomingMessage, res: ServerResponse, gate: AuthGate, backendPort: number): boolean {
-  const path = (req.url ?? '').split('?')[0] ?? '';
+  const requestPath = (req.url ?? '').split('?')[0] ?? '';
 
-  if (req.method === 'POST' && path === '/login') {
+  if (req.method === 'POST' && requestPath === '/login') {
     proxyLoginWithGate(req, res, gate, backendPort);
     return true;
   }
-  if (path === '/logout' || path === '/api/auth/logout') {
+  if (requestPath === '/logout' || requestPath === '/api/auth/logout') {
     const options: http.RequestOptions = {
       hostname: '127.0.0.1',
       port: backendPort,
@@ -254,11 +389,11 @@ function enforceGate(req: IncomingMessage, res: ServerResponse, gate: AuthGate, 
     return true;
   }
   // Bootstrap endpoints reachable before a session exists.
-  if (req.method === 'GET' && path === '/api/auth/status') return false;
-  if (req.method === 'GET' && path === '/api/auth/csrf-token') return false;
-  if (path.startsWith('/api/downloads/')) return false;
+  if (req.method === 'GET' && requestPath === '/api/auth/status') return false;
+  if (req.method === 'GET' && requestPath === '/api/auth/csrf-token') return false;
+  if (requestPath.startsWith('/api/downloads/')) return false;
 
-  const isApi = path === '/api' || path.startsWith('/api/');
+  const isApi = requestPath === '/api' || requestPath.startsWith('/api/');
   if (isApi && !isGateAuthorized(gate, req)) {
     res.writeHead(401, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ success: false, error: 'UNAUTHENTICATED' }));
@@ -479,16 +614,921 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
+const DEFAULT_VECTOR_ENDPOINT = 'http://127.0.0.1:8619';
+const ACCOUNT_PROFILE_BLOCK_RE = /<!-- centaurai-account-profile\n([\s\S]*?)\n-->/;
+const ADMIN_USER_ID = 'system_default_user';
+
+type AccountProfile = {
+  displayName?: string;
+  avatar?: string;
+  realName?: string;
+  bio?: string;
+  department?: string;
+  title?: string;
+  responsibilities?: string;
+  routineWork?: string;
+  aiName?: string;
+  responseStyle?: string;
+  language?: string;
+  outputFormat?: string;
+  memoryNotes?: string;
+};
+
+type MemorySearchItem = {
+  rel_path?: string;
+  path?: string;
+  source_path?: string;
+  metadata?: { rel_path?: string; path?: string; source_path?: string };
+};
+
+type LanUserRecord = {
+  id: string;
+  username: string;
+  created_at?: unknown;
+  last_login?: unknown;
+};
+
+type MemoryFileRecord = {
+  path?: string;
+  size?: number;
+  updated_at?: string;
+};
+
+function endpointFromRequest(req: IncomingMessage, body?: Record<string, unknown>): string | null {
+  const query = new URL(req.url || '/', 'http://localhost').searchParams.get('endpoint');
+  const raw =
+    typeof body?.endpoint === 'string'
+      ? body.endpoint.trim()
+      : typeof query === 'string'
+        ? query.trim()
+        : DEFAULT_VECTOR_ENDPOINT;
+  const endpoint = raw.replace(/\/+$/, '');
+  return /^https?:\/\//i.test(endpoint) ? endpoint : null;
+}
+
+function safeUserPathSegment(userId: string): string {
+  return encodeURIComponent(userId.trim()).replace(/%/g, '_');
+}
+
+function encodeMemoryPath(relPath: string): string {
+  return relPath.split('/').map(encodeURIComponent).join('/');
+}
+
+function normalizeRequestedMemoryPath(rawPath: string): string {
+  return decodeURIComponent(rawPath).replace(/^\/+/, '').replace(/\\/g, '/');
+}
+
+function memoryScopeFromRequest(req: IncomingMessage): string {
+  const scope = new URL(req.url || '/', 'http://localhost').searchParams.get('scope')?.trim().toLowerCase() || '';
+  return ['auto', 'visible', 'personal', 'shared', 'all'].includes(scope) ? scope : 'auto';
+}
+
+function memoryApiPath(apiPath: string, scope?: string): string {
+  if (!scope || scope === 'auto') return apiPath;
+  return `${apiPath}${apiPath.includes('?') ? '&' : '?'}scope=${encodeURIComponent(scope)}`;
+}
+
+function scopedMemoryPath(userId: string, requestedPath: string, scope = 'auto'): string | null {
+  const relPath = normalizeRequestedMemoryPath(requestedPath);
+  if (!relPath || relPath.includes('..') || relPath.startsWith('users/')) return null;
+  if (scope === 'shared') return relPath;
+  const userPrefix = `users/${safeUserPathSegment(userId)}`;
+  if (relPath === 'USER.md' || relPath === 'MEMORY.md') return `${userPrefix}/${relPath}`;
+  if (relPath.startsWith('journal/') && relPath.endsWith('.md')) return `${userPrefix}/${relPath}`;
+  if (userId === ADMIN_USER_ID && isLegacyImportedMemoryPath(relPath)) return relPath;
+  if (relPath === 'AGENTS.md' || relPath.startsWith('company/') || relPath.startsWith('shared/')) return relPath;
+  return `${userPrefix}/${relPath}`;
+}
+
+function userMemoryPath(userId: string, file: 'USER.md' | 'MEMORY.md'): string {
+  return `users/${safeUserPathSegment(userId)}/${file}`;
+}
+
+function memoryItemRelPath(item: MemorySearchItem): string {
+  return (
+    item.rel_path ||
+    item.metadata?.rel_path ||
+    item.path ||
+    item.metadata?.path ||
+    item.source_path ||
+    item.metadata?.source_path ||
+    ''
+  );
+}
+
+function isLegacyImportedMemoryPath(relPath: string): boolean {
+  return relPath.startsWith('imports/') && relPath.endsWith('.md') && !relPath.includes('..');
+}
+
+function isLegacyJournalPath(relPath: string): boolean {
+  return relPath.startsWith('journal/') && relPath.endsWith('.md') && !relPath.includes('..');
+}
+
+function isSharedMemoryPath(relPath: string): boolean {
+  return (
+    relPath === 'AGENTS.md' ||
+    relPath === 'USER.md' ||
+    relPath === 'MEMORY.md' ||
+    relPath.startsWith('company/') ||
+    relPath.startsWith('shared/') ||
+    isLegacyImportedMemoryPath(relPath) ||
+    isLegacyJournalPath(relPath)
+  );
+}
+
+function isVisibleMemoryItem(item: MemorySearchItem, userId: string): boolean {
+  const relPath = memoryItemRelPath(item).replace(/\\/g, '/');
+  const userPrefix = `users/${safeUserPathSegment(userId)}/`;
+  return relPath.startsWith(userPrefix) || isSharedMemoryPath(relPath);
+}
+
+function applyVectorIdentityHeaders(headers: Record<string, string>, identity?: AuthGateIdentity): void {
+  if (!identity) return;
+  headers['X-CentaurAI-User-Id'] = identity.userId;
+  headers['X-CentaurAI-Username'] = identity.username;
+  headers['X-CentaurAI-Role'] = identity.userId === ADMIN_USER_ID ? 'admin' : 'user';
+  const proxyToken = process.env.VDB_TRUSTED_PROXY_TOKEN || process.env.CENTAURAI_VDB_TRUSTED_PROXY_TOKEN;
+  if (proxyToken) headers['X-CentaurAI-Proxy-Token'] = proxyToken;
+}
+
+async function vectorJson(
+  endpoint: string,
+  apiPath: string,
+  init?: { method?: string; body?: unknown; requestedBy?: boolean; identity?: AuthGateIdentity }
+): Promise<{ status: number; body: unknown; text: string; contentType: string }> {
+  const headers: Record<string, string> = {};
+  if (init?.body !== undefined) headers['content-type'] = 'application/json';
+  if (init?.requestedBy) headers['X-Requested-By'] = 'centaur-vdb';
+  applyVectorIdentityHeaders(headers, init?.identity);
+  const upstream = await fetch(`${endpoint}${apiPath}`, {
+    method: init?.method ?? 'GET',
+    headers,
+    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
+  const text = await upstream.text();
+  let parsed: unknown = text;
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    // Keep the raw text for non-JSON upstream errors.
+  }
+  return {
+    status: upstream.status,
+    body: parsed,
+    text,
+    contentType: upstream.headers.get('content-type') || 'application/json',
+  };
+}
+
+async function readMemoryDocument(
+  endpoint: string,
+  relPath: string,
+  identity?: AuthGateIdentity
+): Promise<{ content: string; updatedAt?: string }> {
+  const result = await vectorJson(endpoint, `/api/memory/files/${encodeMemoryPath(relPath)}`, { identity });
+  if (result.status === 404) return { content: '' };
+  if (result.status < 200 || result.status >= 300) throw new Error(`memory read failed (${result.status})`);
+  const body = result.body as { content?: unknown; updated_at?: unknown };
+  return {
+    content: typeof body.content === 'string' ? body.content : '',
+    updatedAt: typeof body.updated_at === 'string' ? body.updated_at : undefined,
+  };
+}
+
+async function writeMemoryDocument(
+  endpoint: string,
+  relPath: string,
+  content: string,
+  sourceAgent: string,
+  identity?: AuthGateIdentity
+): Promise<unknown> {
+  const result = await vectorJson(endpoint, `/api/memory/files/${encodeMemoryPath(relPath)}`, {
+    method: 'PUT',
+    requestedBy: true,
+    identity,
+    body: { content, source_agent: sourceAgent },
+  });
+  if (result.status < 200 || result.status >= 300) throw new Error(`memory write failed (${result.status})`);
+  return result.body;
+}
+
+async function deleteMemoryDocument(endpoint: string, relPath: string, identity?: AuthGateIdentity): Promise<void> {
+  const result = await vectorJson(endpoint, `/api/memory/files/${encodeMemoryPath(relPath)}`, {
+    method: 'DELETE',
+    requestedBy: true,
+    identity,
+  });
+  if (result.status !== 404 && (result.status < 200 || result.status >= 300)) {
+    throw new Error(`memory delete failed (${result.status})`);
+  }
+}
+
+function profileFromMarkdown(content: string): AccountProfile {
+  const match = ACCOUNT_PROFILE_BLOCK_RE.exec(content);
+  if (!match?.[1]) return {};
+  try {
+    const parsed = JSON.parse(match[1]) as Record<string, unknown>;
+    const profile: AccountProfile = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string') {
+        profile[key as keyof AccountProfile] = value;
+      }
+    }
+    return profile;
+  } catch {
+    return {};
+  }
+}
+
+function markdownLine(label: string, value: string | undefined): string {
+  return `- ${label}: ${value?.trim() || ''}`;
+}
+
+function buildUserMarkdown(profile: AccountProfile, username?: string): string {
+  const json = JSON.stringify(profile, null, 2);
+  return [
+    '# USER.md — 个人身份',
+    '',
+    '<!-- centaurai-account-profile',
+    json,
+    '-->',
+    '',
+    '## 账号信息',
+    '',
+    markdownLine('用户名', username),
+    '',
+    '## 工作身份',
+    '',
+    markdownLine('名称', profile.realName || profile.displayName),
+    '',
+    '### 个人简介',
+    '',
+    profile.bio?.trim() || profile.responsibilities?.trim() || profile.routineWork?.trim() || '',
+    '',
+    '## AI 偏好',
+    '',
+    markdownLine('AI 称呼', profile.aiName),
+    markdownLine('回答风格', profile.responseStyle),
+    markdownLine('常用语言', profile.language),
+    markdownLine('输出格式偏好', profile.outputFormat),
+    '',
+  ].join('\n');
+}
+
+function buildMemoryMarkdown(profile: AccountProfile): string {
+  return [
+    '# MEMORY.md — 个人长期记忆',
+    '',
+    '## 需要长期记住的注意事项',
+    '',
+    profile.memoryNotes?.trim() || '',
+    '',
+  ].join('\n');
+}
+
+function mergeProfileFromBody(body: Record<string, unknown>): AccountProfile {
+  const raw = body.profile && typeof body.profile === 'object' ? (body.profile as Record<string, unknown>) : {};
+  const profile: AccountProfile = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string') {
+      profile[key as keyof AccountProfile] = value;
+    }
+  }
+  return profile;
+}
+
+async function readAccountProfile(
+  endpoint: string,
+  userId: string,
+  identity?: AuthGateIdentity
+): Promise<{
+  profile: AccountProfile;
+  userMarkdown: string;
+  memoryMarkdown: string;
+  updatedAt?: string;
+}> {
+  const [userResult, memoryResult] = await Promise.allSettled([
+    readMemoryDocument(endpoint, userMemoryPath(userId, 'USER.md'), identity),
+    readMemoryDocument(endpoint, userMemoryPath(userId, 'MEMORY.md'), identity),
+  ]);
+  const userDoc = userResult.status === 'fulfilled' ? userResult.value : { content: '' };
+  const memoryDoc = memoryResult.status === 'fulfilled' ? memoryResult.value : { content: '' };
+  return {
+    profile: profileFromMarkdown(userDoc.content),
+    userMarkdown: userDoc.content,
+    memoryMarkdown: memoryDoc.content,
+    updatedAt: userDoc.updatedAt || memoryDoc.updatedAt,
+  };
+}
+
+async function writeAccountProfile(
+  endpoint: string,
+  identity: AuthGateIdentity,
+  body: Record<string, unknown>,
+  targetUserId = identity.userId
+): Promise<void> {
+  const profile = mergeProfileFromBody(body);
+  const userMarkdown =
+    typeof body.userMarkdown === 'string' ? body.userMarkdown : buildUserMarkdown(profile, identity.username);
+  const memoryMarkdown = typeof body.memoryMarkdown === 'string' ? body.memoryMarkdown : buildMemoryMarkdown(profile);
+  await Promise.all([
+    writeMemoryDocument(endpoint, userMemoryPath(targetUserId, 'USER.md'), userMarkdown, 'centaurai-account', identity),
+    writeMemoryDocument(
+      endpoint,
+      userMemoryPath(targetUserId, 'MEMORY.md'),
+      memoryMarkdown,
+      'centaurai-account',
+      identity
+    ),
+  ]);
+}
+
+async function appendMemoryAudit(
+  dataDir: string | undefined,
+  actor: AuthGateIdentity,
+  targetUserId: string,
+  action: string
+): Promise<void> {
+  if (!dataDir) return;
+  const record = {
+    ts: new Date().toISOString(),
+    actor_user_id: actor.userId,
+    actor_username: actor.username,
+    target_user_id: targetUserId,
+    action,
+  };
+  try {
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.appendFile(path.join(dataDir, 'memory-audit.ndjson'), `${JSON.stringify(record)}\n`, 'utf-8');
+  } catch {
+    // Audit failure must not expose data or break an admin recovery path.
+  }
+}
+
+async function fetchBackendUsers(backendPort: number): Promise<LanUserRecord[]> {
+  const upstream = await fetch(`http://127.0.0.1:${backendPort}/api/auth/internal/users`, {
+    headers: { accept: 'application/json' },
+  });
+  if (!upstream.ok) throw new Error(`users returned HTTP ${upstream.status}`);
+  const payload = (await upstream.json()) as { data?: unknown };
+  const data = Array.isArray(payload.data) ? payload.data : [];
+  const users: LanUserRecord[] = [];
+  for (const item of data) {
+    const raw = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
+    const id = typeof raw.id === 'string' ? raw.id : typeof raw.user_id === 'string' ? raw.user_id : '';
+    if (!id) continue;
+    users.push({
+      id,
+      username: typeof raw.username === 'string' && raw.username ? raw.username : id,
+      created_at: raw.created_at,
+      last_login: raw.last_login,
+    });
+  }
+  return users;
+}
+
+function latestMemoryUpdate(files: MemoryFileRecord[]): string {
+  return files
+    .map((file) => file.updated_at || '')
+    .filter(Boolean)
+    .sort()
+    .pop() ?? '';
+}
+
+function summarizeMemoryUser(user: LanUserRecord, files: MemoryFileRecord[], source: 'webui' | 'memory'): Record<string, unknown> {
+  const owner = safeUserPathSegment(user.id);
+  const root = `users/${owner}/`;
+  const userFiles = files.filter((file) => typeof file.path === 'string' && file.path.startsWith(root));
+  return {
+    scope: 'personal',
+    id: user.id,
+    username: user.username,
+    owner_user_id: owner,
+    source,
+    created_at: user.created_at,
+    last_login: user.last_login,
+    file_count: userFiles.length,
+    has_user_md: userFiles.some((file) => file.path === `${root}USER.md`),
+    has_memory_md: userFiles.some((file) => file.path === `${root}MEMORY.md`),
+    import_count: userFiles.filter((file) => file.path?.startsWith(`${root}imports/`) && file.path.endsWith('.md')).length,
+    journal_count: userFiles.filter((file) => file.path?.startsWith(`${root}journal/`) && file.path.endsWith('.md')).length,
+    updated_at: latestMemoryUpdate(userFiles),
+  };
+}
+
+function summarizeSharedMemory(files: MemoryFileRecord[]): Record<string, unknown> {
+  const sharedFiles = files.filter((file) => typeof file.path === 'string' && isSharedMemoryPath(file.path));
+  return {
+    scope: 'shared',
+    id: 'shared',
+    username: '团队共享记忆',
+    owner_user_id: '',
+    source: 'memory',
+    file_count: sharedFiles.length,
+    has_user_md: sharedFiles.some((file) => file.path === 'USER.md'),
+    has_memory_md: sharedFiles.some((file) => file.path === 'MEMORY.md'),
+    import_count: sharedFiles.filter((file) => file.path?.startsWith('imports/') && file.path.endsWith('.md')).length,
+    journal_count: sharedFiles.filter((file) => file.path?.startsWith('journal/') && file.path.endsWith('.md')).length,
+    updated_at: latestMemoryUpdate(sharedFiles),
+  };
+}
+
+async function handleAdminMemoryUsers(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  backendPort: number
+): Promise<void> {
+  if (req.method !== 'GET') {
+    sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
+  if (identity.userId !== ADMIN_USER_ID) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
+  const endpoint = endpointFromRequest(req);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+
+  let webuiConnected = false;
+  let webuiError = '';
+  let lanUsers: LanUserRecord[] = [];
+  try {
+    lanUsers = await fetchBackendUsers(backendPort);
+    webuiConnected = true;
+  } catch (error) {
+    webuiError = error instanceof Error ? error.message : 'load users failed';
+  }
+
+  let memoryFiles: MemoryFileRecord[] = [];
+  const result = await vectorJson(endpoint, '/api/memory/files?scope=all', { identity });
+  if (result.status >= 200 && result.status < 300) {
+    const payload = result.body as { files?: MemoryFileRecord[] };
+    memoryFiles = Array.isArray(payload.files) ? payload.files : [];
+  }
+
+  const byOwner = new Map<string, Record<string, unknown>>();
+  for (const user of lanUsers) {
+    const summary = summarizeMemoryUser(user, memoryFiles, 'webui');
+    byOwner.set(String(summary.owner_user_id), summary);
+  }
+  for (const file of memoryFiles) {
+    const relPath = file.path || '';
+    if (!relPath.startsWith('users/')) continue;
+    const owner = relPath.split('/')[1] || '';
+    if (!owner || byOwner.has(owner)) continue;
+    const summary = summarizeMemoryUser({ id: owner, username: owner }, memoryFiles, 'memory');
+    byOwner.set(owner, summary);
+  }
+
+  const users = [...byOwner.values()].sort((a, b) => {
+    if (a.id === ADMIN_USER_ID) return -1;
+    if (b.id === ADMIN_USER_ID) return 1;
+    return String(a.username || a.id).localeCompare(String(b.username || b.id), 'zh');
+  });
+  sendJsonResponse(res, 200, {
+    users,
+    shared: summarizeSharedMemory(memoryFiles),
+    webui_connected: webuiConnected,
+    webui_endpoint: `http://127.0.0.1:${backendPort}`,
+    error: webuiError,
+  });
+}
+
+async function handleScopedMemoryFile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity
+): Promise<void> {
+  let body: Record<string, unknown> | undefined;
+  if (req.method === 'PUT') {
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
+      return;
+    }
+  }
+  const endpoint = endpointFromRequest(req, body);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+  const scope = memoryScopeFromRequest(req);
+
+  const rawPath = (req.url || '').split('?')[0]?.replace(/^\/api\/memory\/files\/?/, '') ?? '';
+  if (!rawPath) {
+    if (req.method !== 'GET') {
+      sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+      return;
+    }
+    const result = await vectorJson(endpoint, memoryApiPath('/api/memory/files', scope === 'auto' ? 'visible' : scope), {
+      identity,
+    });
+    if (result.status < 200 || result.status >= 300) {
+      res.writeHead(result.status, { 'content-type': result.contentType });
+      res.end(result.text);
+      return;
+    }
+    const body = result.body as { files?: Array<{ path?: string }> };
+    const files = (body.files ?? []).filter((file) => {
+      const item = { rel_path: file.path };
+      return isVisibleMemoryItem(item, identity.userId);
+    });
+    sendJsonResponse(res, 200, { files });
+    return;
+  }
+
+  const relPath = scopedMemoryPath(identity.userId, rawPath, scope);
+  if (!relPath) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
+
+  const apiPath = memoryApiPath(`/api/memory/files/${encodeMemoryPath(relPath)}`, scope);
+  if (req.method === 'GET') {
+    const result = await vectorJson(endpoint, apiPath, { identity });
+    if (result.status === 404) {
+      sendJsonResponse(res, 404, { error: 'NOT_FOUND' });
+      return;
+    }
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+
+  if (req.method === 'PUT') {
+    const content = typeof body?.content === 'string' ? body.content : '';
+    const sourceAgent = typeof body?.source_agent === 'string' ? body.source_agent : 'centaurai-account';
+    const result = await vectorJson(endpoint, apiPath, {
+      method: 'PUT',
+      requestedBy: true,
+      identity,
+      body: { content, source_agent: sourceAgent },
+    });
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    const result = await vectorJson(endpoint, apiPath, {
+      method: 'DELETE',
+      requestedBy: true,
+      identity,
+    });
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+
+  sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+}
+
+async function handleScopedJournal(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity
+): Promise<void> {
+  let body: Record<string, unknown> | undefined;
+  if (req.method === 'PUT') {
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
+      return;
+    }
+  }
+  const endpoint = endpointFromRequest(req, body);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+  const scope = memoryScopeFromRequest(req);
+
+  const pathOnly = (req.url || '').split('?')[0] ?? '';
+  const date = pathOnly.replace(/^\/api\/memory\/journal\/?/, '');
+  if (!date) {
+    if (req.method !== 'GET') {
+      sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+      return;
+    }
+    const result = await vectorJson(endpoint, memoryApiPath('/api/memory/files', scope === 'auto' ? 'visible' : scope), {
+      identity,
+    });
+    if (result.status < 200 || result.status >= 300) {
+      res.writeHead(result.status, { 'content-type': result.contentType });
+      res.end(result.text);
+      return;
+    }
+    const prefix = scope === 'shared' ? 'journal/' : `users/${safeUserPathSegment(identity.userId)}/journal/`;
+    const body = result.body as { files?: Array<{ path?: string; size?: number; updated_at?: string }> };
+    const journals = (body.files ?? [])
+      .filter((file) => typeof file.path === 'string' && file.path.startsWith(prefix) && file.path.endsWith('.md'))
+      .map((file) => ({
+        date: path.basename(file.path ?? '', '.md'),
+        size: file.size,
+        updated_at: file.updated_at,
+      }))
+      .toSorted((a, b) => b.date.localeCompare(a.date));
+    sendJsonResponse(res, 200, { journals });
+    return;
+  }
+
+  const normalizedDate = normalizeRequestedMemoryPath(date).replace(/\.md$/, '');
+  const relPath = scopedMemoryPath(identity.userId, `journal/${normalizedDate}.md`, scope);
+  if (!relPath) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
+  const apiPath = memoryApiPath(`/api/memory/files/${encodeMemoryPath(relPath)}`, scope);
+  if (req.method === 'GET') {
+    const result = await vectorJson(endpoint, apiPath, { identity });
+    if (result.status === 404) {
+      sendJsonResponse(res, 200, { date: normalizedDate, content: '', exists: false });
+      return;
+    }
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+
+  if (req.method === 'PUT') {
+    const content = typeof body?.content === 'string' ? body.content : '';
+    const sourceAgent = typeof body?.source_agent === 'string' ? body.source_agent : 'centaurai-account';
+    const result = await vectorJson(endpoint, apiPath, {
+      method: 'PUT',
+      requestedBy: true,
+      identity,
+      body: { content, source_agent: sourceAgent },
+    });
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+
+  if (req.method === 'DELETE') {
+    const result = await vectorJson(endpoint, apiPath, {
+      method: 'DELETE',
+      requestedBy: true,
+      identity,
+    });
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+
+  sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+}
+
+async function handleScopedMemorySearch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
+    return;
+  }
+  const endpoint = endpointFromRequest(req, body);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+  const query = typeof body.query === 'string' ? body.query : '';
+  if (!query.trim()) {
+    sendJsonResponse(res, 400, { error: 'EMPTY_QUERY' });
+    return;
+  }
+  const requested = typeof body.n_results === 'number' && body.n_results > 0 ? Math.min(body.n_results, 20) : 10;
+  const upstreamBody: Record<string, unknown> = { ...body, n_results: Math.min(requested * 5, 60) };
+  delete upstreamBody.endpoint;
+  const result = await vectorJson(endpoint, '/api/memory/search', {
+    method: 'POST',
+    identity,
+    body: upstreamBody,
+  });
+  if (result.status < 200 || result.status >= 300) {
+    res.writeHead(result.status, { 'content-type': result.contentType });
+    res.end(result.text);
+    return;
+  }
+  const parsed = result.body as { results?: MemorySearchItem[] };
+  const results = (parsed.results ?? [])
+    .filter((item) => isVisibleMemoryItem(item, identity.userId))
+    .slice(0, requested);
+  sendJsonResponse(res, 200, { ...parsed, results, total: results.length });
+}
+
+async function handleAccountProfile(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity
+): Promise<void> {
+  if (req.method === 'GET') {
+    const endpoint = endpointFromRequest(req);
+    if (!endpoint) {
+      sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+      return;
+    }
+    const data = await readAccountProfile(endpoint, identity.userId, identity);
+    sendJsonResponse(res, 200, {
+      user: { id: identity.userId, username: identity.username },
+      paths: {
+        user: userMemoryPath(identity.userId, 'USER.md'),
+        memory: userMemoryPath(identity.userId, 'MEMORY.md'),
+      },
+      ...data,
+    });
+    return;
+  }
+
+  if (req.method === 'PUT') {
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
+      return;
+    }
+    const endpoint = endpointFromRequest(req, body);
+    if (!endpoint) {
+      sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+      return;
+    }
+    await writeAccountProfile(endpoint, identity, body);
+    sendJsonResponse(res, 200, { success: true });
+    return;
+  }
+
+  sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+}
+
+async function handleAccountMemoryClear(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity
+): Promise<void> {
+  if (req.method !== 'DELETE') {
+    sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
+  const endpoint = endpointFromRequest(req);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+  await Promise.all([
+    deleteMemoryDocument(endpoint, userMemoryPath(identity.userId, 'USER.md'), identity),
+    deleteMemoryDocument(endpoint, userMemoryPath(identity.userId, 'MEMORY.md'), identity),
+  ]);
+  sendJsonResponse(res, 200, { success: true });
+}
+
+async function handleAccountPassword(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  backendPort: number
+): Promise<void> {
+  if (req.method !== 'POST') {
+    sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
+    return;
+  }
+  const newPassword = typeof body.new_password === 'string' ? body.new_password : '';
+  if (newPassword.length < 6) {
+    sendJsonResponse(res, 400, { error: 'PASSWORD_TOO_SHORT' });
+    return;
+  }
+  const passwordHash = bcrypt.hashSync(newPassword, 12);
+  const upstream = await fetch(
+    `http://127.0.0.1:${backendPort}/api/auth/internal/users/${encodeURIComponent(identity.userId)}/password`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password_hash: passwordHash }),
+    }
+  );
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
+    res.end(text);
+    return;
+  }
+  sendJsonResponse(res, 200, { success: true });
+}
+
+function parseAdminMemoryRoute(req: IncomingMessage): { targetUserId: string; action: 'profile' } | null {
+  const pathOnly = (req.url || '').split('?')[0] ?? '';
+  const match = /^\/api\/memory\/users\/([^/]+)\/profile$/.exec(pathOnly);
+  if (!match?.[1]) return null;
+  return { targetUserId: decodeURIComponent(match[1]), action: 'profile' };
+}
+
+async function handleAdminMemoryUserRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  opts: Pick<StaticServerOptions, 'dataDir'>
+): Promise<void> {
+  const route = parseAdminMemoryRoute(req);
+  if (!route) {
+    sendJsonResponse(res, 404, { error: 'NOT_FOUND' });
+    return;
+  }
+  if (identity.userId !== ADMIN_USER_ID) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
+  if (req.method === 'GET') {
+    const endpoint = endpointFromRequest(req);
+    if (!endpoint) {
+      sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+      return;
+    }
+    await appendMemoryAudit(opts.dataDir, identity, route.targetUserId, 'read-profile');
+    sendJsonResponse(res, 200, {
+      user: { id: route.targetUserId },
+      ...(await readAccountProfile(endpoint, route.targetUserId, identity)),
+    });
+    return;
+  }
+  if (req.method === 'PUT') {
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonBody(req);
+    } catch {
+      sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
+      return;
+    }
+    const endpoint = endpointFromRequest(req, body);
+    if (!endpoint) {
+      sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+      return;
+    }
+    await writeAccountProfile(endpoint, identity, body, route.targetUserId);
+    await appendMemoryAudit(opts.dataDir, identity, route.targetUserId, 'write-profile');
+    sendJsonResponse(res, 200, { success: true });
+    return;
+  }
+  sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
+}
+
+const VECTOR_UPLOAD_MAX_BYTES = 500 * 1024 * 1024; // mirrors NAS indexing cap
+
+function incomingHeaders(req: IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) headers.append(key, item);
+    } else if (value != null) {
+      headers.set(key, String(value));
+    }
+  }
+  return headers;
+}
+
+async function readMultipartForm(req: IncomingMessage): Promise<FormData> {
+  const body = Readable.toWeb(req) as ReadableStream<Uint8Array>;
+  return new Request('http://localhost/api/vector-upload', {
+    method: req.method || 'POST',
+    headers: incomingHeaders(req),
+    body,
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' }).formData();
+}
+
+function isUploadedFile(value: FormDataEntryValue | null): value is File {
+  return value != null && typeof value !== 'string' && typeof value.arrayBuffer === 'function';
+}
+
 /**
  * Proxy a knowledge-base search to the local vector DB on behalf of a WebUI
  * browser client. The renderer cannot reach the vector DB itself: it binds
- * loopback on the *server* host, so a LAN client's `127.0.0.1:8618` points at
+ * loopback on the *server* host, so a LAN client's `127.0.0.1:8619` points at
  * the wrong machine. The server runs co-located with the vector DB and can
  * reach it, so the browser POSTs here and we forward the search. The client
- * supplies the endpoint it has configured (default http://127.0.0.1:8618);
+ * supplies the endpoint it has configured (default http://127.0.0.1:8619);
  * only http/https URLs are honored.
  */
-async function handleVectorSearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleVectorSearch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity?: AuthGateIdentity
+): Promise<void> {
   const sendJson = (status: number, body: unknown): void => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
@@ -508,9 +1548,11 @@ async function handleVectorSearch(req: IncomingMessage, res: ServerResponse): Pr
     const nResults = typeof body.n_results === 'number' && body.n_results > 0 ? body.n_results : 5;
     const mode = body.mode === 'visual' || body.mode === 'hybrid' ? body.mode : 'text';
 
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    applyVectorIdentityHeaders(headers, identity);
     const upstream = await fetch(`${endpoint}/api/search`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({ query, n_results: nResults, mode }),
     });
     const text = await upstream.text();
@@ -521,7 +1563,62 @@ async function handleVectorSearch(req: IncomingMessage, res: ServerResponse): Pr
   }
 }
 
-/** Proxy a read-only knowledge-base document list to the local vector DB. */
+/** Proxy a knowledge-base file upload to the local vector DB for LAN/WebUI clients. */
+async function handleVectorUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const sendJson = (status: number, body: unknown): void => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+  const endpoint = new URL(req.url || '', 'http://localhost').searchParams.get('endpoint')?.trim().replace(/\/+$/, '');
+  if (!endpoint || !/^https?:\/\//i.test(endpoint)) {
+    sendJson(400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+
+  let file: File;
+  try {
+    const form = await readMultipartForm(req);
+    const value = form.get('file');
+    if (!isUploadedFile(value)) {
+      sendJson(400, { error: 'MISSING_FILE' });
+      return;
+    }
+    file = value;
+  } catch {
+    sendJson(400, { error: 'INVALID_MULTIPART' });
+    return;
+  }
+
+  if (file.size > VECTOR_UPLOAD_MAX_BYTES) {
+    sendJson(413, { error: 'FILE_TOO_LARGE' });
+    return;
+  }
+
+  let upload;
+  try {
+    upload = await createVectorUploadPayloadFromFile(file);
+  } catch {
+    sendJson(422, { error: 'PPTX_PARSE_FAILED' });
+    return;
+  }
+
+  try {
+    const form = new FormData();
+    form.append('file', upload.blob, upload.filename);
+    const upstream = await fetch(`${endpoint}/api/upload`, {
+      method: 'POST',
+      headers: { 'X-Requested-By': 'centaur-vdb' },
+      body: form,
+    });
+    const text = await upstream.text();
+    res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
+    res.end(text);
+  } catch {
+    sendJson(502, { error: 'VECTOR_DB_UNREACHABLE' });
+  }
+}
+
+/** Proxy knowledge-base document list/delete requests to the local vector DB. */
 async function handleVectorDocuments(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const sendJson = (status: number, body: unknown): void => {
     res.writeHead(status, { 'content-type': 'application/json' });
@@ -532,6 +1629,28 @@ async function handleVectorDocuments(req: IncomingMessage, res: ServerResponse):
     const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim().replace(/\/+$/, '') : '';
     if (!/^https?:\/\//i.test(endpoint)) {
       sendJson(400, { error: 'INVALID_ENDPOINT' });
+      return;
+    }
+    const action = typeof body.action === 'string' ? body.action : 'list';
+    if (action === 'delete') {
+      const docId = typeof body.docId === 'string' ? body.docId.trim() : '';
+      if (!docId) {
+        sendJson(400, { error: 'INVALID_DOCUMENT_ID' });
+        return;
+      }
+      const upstream = await fetch(`${endpoint}/api/documents/${encodeURIComponent(docId)}`, {
+        method: 'DELETE',
+        headers: { 'X-Requested-By': 'centaur-vdb' },
+      });
+      const text = await upstream.text();
+      res.writeHead(upstream.status, {
+        'content-type': upstream.headers.get('content-type') || 'application/json',
+      });
+      res.end(text);
+      return;
+    }
+    if (action !== 'list') {
+      sendJson(400, { error: 'INVALID_ACTION' });
       return;
     }
     const limit = typeof body.limit === 'number' && body.limit > 0 ? Math.min(body.limit, 500) : 300;
@@ -550,13 +1669,13 @@ async function handleVectorImage(req: IncomingMessage, res: ServerResponse): Pro
   try {
     const url = new URL(req.url || '', 'http://localhost');
     const endpoint = (url.searchParams.get('endpoint') || '').trim().replace(/\/+$/, '');
-    const path = url.searchParams.get('path') || '';
-    if (!/^https?:\/\//i.test(endpoint) || !path) {
+    const imagePath = url.searchParams.get('path') || '';
+    if (!/^https?:\/\//i.test(endpoint) || !imagePath) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'INVALID_REQUEST' }));
       return;
     }
-    const upstream = await fetch(`${endpoint}/api/image?path=${encodeURIComponent(path)}`);
+    const upstream = await fetch(`${endpoint}/api/image?path=${encodeURIComponent(imagePath)}`);
     if (!upstream.ok || !upstream.body) {
       res.writeHead(upstream.status || 502).end();
       return;
@@ -676,6 +1795,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         res.writeHead(400).end();
         return;
       }
+      const requestPath = requestPathFromUrl(req.url);
 
       // Auth gate (LAN-exposed only). Handles /login + /logout and rejects
       // unauthenticated /api/* before any backend-bound or local API handler.
@@ -715,6 +1835,26 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         return;
       }
 
+      // In LAN/Team mode the WebHost gate is the trusted login boundary. Return
+      // that seat identity here so the SPA can render the current username even
+      // when the backend is running in local/admin mode.
+      if (requireAuth && req.method === 'GET' && requestPath === '/api/auth/user') {
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'UNAUTHENTICATED' }));
+          return;
+        }
+        sendJsonResponse(res, 200, {
+          success: true,
+          user: {
+            id: identity.userId,
+            username: identity.username ?? identity.userId,
+          },
+        });
+        return;
+      }
+
       // Provider config is admin/desktop-owned. WebUI browser clients may read
       // provider metadata, but stored API keys must not leave the server. Desktop
       // bypasses this server and still receives full provider rows from backend.
@@ -731,6 +1871,56 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       ) {
         res.writeHead(403, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: 'READ_ONLY' }));
+        return;
+      }
+
+      // /api/account/* and /api/memory/* — current-seat identity memory.
+      // These are served LOCALLY so WebUI browsers cannot forge user_id or read
+      // another LAN seat's personal USER.md / MEMORY.md. The server resolves the
+      // authenticated user from the gate/backend session and rewrites local-vector
+      // DB paths to memory/users/{user_id}/...
+      if (req.url.startsWith('/api/account/') || req.url.startsWith('/api/memory/')) {
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'UNAUTHENTICATED' }));
+          return;
+        }
+
+        if (req.url.startsWith('/api/account/profile')) {
+          await handleAccountProfile(req, res, identity);
+          return;
+        }
+        if (req.url.startsWith('/api/account/memory')) {
+          await handleAccountMemoryClear(req, res, identity);
+          return;
+        }
+        if (req.url.startsWith('/api/account/change-password')) {
+          await handleAccountPassword(req, res, identity, opts.backendPort);
+          return;
+        }
+        if (req.url.startsWith('/api/memory/admin/users')) {
+          await handleAdminMemoryUsers(req, res, identity, opts.backendPort);
+          return;
+        }
+        if (req.url.startsWith('/api/memory/users/')) {
+          await handleAdminMemoryUserRoute(req, res, identity, { dataDir: opts.dataDir });
+          return;
+        }
+        if (req.url.startsWith('/api/memory/files')) {
+          await handleScopedMemoryFile(req, res, identity);
+          return;
+        }
+        if (req.url.startsWith('/api/memory/journal')) {
+          await handleScopedJournal(req, res, identity);
+          return;
+        }
+        if (req.url.startsWith('/api/memory/search') && req.method === 'POST') {
+          await handleScopedMemorySearch(req, res, identity);
+          return;
+        }
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: 'NOT_FOUND' }));
         return;
       }
 
@@ -785,6 +1975,28 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         return;
       }
 
+      // /api/content-assets/* — generated artifact registry, served LOCALLY
+      // (NOT proxied to aioncore). This backs the AI生成 view and personal
+      // generated-asset lifecycle.
+      if (req.url.startsWith('/api/content-assets/')) {
+        if (req.url.startsWith('/api/content-assets/list')) await handleContentAssetsList(req, res, opts.contentAssetsDir);
+        else if (req.url.startsWith('/api/content-assets/upload') && req.method === 'POST')
+          await handleContentAssetUpload(req, res, opts.contentAssetsDir);
+        else if (req.url.startsWith('/api/content-assets/archive') && req.method === 'POST')
+          await handleContentAssetArchive(req, res, opts.contentAssetsDir);
+        else if (req.url.startsWith('/api/content-assets/publish-to-nas') && req.method === 'POST')
+          await handleContentAssetPublishToNas(req, res, opts.contentAssetsDir, opts.nasRootDir);
+        else if (req.url.startsWith('/api/content-assets/download'))
+          await handleContentAssetDownload(req, res, opts.contentAssetsDir);
+        else if (req.url.startsWith('/api/content-assets/preview'))
+          await handleContentAssetPreview(req, res, opts.contentAssetsDir);
+        else {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'NOT_FOUND' }));
+        }
+        return;
+      }
+
       // /api/nas/* — enterprise LAN network drive (read-only), served LOCALLY
       // (NOT proxied to aioncore). Must come before the generic /api/* proxy.
       if (req.url.startsWith('/api/nas/')) {
@@ -811,7 +2023,21 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // on the server host, so we forward on its behalf. Must come before the
       // generic /api/* proxy below.
       if (req.url.startsWith('/api/vector-search') && req.method === 'POST') {
-        await handleVectorSearch(req, res);
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity && requireAuth) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: 'UNAUTHENTICATED' }));
+          return;
+        }
+        await handleVectorSearch(req, res, identity || undefined);
+        return;
+      }
+
+      // /api/vector-upload — knowledge-base upload proxied LOCALLY to the
+      // vector DB. PPTX is extracted server-side before upload so LAN browsers
+      // can add PowerPoint decks without needing direct loopback access.
+      if (req.url.startsWith('/api/vector-upload') && req.method === 'POST') {
+        await handleVectorUpload(req, res);
         return;
       }
 
@@ -859,7 +2085,6 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // POST /login and POST /logout are aionui-auth's top-level auth endpoints.
       // Browser GETs for /login and /logout are SPA routes and must fall through
       // to index.html; otherwise LAN users can land on a backend 405 page.
-      const requestPath = (req.url.split('?')[0] || '/').split('#')[0];
       if (
         req.url.startsWith('/api/') ||
         req.url.startsWith('/api?') ||
@@ -903,7 +2128,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         public: opts.staticDir,
         rewrites: [{ source: '**', destination: '/index.html' }],
       });
-    } catch (err) {
+    } catch {
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'INTERNAL_ERROR' }));

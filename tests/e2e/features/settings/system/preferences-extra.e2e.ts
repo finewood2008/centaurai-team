@@ -99,27 +99,27 @@ test.describe('System Preferences — Extra', () => {
     expect(restored).toBe(wasChecked);
   });
 
-  // TC-PREF-08: Language round-trip — switch to Japanese then back to Chinese
-  test('TC-PREF-08: should switch language to Japanese and back to Chinese', async ({ page }) => {
+  // TC-PREF-08: Language round-trip — switch to Traditional Chinese then back to Simplified Chinese
+  test('TC-PREF-08: should switch language to Traditional Chinese and back to Simplified Chinese', async ({ page }) => {
     const selectTrigger = page.locator('.aion-select .arco-select-view').first();
     await expect(selectTrigger).toBeVisible();
 
     await selectTrigger.click();
-    const japaneseOption = page.locator('.arco-select-option:has-text("日本語")');
-    await expect(japaneseOption).toBeVisible();
-    await japaneseOption.click();
+    const traditionalChineseOption = page.locator('.arco-select-option:has-text("繁體中文")');
+    await expect(traditionalChineseOption).toBeVisible();
+    await traditionalChineseOption.click();
 
     await page.waitForFunction(
       () => {
         const t = document.body.textContent ?? '';
-        return t.includes('言語') || t.includes('システム');
+        return t.includes('語言') || t.includes('系統');
       },
       { timeout: 5_000 }
     );
-    await takeScreenshot(page, 'system-preferences/tc-pref-08/01-japanese.png');
+    await takeScreenshot(page, 'system-preferences/tc-pref-08/01-traditional-chinese.png');
 
-    const jpText = await selectTrigger.textContent();
-    expect(jpText).toContain('日本語');
+    const traditionalText = await selectTrigger.textContent();
+    expect(traditionalText).toContain('繁體中文');
 
     await selectTrigger.click();
     const chineseOption = page.locator('.arco-select-option:has-text("简体中文")');

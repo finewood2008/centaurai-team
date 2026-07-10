@@ -16,6 +16,7 @@ import { initImageGenBridge } from './imageGenBridge';
 import { initUserManagementBridge } from './userManagementBridge';
 import { initSharedDriveBridge } from './sharedDriveBridge';
 import { initNasDriveBridge } from './nasDriveBridge';
+import { initContentAssetsBridge } from './contentAssetsBridge';
 import { initAppstoreBridge } from './appstoreBridge';
 import { initLocalModelManagerBridge } from './localModelManagerBridge';
 import { initAgentDbBridge } from './agentDbBridge';
@@ -37,6 +38,7 @@ export function initAllBridges(_deps: BridgeDependencies = {}): void {
   // makes it structurally impossible to create a second account (single-user).
   if (MULTI_USER_ENABLED) initUserManagementBridge();
   initSharedDriveBridge();
+  initContentAssetsBridge();
   initNasDriveBridge();
   initAppstoreBridge();
   initLocalModelManagerBridge();
@@ -55,6 +57,7 @@ export {
   initImageGenBridge,
   initUserManagementBridge,
   initSharedDriveBridge,
+  initContentAssetsBridge,
   initNasDriveBridge,
   initAppstoreBridge,
   initLocalModelManagerBridge,

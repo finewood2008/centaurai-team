@@ -89,7 +89,7 @@
     }
   },
   "meeting": {
-    "attachShared": "Reference shared library",
+    "attachShared": "Reference Enterprise NAS",
     "boardTitle": "Think Tank",
     "cancel": "Cancel meeting",
     "continue": "Continue →",
@@ -116,7 +116,7 @@
       "copied": "Plan copied",
       "copy": "Copy",
       "copyFailed": "Copy failed",
-      "openHub": "View in Content Hub"
+      "openHub": "View in Workspace"
     },
     "extraExpert": {
       "title": "Add more experts (domestic models / OpenClaw / Hermes …)",

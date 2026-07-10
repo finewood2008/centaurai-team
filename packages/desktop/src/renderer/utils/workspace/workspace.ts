@@ -47,7 +47,7 @@ export const getWorkspaceDisplayName = (
   t?: (key: string) => string
 ): string => {
   if (isTemporaryWorkspace) {
-    return t ? t('conversation.workspace.temporarySpace') : 'Temporary Session';
+    return t ? t('conversation.workspace.temporarySpace') : 'Generated Drafts';
   }
   const parts = splitPathSegments(workspacePath);
   return parts[parts.length - 1] || workspacePath;

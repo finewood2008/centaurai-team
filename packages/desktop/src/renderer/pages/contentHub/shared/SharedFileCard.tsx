@@ -1,5 +1,5 @@
 /**
- * SharedFileCard — one item in the shared library, in either the uniform grid
+ * SharedFileCard — one legacy Enterprise NAS item, in either the uniform grid
  * or the masonry waterfall layout. Click opens it (preview URL); hover actions
  * download or remove; it's also a drag source (into chat / out to the OS).
  */
@@ -8,8 +8,9 @@ import { Message } from '@arco-design/web-react';
 import { Delete, Download } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
 import { formatSize, formatTime } from '@/renderer/pages/guid/components/RecentFiles';
-import { downloadShared, openShared, sharedDownloadUrl, SHARED_DND_MIME } from '@/renderer/services/SharedDriveService';
+import { downloadShared, sharedDownloadUrl, SHARED_DND_MIME } from '@/renderer/services/SharedDriveService';
 import FileThumb from '../components/view/FileThumb';
+import { useSingleDoubleClick } from '../components/view/clickIntent';
 import { loadSharedImage } from '../components/view/imageThumb';
 import { GRID_SIZE, WATERFALL_EMOJI } from '../components/view/viewConfig';
 import type { HubCardSize, HubViewMode } from '../types';
@@ -20,20 +21,15 @@ type SharedFileCardProps = {
   view: HubViewMode;
   size: HubCardSize;
   onRemove: (id: string) => void;
+  onPreview: (file: SharedFileEntry) => void;
+  onDirectOpen: (file: SharedFileEntry) => void;
 };
 
-const SharedFileCard: React.FC<SharedFileCardProps> = ({ file, view, size, onRemove }) => {
+const SharedFileCard: React.FC<SharedFileCardProps> = ({ file, view, size, onRemove, onPreview, onDirectOpen }) => {
   const { t } = useTranslation();
   const uploader = file.uploaderName || file.uploaderId || '';
   const mtime = Math.floor(file.createdAt / 1000);
-
-  const handleOpen = async () => {
-    try {
-      await openShared(file.id);
-    } catch {
-      Message.error(t('contentHub.toast.openFailed'));
-    }
-  };
+  const clickIntent = useSingleDoubleClick(onPreview, onDirectOpen);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -71,12 +67,14 @@ const SharedFileCard: React.FC<SharedFileCardProps> = ({ file, view, size, onRem
     <>
       <span
         onClick={handleDownload}
+        onDoubleClick={(event) => event.stopPropagation()}
         className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
       >
         <Download size='10' />
       </span>
       <span
         onClick={handleRemove}
+        onDoubleClick={(event) => event.stopPropagation()}
         className='w-18px h-18px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-[rgb(var(--danger-6))] cursor-pointer'
       >
         <Delete size='10' />
@@ -91,12 +89,17 @@ const SharedFileCard: React.FC<SharedFileCardProps> = ({ file, view, size, onRem
       <div
         className='break-inside-avoid mb-12px rd-10px overflow-hidden cursor-pointer
           bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative'
-        onClick={handleOpen}
+        onClick={() => clickIntent.handleClick(file)}
+        onDoubleClick={() => clickIntent.handleDoubleClick(file)}
         draggable
         onDragStart={handleDragStart}
         title={title}
       >
-        <div className='absolute top-6px right-6px z-1 flex gap-2px opacity-0 group-hover:opacity-100 transition-opacity'>
+        <div
+          className='absolute top-6px right-6px z-1 flex gap-2px opacity-0 group-hover:opacity-100 transition-opacity'
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
           {actions}
         </div>
         <FileThumb name={file.name} loadImage={loadImage} variant='natural' emojiClass={WATERFALL_EMOJI[size]} />
@@ -116,12 +119,17 @@ const SharedFileCard: React.FC<SharedFileCardProps> = ({ file, view, size, onRem
     <div
       className={`flex flex-col items-center gap-4px ${dim.card} rd-10px cursor-pointer
         bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative`}
-      onClick={handleOpen}
+      onClick={() => clickIntent.handleClick(file)}
+      onDoubleClick={() => clickIntent.handleDoubleClick(file)}
       draggable
       onDragStart={handleDragStart}
       title={title}
     >
-      <div className='absolute -top-4px right-0 flex gap-2px opacity-0 group-hover:opacity-100 transition-opacity'>
+      <div
+        className='absolute -top-4px right-0 flex gap-2px opacity-0 group-hover:opacity-100 transition-opacity'
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+      >
         {actions}
       </div>
       <FileThumb

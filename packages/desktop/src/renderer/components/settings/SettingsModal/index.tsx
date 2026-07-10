@@ -214,7 +214,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ visible, onCancel, defaul
       });
       builtinItems.push({
         key: 'users',
-        label: t('settings.users'),
+        label: t('settings.webui.lanUsersTitle'),
         icon: <User theme='outline' size='20' fill={iconColors.secondary} />,
       });
     }

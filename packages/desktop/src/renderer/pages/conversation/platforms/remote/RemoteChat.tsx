@@ -38,7 +38,7 @@ const RemoteChat: React.FC<{
         <FlexFullContainer>
           <MessageList className='flex-1' emptySlot={emptySlot}></MessageList>
         </FlexFullContainer>
-        {!hideSendBox && <RemoteSendBox conversation_id={conversation_id} />}
+        {!hideSendBox && <RemoteSendBox conversation_id={conversation_id} workspace={workspace} />}
       </div>
     </ConversationProvider>
   );

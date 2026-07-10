@@ -2,6 +2,7 @@ import FlexFullContainer from '@/renderer/components/layout/FlexFullContainer';
 import { isElectronDesktop, resolveExtensionAssetUrl } from '@/renderer/utils/platform';
 import { type IExtensionSettingsTab } from '@/common/adapter/ipcBridge';
 import { IS_DECISION } from '@/common/config/constants';
+import { isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
 import { useExtI18n } from '@/renderer/hooks/system/useExtI18n';
 import { useExtensionSettingsTabs } from '@/renderer/hooks/system/useExtensionSettingsTabs';
 import {
@@ -29,6 +30,7 @@ import { getSiderTooltipProps } from '@/renderer/utils/ui/siderTooltip';
 
 /** Builtin settings tab IDs in display order (must match router paths). */
 export const BUILTIN_TAB_IDS = [
+  'account',
   'agent',
   'model',
   'local-models',
@@ -83,6 +85,7 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
   const { t } = useTranslation();
   const { pathname } = useLocation();
   const isDesktop = isElectronDesktop();
+  const isDesktopAdmin = isDesktop && !isRemoteClientBridgeMode();
 
   const extensionTabs = useExtensionSettingsTabs();
   const { resolveExtTabName } = useExtI18n();
@@ -90,6 +93,7 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
   const { menus, groupHeaderAt } = useMemo(() => {
     // Build builtin items
     const builtinMap: Record<string, SiderItem> = {
+      account: { id: 'account', label: t('settings.account'), icon: <User />, path: 'account' },
       model: { id: 'model', label: t('settings.model'), icon: <LinkCloud />, path: 'model' },
       'local-models': {
         id: 'local-models',
@@ -157,10 +161,17 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
       // Decision edition: drop the multi-user / WebUI / client-download tabs
       // (single-user, loopback-only) and the 办公助理 (office assistants) tab.
       // The 专家 (experts) tab stays.
-      if (IS_DECISION && (id === 'users' || id === 'webui' || id === 'client' || id === 'assistants')) return false;
+      if (
+        IS_DECISION &&
+        (id === 'account' || id === 'users' || id === 'webui' || id === 'client' || id === 'assistants')
+      ) {
+        return false;
+      }
       // local-models needs the local ollama daemon + ability to launch the
       // manager app — desktop-only, like users.
-      return id === 'client' ? !isDesktop : isDesktop || (id !== 'users' && id !== 'local-models');
+      if (id === 'client') return !isDesktop;
+      if (id === 'users' || id === 'local-models') return isDesktopAdmin;
+      return true;
     })
       .map((id) => builtinMap[id])
       .filter((item): item is SiderItem => Boolean(item));
@@ -237,7 +248,7 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
     }
 
     return { menus: result, groupHeaderAt: headerAt };
-  }, [t, isDesktop, extensionTabs, resolveExtTabName]);
+  }, [t, isDesktop, isDesktopAdmin, extensionTabs, resolveExtTabName]);
 
   const siderTooltipProps = getSiderTooltipProps(tooltipEnabled);
   return (

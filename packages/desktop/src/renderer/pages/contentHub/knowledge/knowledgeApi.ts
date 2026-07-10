@@ -1,5 +1,5 @@
 /**
- * knowledgeApi — read-only access to the local vector DB (knowledge base).
+ * knowledgeApi — access to the local vector DB behind the Super Knowledge Base.
  *
  * Desktop runs co-located with the vector DB and reaches it directly. A WebUI
  * browser client cannot (the DB binds loopback on the server host), so it goes
@@ -7,6 +7,7 @@
  * endpoint. Mirrors the search recipe in pages/guid/hooks/useGuidSend.ts.
  */
 import { ipcBridge } from '@/common';
+import { normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { configService } from '@/common/config/configService';
 import { getBaseUrl } from '@/common/adapter/httpBridge';
 import { isElectronDesktop } from '@/renderer/utils/platform';
@@ -32,7 +33,14 @@ export type KnowledgeSearchResult = {
 };
 
 export function vectorEndpoint(): string {
-  return (configService.get('vectorDB.endpoint') ?? 'http://127.0.0.1:8618').replace(/\/+$/, '');
+  return normalizeVectorDbEndpoint(configService.get('vectorDB.endpoint'));
+}
+
+async function vectorUploadBase(): Promise<string> {
+  if (!isElectronDesktop()) return getBaseUrl();
+  const status = await ipcBridge.webui.getStatus.invoke().catch((): null => null);
+  if (status?.running && status.localUrl) return status.localUrl.replace(/\/$/, '');
+  return getBaseUrl();
 }
 
 type RawDoc = { id: string; chunk_count?: number; metadata?: Record<string, unknown> };
@@ -68,6 +76,49 @@ export async function fetchKnowledgeDocs(limit = 300, offset = 0): Promise<{ tot
   const data = await resp.json();
   const items: RawDoc[] = Array.isArray(data.items) ? data.items : [];
   return { total: num(data.total) || items.length, docs: items.map(normalize) };
+}
+
+export async function uploadKnowledgeFile(file: File): Promise<void> {
+  const endpoint = vectorEndpoint();
+  const form = new FormData();
+  form.append('file', file, file.name);
+
+  const base = await vectorUploadBase();
+  const proxyResp = await fetch(`${base}/api/vector-upload?endpoint=${encodeURIComponent(endpoint)}`, {
+    method: 'POST',
+    body: form,
+  });
+
+  if (proxyResp.ok) return;
+
+  if (isElectronDesktop() && proxyResp.status === 404) {
+    const direct = new FormData();
+    direct.append('file', file, file.name);
+    const directResp = await fetch(`${endpoint}/api/upload`, {
+      method: 'POST',
+      headers: { 'X-Requested-By': 'centaur-vdb' },
+      body: direct,
+    });
+    if (directResp.ok) return;
+    throw new Error(`HTTP ${directResp.status}`);
+  }
+
+  throw new Error(`HTTP ${proxyResp.status}`);
+}
+
+export async function deleteKnowledgeDoc(docId: string): Promise<void> {
+  const endpoint = vectorEndpoint();
+  const resp = isElectronDesktop()
+    ? await fetch(`${endpoint}/api/documents/${encodeURIComponent(docId)}`, {
+        method: 'DELETE',
+        headers: { 'X-Requested-By': 'centaur-vdb' },
+      })
+    : await fetch(`${getBaseUrl()}/api/vector-documents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint, docId, action: 'delete' }),
+      });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
 type RawSearchHit = {
@@ -117,7 +168,7 @@ export async function searchKnowledge(
   return results.map(normalizeSearchHit);
 }
 
-function imageUrl(path: string): string {
+export function knowledgeImageUrl(path: string): string {
   const endpoint = vectorEndpoint();
   return isElectronDesktop()
     ? `${endpoint}/api/image?path=${encodeURIComponent(path)}`
@@ -135,7 +186,7 @@ export async function loadKnowledgeImage(path: string): Promise<string | null> {
     if (isElectronDesktop()) {
       return await ipcBridge.fs.getImageBase64.invoke({ path });
     }
-    const resp = await fetch(imageUrl(path));
+    const resp = await fetch(knowledgeImageUrl(path));
     if (!resp.ok) return null;
     return await blobToDataUrl(await resp.blob());
   } catch {
