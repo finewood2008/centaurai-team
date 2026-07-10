@@ -6,6 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import { downloadFileFromPath } from '@/renderer/utils/file/download';
+import { openOfficePreviewForFile } from '@/renderer/utils/file/officePreview';
 import type { IDirOrFile } from '@/common/adapter/ipcBridge';
 import type { PreviewContentType } from '@/common/types/office/preview';
 import { getContentTypeByExtension } from '@/renderer/pages/conversation/Preview/fileUtils';
@@ -16,6 +17,7 @@ import {
 } from '@/renderer/pages/conversation/Preview/constants';
 import { classifyPreviewError, previewErrorToI18nKey } from '@/renderer/utils/previewError';
 import { removeWorkspaceEntry, renameWorkspaceEntry } from '@/renderer/utils/file/workspaceFs';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import { useCallback } from 'react';
 import type { MessageApi, RenameModalState, DeleteModalState } from '../types';
 import type { FileOrFolderItem } from '@/renderer/utils/file/fileTypes';
@@ -88,12 +90,24 @@ export function useWorkspaceFileOps(options: UseWorkspaceFileOpsOptions) {
     async (nodeData: IDirOrFile | null) => {
       if (!nodeData) return;
       try {
+        if (!isElectronDesktop() && nodeData.isFile) {
+          const opened = openOfficePreviewForFile(openPreview, {
+            path: nodeData.fullPath,
+            name: nodeData.name,
+            workspace,
+          });
+          if (opened) {
+            closeContextMenu();
+            return;
+          }
+        }
+
         await ipcBridge.shell.openFile.invoke(nodeData.fullPath);
       } catch (error) {
         messageApi.error(t('conversation.workspace.contextMenu.openFailed') || 'Failed to open');
       }
     },
-    [messageApi, t]
+    [closeContextMenu, messageApi, openPreview, t, workspace]
   );
 
   /**

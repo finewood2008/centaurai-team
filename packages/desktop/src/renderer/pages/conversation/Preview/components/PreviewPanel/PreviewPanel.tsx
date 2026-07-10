@@ -7,6 +7,7 @@
 import { ipcBridge } from '@/common';
 import { downloadFileFromPath, downloadTextContent } from '@/renderer/utils/file/download';
 import { useLayoutContext } from '@/renderer/hooks/context/LayoutContext';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import { PreviewToolbarExtrasProvider, type PreviewToolbarExtras } from '../../context/PreviewToolbarExtrasContext';
 import { usePreviewContext } from '../../context/PreviewContext';
 import { useResizableSplit } from '@/renderer/hooks/ui/useResizableSplit';
@@ -366,10 +367,20 @@ const PreviewPanel: React.FC = () => {
     }
 
     try {
-      // 使用系统默认应用打开文件 / Open file with system default application
-      await ipcBridge.shell.openFile.invoke(metadata.file_path);
+      const desktop = isElectronDesktop();
+      if (desktop) {
+        // 使用系统默认应用打开文件 / Open file with system default application
+        await ipcBridge.shell.openFile.invoke(metadata.file_path);
+      } else {
+        const rawFileName = metadata.file_name || `${content_type}-${Date.now()}`;
+        await downloadFileFromPath(metadata.file_path, rawFileName, metadata.workspace);
+      }
       try {
-        messageApi.success(t('preview.openInSystemSuccess'));
+        messageApi.success(
+          desktop
+            ? t('preview.openInSystemSuccess')
+            : t('messages.downloadSuccess', { defaultValue: 'Download successful' })
+        );
       } catch {
         // Context holder may be unmounted after async operation
       }
@@ -380,7 +391,7 @@ const PreviewPanel: React.FC = () => {
         // Context holder may be unmounted after async operation
       }
     }
-  }, [metadata?.file_path, messageApi, t]);
+  }, [content_type, metadata?.file_name, metadata?.file_path, metadata?.workspace, messageApi, t]);
 
   // 渲染历史下拉菜单 / Render history dropdown
   const renderHistoryDropdown = () => {

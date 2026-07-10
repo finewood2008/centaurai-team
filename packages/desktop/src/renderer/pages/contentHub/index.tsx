@@ -8,15 +8,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Message, Modal } from '@arco-design/web-react';
-import {
-  Copy,
-  Delete,
-  Download,
-  FolderOpen,
-  InboxOut,
-  Save,
-  Share,
-} from '@icon-park/react';
+import { Copy, Delete, Download, FolderOpen, InboxOut, Save, Share } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { ipcBridge } from '@/common';
@@ -46,11 +38,9 @@ import { useHubFileActions } from './useHubFileActions';
 import { useHubViewPrefs } from './useHubViewPrefs';
 import { isAdminFrontendUser } from '@/common/utils/frontendUserScope';
 import { PreviewPanel, usePreviewContext } from '@/renderer/pages/conversation/Preview';
-import {
-  markAssetArchived,
-  saveAssetToNas,
-  saveDraftToContent,
-} from './components/manage/contentAssets';
+import { isOfficePreviewFile } from '@/renderer/utils/file/officePreview';
+import { isElectronDesktop } from '@/renderer/utils/platform';
+import { markAssetArchived, saveAssetToNas, saveDraftToContent } from './components/manage/contentAssets';
 import type {
   ContentAsset,
   FileEntry,
@@ -100,7 +90,13 @@ const ContentHubPage: React.FC = () => {
   const preview = useHubPreview();
   const { isOpen: isPreviewOpen } = usePreviewContext();
   const actions = useHubFileActions();
-  const directOpen = (file: FileEntry): void => void actions.openFile(file);
+  const directOpen = (file: FileEntry): void => {
+    if (!isElectronDesktop() && isOfficePreviewFile(file.name || file.path)) {
+      void preview(file);
+      return;
+    }
+    void actions.openFile(file);
+  };
   const { size, setSize } = viewPrefs;
   const [menu, setMenu] = useState<HubMenuState>(null);
   const canManageKnowledge = isAdminFrontendUser();
@@ -348,41 +344,42 @@ const ContentHubPage: React.FC = () => {
             },
           ]
         : [
-          {
-            key: 'download',
-            label: t('contentHub.actions.download'),
-            icon: <Download theme='outline' size={14} />,
-            onClick: () => {
-              for (const file of selectedMineFiles) void actions.download(file);
-              Message.success(t('contentHub.batch.downloadDone', { count: selectedMineFiles.length }));
+            {
+              key: 'download',
+              label: t('contentHub.actions.download'),
+              icon: <Download theme='outline' size={14} />,
+              onClick: () => {
+                for (const file of selectedMineFiles) void actions.download(file);
+                Message.success(t('contentHub.batch.downloadDone', { count: selectedMineFiles.length }));
+              },
             },
-          },
-          {
-            key: 'share',
-            label: t('contentHub.actions.publishToNas'),
-            icon: <Share theme='outline' size={14} />,
-            onClick: () => void shareMineTargets(selectedMineTargets),
-          },
-          {
-            key: 'archive',
-            label: t('contentHub.actions.archive'),
-            icon: <InboxOut theme='outline' size={14} />,
-            onClick: () => void countFailures(selectedMineTargets, (target) => markAssetArchived(target.asset)).then(
-              async (failed) => {
-                if (failed > 0) Message.error(t('contentHub.asset.archiveFailed'));
-                else Message.success(t('contentHub.asset.archiveDone'));
-                await hub.reloadAssets();
-                setMineSelection(clearHubSelection());
-              }
-            ),
-          },
-          {
-            key: 'copy',
-            label: t('contentHub.actions.copyPath'),
-            icon: <Copy theme='outline' size={14} />,
-            onClick: () => void copyMinePaths(selectedMineFiles),
-          },
-        ];
+            {
+              key: 'share',
+              label: t('contentHub.actions.publishToNas'),
+              icon: <Share theme='outline' size={14} />,
+              onClick: () => void shareMineTargets(selectedMineTargets),
+            },
+            {
+              key: 'archive',
+              label: t('contentHub.actions.archive'),
+              icon: <InboxOut theme='outline' size={14} />,
+              onClick: () =>
+                void countFailures(selectedMineTargets, (target) => markAssetArchived(target.asset)).then(
+                  async (failed) => {
+                    if (failed > 0) Message.error(t('contentHub.asset.archiveFailed'));
+                    else Message.success(t('contentHub.asset.archiveDone'));
+                    await hub.reloadAssets();
+                    setMineSelection(clearHubSelection());
+                  }
+                ),
+            },
+            {
+              key: 'copy',
+              label: t('contentHub.actions.copyPath'),
+              icon: <Copy theme='outline' size={14} />,
+              onClick: () => void copyMinePaths(selectedMineFiles),
+            },
+          ];
 
   const mineBatchBar = (
     <BatchActionBar
@@ -635,11 +632,11 @@ const ContentHubPage: React.FC = () => {
                 view={view}
                 size={size}
                 onOpen={preview}
-                  onDirectOpen={directOpen}
-                  onShare={(file) => {
-                    const target = savedTargetByPath.get(file.path);
-                    if (target) void publishAsset(target.asset);
-                  }}
+                onDirectOpen={directOpen}
+                onShare={(file) => {
+                  const target = savedTargetByPath.get(file.path);
+                  if (target) void publishAsset(target.asset);
+                }}
                 onContextMenu={(file, event) => {
                   const target = savedTargetByPath.get(file.path);
                   if (target) openMenu(target, false, event);
@@ -654,7 +651,8 @@ const ContentHubPage: React.FC = () => {
 
   const renderBody = () => {
     if (section === 'nas') return <NasPanel controls={toolbarProps} />;
-    if (section === 'knowledge') return canManageKnowledge ? <KnowledgeBasePanel controls={toolbarProps} /> : renderMine();
+    if (section === 'knowledge')
+      return canManageKnowledge ? <KnowledgeBasePanel controls={toolbarProps} /> : renderMine();
     return renderMine();
   };
 

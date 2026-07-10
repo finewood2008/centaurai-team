@@ -18,7 +18,9 @@ import { getCurrentFrontendUserId } from '@/common/utils/frontendUserScope';
 import { filterConversationsWithChannelScope } from '@/renderer/utils/user/conversationVisibility';
 import { useGeneratedFilesAutoRefresh } from '@/renderer/hooks/workspace/useGeneratedFilesAutoRefresh';
 import { downloadFileFromPath } from '@/renderer/utils/file/download';
+import { openOfficePreviewForFile } from '@/renderer/utils/file/officePreview';
 import { isElectronDesktop } from '@/renderer/utils/platform';
+import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import styles from '../index.module.css';
 
 export interface FileEntry {
@@ -260,6 +262,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
   verticalLimit = 6,
 }) => {
   const { t } = useTranslation();
+  const { openPreview } = usePreviewContext();
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [visibleConversations, setVisibleConversations] = useState<TChatConversation[] | null>(null);
@@ -307,7 +310,7 @@ const RecentFiles: React.FC<RecentFilesProps> = ({
   const handleOpen = async (file: FileEntry) => {
     try {
       if (isElectronDesktop()) await ipcBridge.shell.openFile.invoke(file.path);
-      else await downloadFileFromPath(file.path, file.name);
+      else if (!openOfficePreviewForFile(openPreview, file)) await downloadFileFromPath(file.path, file.name);
     } catch {
       Message.error(t('contentHub.toast.openFailed', { defaultValue: '无法打开' }));
     }
