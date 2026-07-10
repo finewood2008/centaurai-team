@@ -16,7 +16,6 @@ import {
   LinkCloud,
   Puzzle,
   Robot,
-  Shop,
   Speed,
   System,
   User,
@@ -40,7 +39,6 @@ export const BUILTIN_TAB_IDS = [
   'appearance',
   'webui',
   'client',
-  'appstore',
   'users',
   'system',
   'about',
@@ -137,12 +135,6 @@ const SettingsSider: React.FC<{ collapsed?: boolean; tooltipEnabled?: boolean }>
         label: t('settings.client'),
         icon: <Download />,
         path: 'client',
-      },
-      appstore: {
-        id: 'appstore',
-        label: t('appstore.title'),
-        icon: <Shop />,
-        path: 'appstore',
       },
       users: {
         id: 'users',

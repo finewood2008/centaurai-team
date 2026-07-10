@@ -20,7 +20,6 @@ import {
   LinkCloud,
   Puzzle,
   Robot,
-  Shop,
   System,
   User,
 } from '@icon-park/react';
@@ -97,12 +96,6 @@ export function getBuiltinSettingsNavItems(isDesktop: boolean, t: TranslateFn): 
       label: t('settings.client'),
       icon: <Download theme='outline' size='16' />,
       path: 'client',
-    },
-    appstore: {
-      id: 'appstore',
-      label: t('appstore.title'),
-      icon: <Shop theme='outline' size='16' />,
-      path: 'appstore',
     },
     users: {
       id: 'users',
