@@ -16,13 +16,7 @@ import {
 // Static imports for all locales to ensure packaged app can always switch language.
 import enUS from './locales/en-US/index';
 import zhCN from './locales/zh-CN/index';
-import jaJP from './locales/ja-JP/index';
 import zhTW from './locales/zh-TW/index';
-import koKR from './locales/ko-KR/index';
-import trTR from './locales/tr-TR/index';
-import ruRU from './locales/ru-RU/index';
-import ukUA from './locales/uk-UA/index';
-import ptBR from './locales/pt-BR/index';
 export type { I18nKey, I18nModule } from './i18n-keys';
 
 // Re-exports
@@ -34,13 +28,7 @@ export const supportedLanguages = i18nConfig.supportedLanguages;
 const localeData: LocaleData = {
   'en-US': enUS,
   'zh-CN': zhCN,
-  'ja-JP': jaJP,
   'zh-TW': zhTW,
-  'ko-KR': koKR,
-  'tr-TR': trTR,
-  'ru-RU': ruRU,
-  'uk-UA': ukUA,
-  'pt-BR': ptBR,
 };
 
 const fallbackLocale = localeData[DEFAULT_LANGUAGE] ?? {};
@@ -80,9 +68,7 @@ function getInitialLanguage(): SupportedLanguage {
   const localStorageLanguage = getLocalStorageLanguageHint();
   const injectedLanguage = getInjectedLanguageHint();
   const systemLanguage = backendStartupFailed ? getElectronSystemLanguageHint() : null;
-  const hint = backendStartupFailed
-    ? injectedLanguage || localStorageLanguage || systemLanguage
-    : localStorageLanguage || injectedLanguage;
+  const hint = backendStartupFailed ? injectedLanguage || localStorageLanguage || systemLanguage : injectedLanguage;
   return normalizeLanguageCode(hint || DEFAULT_LANGUAGE);
 }
 
@@ -136,7 +122,7 @@ async function initLanguage(): Promise<void> {
   try {
     await configService.whenReady();
     const savedLanguage = configService.get('language');
-    const language = savedLanguage || normalizeLanguageCode(navigator.language || DEFAULT_LANGUAGE);
+    const language = savedLanguage || DEFAULT_LANGUAGE;
     await ensureAndSwitch(i18n, language, loadLocaleModules);
     // Sync to localStorage so next page load can use it as a fast hint
     if (typeof localStorage !== 'undefined') {
