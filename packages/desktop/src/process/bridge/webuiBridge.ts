@@ -199,7 +199,7 @@ function normalizeMemoryFile(raw: RawMemoryFile): IWebUIMemoryFile | null {
 async function maybeSeedInitialPassword(): Promise<void> {
   const port = getBackendPort();
   if (!port) {
-    throw new Error('[WebUI] Cannot start: aioncore is not running (globalThis.__backendPort unset)');
+    throw new Error('[WebUI] Cannot start: CentaurAI Core is not running (globalThis.__backendPort unset)');
   }
   const statusRes = await fetch(`http://127.0.0.1:${port}/api/auth/status`);
   if (!statusRes.ok) {
@@ -268,9 +268,13 @@ export function initWebuiBridge(): void {
   });
 
   ipcBridge.webui.memoryList.provider(async ({ endpoint, scope }) => {
-    const result = await fetchVectorJson<RawMemoryFilesResponse>(endpoint, `/api/memory/files${memoryScopeQuery(scope)}`, {
-      method: 'GET',
-    });
+    const result = await fetchVectorJson<RawMemoryFilesResponse>(
+      endpoint,
+      `/api/memory/files${memoryScopeQuery(scope)}`,
+      {
+        method: 'GET',
+      }
+    );
     assertVectorOk('list memory files', result);
     const files = Array.isArray(result.data?.files)
       ? result.data.files.map((file) => normalizeMemoryFile(file as RawMemoryFile)).filter((file) => !!file)
@@ -279,19 +283,27 @@ export function initWebuiBridge(): void {
   });
 
   ipcBridge.webui.memoryWrite.provider(async ({ endpoint, relPath, content, sourceAgent, scope }) => {
-    const result = await fetchVectorJson<unknown>(endpoint, `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'centaur-vdb' },
-      body: JSON.stringify({ content, source_agent: sourceAgent ?? 'centaurai-account' }),
-    });
+    const result = await fetchVectorJson<unknown>(
+      endpoint,
+      `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'centaur-vdb' },
+        body: JSON.stringify({ content, source_agent: sourceAgent ?? 'centaurai-account' }),
+      }
+    );
     assertVectorOk('write memory file', result);
   });
 
   ipcBridge.webui.memoryDelete.provider(async ({ endpoint, relPath, scope }) => {
-    const result = await fetchVectorJson<unknown>(endpoint, `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`, {
-      method: 'DELETE',
-      headers: { 'X-Requested-By': 'centaur-vdb' },
-    });
+    const result = await fetchVectorJson<unknown>(
+      endpoint,
+      `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`,
+      {
+        method: 'DELETE',
+        headers: { 'X-Requested-By': 'centaur-vdb' },
+      }
+    );
     if (result.status === 404) return;
     assertVectorOk('delete memory file', result);
   });

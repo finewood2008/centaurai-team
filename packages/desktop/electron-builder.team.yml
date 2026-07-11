@@ -3,7 +3,7 @@
 # executableName / linux launcher name). Same full payload as the base (keeps the
 # bundled aioncore backend — the team box is the multi-user LAN server).
 # Feature differences vs Decision (智囊团 REMOVED) are compiled in via
-# AIONUI_EDITION=team (Vite `define` → common/config/constants.ts), NOT here.
+# CENTAURAI_EDITION=team (Vite `define` → common/config/constants.ts), NOT here.
 # Keep in sync with electron-builder.yml for any shared files/target changes.
 appId: com.centaurai.team
 productName: CentaurAI Knowledge Base
@@ -13,6 +13,7 @@ copyright: Copyright © 2026 半人马人工智能（深圳）有限公司
 protocols:
   - name: CentaurAI Protocol
     schemes:
+      - centaurai
       - aionui
 
 asar:
@@ -204,7 +205,7 @@ linux:
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;
-      MimeType: x-scheme-handler/aionui;
+      MimeType: x-scheme-handler/centaurai;x-scheme-handler/aionui;
 
 npmRebuild: false
 buildDependenciesFromSource: false

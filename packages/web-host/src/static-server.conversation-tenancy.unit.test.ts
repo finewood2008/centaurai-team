@@ -72,6 +72,8 @@ describe('static server conversation tenancy', () => {
               agent_type: 'acp',
               enabled: true,
               available: true,
+              installed: true,
+              status: 'online',
               handshake: { available_models: { available_models: [] } },
             },
           ],
@@ -156,7 +158,7 @@ describe('static server conversation tenancy', () => {
         headers: { 'x-webui-gate-token': aliceToken, connection: 'close' },
       })
     ).json()) as { data: Array<{ id: string }> };
-    expect(lanAgents.data.map((agent) => agent.id)).toEqual(['safe-aionrs']);
+    expect(lanAgents.data.map((agent) => agent.id)).toEqual(['safe-aionrs', 'trusted-codex']);
 
     const created = await fetch(`${handle.localUrl}/api/conversations`, {
       method: 'POST',
@@ -197,6 +199,58 @@ describe('static server conversation tenancy', () => {
       })
     ).json()) as { data: { items: Conversation[] } };
     expect(aliceList.data.items.map((row) => row.id)).toEqual(['alice-conversation']);
+
+    const createdAcp = await fetch(`${handle.localUrl}/api/conversations`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-webui-gate-token': aliceToken,
+        connection: 'close',
+      },
+      body: JSON.stringify({
+        id: 'alice-acp',
+        type: 'acp',
+        model: { api_key: 'attacker-secret' },
+        extra: {
+          [CONVERSATION_OWNER_EXTRA_KEY]: 'bob',
+          agent_id: 'trusted-codex',
+          backend: 'codex',
+          cli_path: '/tmp/evil',
+          workspace: '/etc',
+          selected_mcp_server_ids: ['host-admin'],
+        },
+      }),
+    });
+    expect(createdAcp.status).toBe(201);
+    expect(conversations.get('alice-acp')).toMatchObject({
+      type: 'acp',
+      extra: {
+        [CONVERSATION_OWNER_EXTRA_KEY]: 'alice',
+        agent_id: 'trusted-codex',
+        backend: 'codex',
+        workspace: '',
+        is_temporary_workspace: true,
+      },
+    });
+    expect(conversations.get('alice-acp')?.model).toBeUndefined();
+    expect(conversations.get('alice-acp')?.extra.cli_path).toBeUndefined();
+    expect(conversations.get('alice-acp')?.extra.selected_mcp_server_ids).toBeUndefined();
+
+    const bobAcpRead = await fetch(`${handle.localUrl}/api/conversations/alice-acp`, {
+      headers: { 'x-webui-gate-token': bobToken, connection: 'close' },
+    });
+    expect(bobAcpRead.status).toBe(404);
+    const acpMessage = await fetch(`${handle.localUrl}/api/conversations/alice-acp/messages`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-webui-gate-token': aliceToken,
+        connection: 'close',
+      },
+      body: JSON.stringify({ content: 'hello acp', files: ['/etc/passwd'] }),
+    });
+    expect(acpMessage.status).toBe(200);
+    expect(lastMessageBody).toEqual({ content: 'hello acp', files: [] });
 
     const sent = await fetch(`${handle.localUrl}/api/conversations/alice-conversation/messages`, {
       method: 'POST',

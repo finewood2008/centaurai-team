@@ -29,7 +29,7 @@ const getElectronPathOrFallback = (name: 'temp' | 'home' | 'userData'): string =
 
 export const getTempPath = () => {
   const rootPath = getElectronPathOrFallback('temp');
-  return path.join(rootPath, 'aionui');
+  return path.join(rootPath, 'centaurai');
 };
 
 /**
@@ -91,26 +91,30 @@ const ensureCliSafeSymlink = (targetPath: string, symlinkName: string): string =
 
 /**
  * Get data path, using CLI-safe symlink on macOS.
- * Release builds use ~/.aionui; dev builds use ~/.aionui-dev.
+ * New installs use ~/.centaurai; existing AionUi paths remain supported.
  * 获取数据目录路径，macOS 上使用符号链接。
- * Release 使用 ~/.aionui，Dev 模式使用 ~/.aionui-dev。
+ * 新安装使用 ~/.centaurai；已有 AionUi 路径继续兼容。
  */
 export const getDataPath = (): string => {
   const rootPath = getElectronPathOrFallback('userData');
-  const dataPath = path.join(rootPath, 'aionui');
-  return ensureCliSafeSymlink(dataPath, getEnvAwareName('.aionui'));
+  const canonicalPath = path.join(rootPath, 'centaurai');
+  const legacyPath = path.join(rootPath, 'aionui');
+  const useLegacyPath = !existsSync(canonicalPath) && existsSync(legacyPath);
+  const dataPath = useLegacyPath ? legacyPath : canonicalPath;
+  const symlinkName = getEnvAwareName(useLegacyPath ? '.aionui' : '.centaurai');
+  return ensureCliSafeSymlink(dataPath, symlinkName);
 };
 
 /**
  * Get config path, using CLI-safe symlink on macOS.
- * Release builds use ~/.aionui-config; dev builds use ~/.aionui-config-dev.
+ * Release builds use ~/.centaurai-config; legacy symlinks remain valid.
  * 获取配置目录路径，macOS 上使用符号链接。
- * Release 使用 ~/.aionui-config，Dev 模式使用 ~/.aionui-config-dev。
+ * Release 使用 ~/.centaurai-config，旧版符号链接继续有效。
  */
 export const getConfigPath = (): string => {
   const rootPath = getElectronPathOrFallback('userData');
   const configPath = path.join(rootPath, 'config');
-  return ensureCliSafeSymlink(configPath, getEnvAwareName('.aionui-config'));
+  return ensureCliSafeSymlink(configPath, getEnvAwareName('.centaurai-config'));
 };
 
 /**

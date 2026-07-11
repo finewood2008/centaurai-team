@@ -5,6 +5,50 @@ import type { AssistantListItem } from './types';
 export type AssistantListFilter = 'all' | 'enabled' | 'disabled' | 'builtin' | 'user' | 'extension';
 
 /**
+ * Core execution engines are projected by aioncore into `/api/assistants` as
+ * generated `bare:<agent-id>` rows so generic clients can launch them. They are
+ * Agents, not office assistants, and belong only in the Agent settings page.
+ */
+export const isCoreAgentCatalogEntry = (assistant: Pick<AssistantListItem, 'id' | 'source'>): boolean =>
+  assistant.source === 'generated' || assistant.id.startsWith('bare:');
+
+/** Imported industry/domain advisors have their own Expert catalog. */
+export const isExpertAssistant = (assistant: Pick<AssistantListItem, 'id'>): boolean =>
+  assistant.id.startsWith('agency-');
+
+/** System-provided task workers shown in the 办公助理 product surface. */
+export const PREINSTALLED_OFFICE_ASSISTANT_IDS = new Set([
+  'centaurai-butler',
+  'cowork',
+  'ppt-creator',
+  'morph-ppt',
+  'morph-ppt-3d',
+  'word-creator',
+  'word-form-creator',
+  'excel-creator',
+  'pitch-deck-creator',
+  'dashboard-creator',
+  'financial-model-creator',
+  'academic-paper',
+  'beautiful-mermaid',
+  'planning-with-files',
+  'star-office-helper',
+]);
+
+export const isPreinstalledOfficeAssistant = (assistant: Pick<AssistantListItem, 'id'>): boolean =>
+  PREINSTALLED_OFFICE_ASSISTANT_IDS.has(assistant.id.replace(/^builtin-/, ''));
+
+/**
+ * Settings manages preinstalled office workers plus user/extension-created
+ * workers. Builtin non-office demos, generated Agent projections and imported
+ * experts are intentionally outside this section.
+ */
+export const isOfficeAssistantSettingsEntry = (assistant: Pick<AssistantListItem, 'id' | 'source'>): boolean => {
+  if (isCoreAgentCatalogEntry(assistant) || isExpertAssistant(assistant)) return false;
+  return isPreinstalledOfficeAssistant(assistant) || assistant.source === 'user' || assistant.source === 'extension';
+};
+
+/**
  * Check if a string is an emoji (simple check for common emoji patterns).
  */
 export const isEmoji = (str: string): boolean => {

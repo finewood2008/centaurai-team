@@ -11,6 +11,10 @@ import {
   sortAssistants,
   filterAssistants,
   groupAssistantsByEnabled,
+  isCoreAgentCatalogEntry,
+  isExpertAssistant,
+  isOfficeAssistantSettingsEntry,
+  isPreinstalledOfficeAssistant,
 } from '@/renderer/pages/settings/AssistantSettings/assistantUtils';
 import type { AssistantListItem } from '@/renderer/pages/settings/AssistantSettings/types';
 
@@ -60,6 +64,36 @@ describe('isEmoji', () => {
   it('returns false for emoji mixed with text', () => {
     expect(isEmoji('😀abc')).toBe(false);
     expect(isEmoji('a😀')).toBe(false);
+  });
+});
+
+describe('assistant product taxonomy', () => {
+  it('classifies generated bare rows as core Agents, never office assistants', () => {
+    const agent = mockAssistant({ id: 'bare:8e1acf31', name: 'Codex CLI', source: 'generated' });
+    expect(isCoreAgentCatalogEntry(agent)).toBe(true);
+    expect(isExpertAssistant(agent)).toBe(false);
+    expect(isOfficeAssistantSettingsEntry(agent)).toBe(false);
+  });
+
+  it('classifies agency imports only as Experts', () => {
+    const expert = mockAssistant({ id: 'agency-specialized-cfo', source: 'user' });
+    expect(isCoreAgentCatalogEntry(expert)).toBe(false);
+    expect(isExpertAssistant(expert)).toBe(true);
+    expect(isOfficeAssistantSettingsEntry(expert)).toBe(false);
+  });
+
+  it('keeps preinstalled and custom task workers in Office Assistants', () => {
+    const ppt = mockAssistant({ id: 'ppt-creator', source: 'builtin' });
+    const custom = mockAssistant({ id: 'my-office-worker', source: 'user' });
+    expect(isPreinstalledOfficeAssistant(ppt)).toBe(true);
+    expect(isOfficeAssistantSettingsEntry(ppt)).toBe(true);
+    expect(isOfficeAssistantSettingsEntry(custom)).toBe(true);
+  });
+
+  it('does not treat unrelated builtin demos as office assistants', () => {
+    const game = mockAssistant({ id: 'game-3d', source: 'builtin' });
+    expect(isPreinstalledOfficeAssistant(game)).toBe(false);
+    expect(isOfficeAssistantSettingsEntry(game)).toBe(false);
   });
 });
 

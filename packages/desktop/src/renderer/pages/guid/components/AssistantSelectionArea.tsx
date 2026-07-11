@@ -9,7 +9,11 @@ import { useDetectedAgents, useAssistantEditor, useAssistantList } from '@/rende
 import AssistantEditDrawer from '@/renderer/pages/settings/AssistantSettings/AssistantEditDrawer';
 import DeleteAssistantModal from '@/renderer/pages/settings/AssistantSettings/DeleteAssistantModal';
 import SkillConfirmModals from '@/renderer/pages/settings/AssistantSettings/SkillConfirmModals';
-import { resolveAvatarImageSrc } from '@/renderer/pages/settings/AssistantSettings/assistantUtils';
+import {
+  isExpertAssistant,
+  isPreinstalledOfficeAssistant,
+  resolveAvatarImageSrc,
+} from '@/renderer/pages/settings/AssistantSettings/assistantUtils';
 import {
   DEFAULT_SME_DEPARTMENT,
   SME_DEPARTMENT_ORDER,
@@ -55,30 +59,6 @@ type AssistantSelectionAreaProps = {
 
 /** Max capability chips on the assistant page before a "+N" overflow chip. */
 const MAX_PRESET_SKILLS = 12;
-
-/** 办公助理 = general office-productivity assistants only (non-office builtin
- *  presets like 3D game / story roleplay / coach are intentionally excluded). */
-const OFFICE_ASSISTANT_IDS = new Set([
-  // CentaurAI 管家 — meta-management assistant (configure/diagnose CentaurAI
-  // itself). Desktop-only: the WebUI proxy strips it from the assistant list,
-  // so it only surfaces here on the admin desktop.
-  'centaurai-butler',
-  'cowork',
-  'ppt-creator',
-  'morph-ppt',
-  'morph-ppt-3d',
-  'word-creator',
-  'word-form-creator',
-  'excel-creator',
-  'pitch-deck-creator',
-  'dashboard-creator',
-  'financial-model-creator',
-  'academic-paper',
-  'beautiful-mermaid',
-  'planning-with-files',
-  'star-office-helper',
-]);
-const isOfficeAssistant = (id: string) => OFFICE_ASSISTANT_IDS.has(id.replace(/^builtin-/, ''));
 
 const resolveAssistantCandidateIds = (assistantId: string): string[] => {
   const stripped = assistantId.replace(/^builtin-/, '');
@@ -230,9 +210,10 @@ const AssistantSelectionArea: React.FC<AssistantSelectionAreaProps> = ({
 
   // Separate agency assistants from others. Disabled experts (toggled off in
   // settings) are hidden everywhere they're surfaced.
-  const isAgency = (a: Assistant) => a.id.startsWith('agency-');
-  const agencyAssistants = useMemo(() => assistants.filter((a) => isAgency(a) && a.enabled !== false), [assistants]);
-  const nonAgencyAssistants = useMemo(() => assistants.filter((a) => !isAgency(a)), [assistants]);
+  const agencyAssistants = useMemo(
+    () => assistants.filter((a) => isExpertAssistant(a) && a.enabled !== false),
+    [assistants]
+  );
   // Department tabs, frequency-ordered, limited to 科室 that still have at least
   // one enabled expert. A fully-disabled 科室 has no tab.
   const agencyDeptNames = useMemo(
@@ -367,9 +348,9 @@ const AssistantSelectionArea: React.FC<AssistantSelectionAreaProps> = ({
             {t('guid.selectAssistantHint', { defaultValue: 'Select an office assistant to start a task' })}
           </div>
           <div className={styles.assistantCardGrid}>
-            {nonAgencyAssistants
+            {assistants
               .filter((a) => a.enabled !== false)
-              .filter((a) => isOfficeAssistant(a.id))
+              .filter(isPreinstalledOfficeAssistant)
               .toSorted((a, b) => {
                 if (a.id === 'cowork') return -1;
                 if (b.id === 'cowork') return 1;

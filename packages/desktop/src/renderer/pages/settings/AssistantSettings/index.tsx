@@ -23,7 +23,7 @@ import AionScrollArea from '@/renderer/components/base/AionScrollArea';
 import { useSettingsViewMode } from '@/renderer/components/settings/SettingsModal/settingsViewContext';
 import { useDetectedAgents, useAssistantEditor, useAssistantList } from '@/renderer/hooks/assistant';
 import SettingsPageWrapper from '../components/SettingsPageWrapper';
-import { resolveAvatarImageSrc } from './assistantUtils';
+import { isOfficeAssistantSettingsEntry, resolveAvatarImageSrc } from './assistantUtils';
 import AssistantEditDrawer from './AssistantEditDrawer';
 import AssistantListPanel from './AssistantListPanel';
 import DeleteAssistantModal from './DeleteAssistantModal';
@@ -67,6 +67,10 @@ const AssistantSettings: React.FC = () => {
     localeKey,
   } = useAssistantList();
 
+  // Keep the product taxonomy disjoint: Agent engine projections (`bare:*`)
+  // belong in Agent settings, while `agency-*` advisors belong in Experts.
+  const officeAssistants = useMemo(() => assistants.filter(isOfficeAssistantSettingsEntry), [assistants]);
+
   const { availableBackends, refreshAgentDetection } = useDetectedAgents();
 
   const editor = useAssistantEditor({
@@ -104,7 +108,7 @@ const AssistantSettings: React.FC = () => {
     if (!targetAssistantId) return;
     if (assistants.length === 0) return;
 
-    const targetAssistant = nonAgencyAssistants.find((assistant) => assistant.id === targetAssistantId);
+    const targetAssistant = officeAssistants.find((assistant) => assistant.id === targetAssistantId);
     if (!targetAssistant) return;
 
     hasConsumedNavigationIntentRef.current = true;
@@ -114,10 +118,7 @@ const AssistantSettings: React.FC = () => {
       console.error('[AssistantManagement] Failed to clear assistant open intent:', error);
     }
     void editor.handleEdit(targetAssistant);
-  }, [assistants, editor, navigationState]);
-
-  // Exclude agency experts — they have their own dedicated settings page
-  const nonAgencyAssistants = useMemo(() => assistants.filter((a) => !a.id.startsWith('agency-')), [assistants]);
+  }, [editor, navigationState, officeAssistants]);
 
   return (
     <SettingsPageWrapper>
@@ -125,7 +126,7 @@ const AssistantSettings: React.FC = () => {
         {messageContext}
         <AionScrollArea className='flex-1 min-h-0 pb-16px scrollbar-hide' disableOverflow={isPageMode}>
           <AssistantListPanel
-            assistants={nonAgencyAssistants}
+            assistants={officeAssistants}
             localeKey={localeKey}
             avatarImageMap={avatarImageMap}
             isExtensionAssistant={isExtensionAssistant}

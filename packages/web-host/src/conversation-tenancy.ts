@@ -27,6 +27,8 @@ const BACKEND_TIMEOUT_MS = 10_000;
 const MAX_COLLECTION_ROWS = 10_000;
 const SEARCH_BACKEND_PAGE_SIZE = 500;
 const MAX_SEARCH_PAGES = 20;
+const LAN_CONVERSATION_TYPES = new Set(['aionrs', 'acp']);
+const ADMIN_ONLY_ASSISTANT_IDS = new Set(['centaurai-butler']);
 const LAN_CONVERSATION_WS_EVENTS = new Set([
   'message.stream',
   'message.userCreated',
@@ -60,6 +62,8 @@ type OwnerStoreFile = {
 
 type TrustedCreateCatalog = {
   providers: JsonRecord[];
+  agents: JsonRecord[];
+  assistants: JsonRecord[];
 };
 
 export type ConversationTenantBoundary = {
@@ -599,6 +603,68 @@ function trustedProviderModel(rawModel: unknown, providers: JsonRecord[]): JsonR
   return { provider_id: requestedProviderId, model: useModel };
 }
 
+function isLanConversationType(value: unknown): value is string {
+  return typeof value === 'string' && LAN_CONVERSATION_TYPES.has(value);
+}
+
+function usableCatalogAgent(agent: JsonRecord, type: string): boolean {
+  if (safeString(agent.agent_type, 64) !== type || agent.enabled !== true || agent.installed === false) return false;
+  const status = safeString(agent.status, 64);
+  return !status || status === 'online' || status === 'unchecked';
+}
+
+function catalogAgentById(agents: JsonRecord[], agentId: unknown, type: string): JsonRecord | null {
+  const id = safeString(agentId, 256);
+  if (!id) return null;
+  return agents.find((agent) => safeString(agent.id, 256) === id && usableCatalogAgent(agent, type)) ?? null;
+}
+
+function catalogAssistantById(assistants: JsonRecord[], assistantId: unknown): JsonRecord | null {
+  const id = safeString(assistantId, 256);
+  if (!id || ADMIN_ONLY_ASSISTANT_IDS.has(id)) return null;
+  return assistants.find((assistant) => safeString(assistant.id, 256) === id && assistant.enabled !== false) ?? null;
+}
+
+function assistantAgent(assistant: JsonRecord, agents: JsonRecord[], expectedType: string): JsonRecord | null {
+  const agent = catalogAgentById(agents, assistant.agent_id, expectedType);
+  if (!agent) return null;
+  const embedded = isRecord(assistant.agent) ? safeString(assistant.agent.type, 64) : undefined;
+  return embedded && embedded !== expectedType ? null : agent;
+}
+
+function catalogOptionValues(agent: JsonRecord, category: 'mode' | 'model'): Set<string> {
+  const values = new Set<string>();
+  const wrapped = isRecord(agent.config_options) ? agent.config_options.config_options : undefined;
+  if (Array.isArray(wrapped)) {
+    for (const option of wrapped) {
+      if (!isRecord(option) || safeString(option.category, 64) !== category || !Array.isArray(option.options)) continue;
+      for (const item of option.options) {
+        if (!isRecord(item)) continue;
+        const value = safeString(item.value, 512);
+        if (value) values.add(value);
+      }
+    }
+  }
+  const availability = isRecord(agent[category === 'mode' ? 'available_modes' : 'available_models'])
+    ? agent[category === 'mode' ? 'available_modes' : 'available_models']
+    : undefined;
+  if (isRecord(availability)) {
+    const rows = availability[category === 'mode' ? 'available_modes' : 'available_models'];
+    if (Array.isArray(rows)) {
+      for (const item of rows) {
+        if (!isRecord(item)) continue;
+        const id = safeString(item.id, 512);
+        if (id) values.add(id);
+      }
+    }
+  }
+  return values;
+}
+
+function trustedAcpAgentFromExtra(extra: JsonRecord, catalog: TrustedCreateCatalog): JsonRecord | null {
+  return catalogAgentById(catalog.agents, extra.agent_id, 'acp');
+}
+
 function sanitizeCreatePayload(
   value: unknown,
   identity: AuthGateIdentity,
@@ -628,13 +694,48 @@ function sanitizeCreatePayload(
   if (type === 'aionrs') {
     const model = trustedProviderModel(target.model, catalog.providers);
     if (!model) return null;
+    const presetId = safeString(originalExtra.preset_assistant_id, 256);
+    if (presetId) {
+      const assistant = catalogAssistantById(catalog.assistants, presetId);
+      if (!assistant || !assistantAgent(assistant, catalog.agents, 'aionrs')) return null;
+      safeBaseExtra.preset_assistant_id = presetId;
+    }
     cleanTarget.type = 'aionrs';
     cleanTarget.model = model;
     cleanTarget.extra = safeBaseExtra;
+  } else if (type === 'acp') {
+    const presetId = safeString(originalExtra.preset_assistant_id, 256);
+    const assistant = presetId ? catalogAssistantById(catalog.assistants, presetId) : null;
+    if (presetId && !assistant) return null;
+    const agent = assistant
+      ? assistantAgent(assistant, catalog.agents, 'acp')
+      : catalogAgentById(catalog.agents, originalExtra.agent_id, 'acp');
+    if (!agent) return null;
+    const agentId = safeString(agent.id, 256);
+    const backend = safeString(agent.backend, 256);
+    if (!agentId || !backend) return null;
+    const requestedBackend = safeString(originalExtra.backend, 256);
+    if (requestedBackend && requestedBackend !== backend) return null;
+    const agentName = safeString(agent.name, 512);
+    cleanTarget.type = 'acp';
+    cleanTarget.extra = {
+      ...safeBaseExtra,
+      agent_id: agentId,
+      backend,
+      ...(agentName ? { agent_name: agentName } : {}),
+      ...(presetId ? { preset_assistant_id: presetId } : {}),
+    };
+    const requestedMode = safeString(originalExtra.session_mode, 512);
+    if (requestedMode && catalogOptionValues(agent, 'mode').has(requestedMode)) {
+      (cleanTarget.extra as JsonRecord).session_mode = requestedMode;
+    }
+    const requestedModel = safeString(originalExtra.current_model_id, 512);
+    if (requestedModel && catalogOptionValues(agent, 'model').has(requestedModel)) {
+      (cleanTarget.extra as JsonRecord).current_model_id = requestedModel;
+    }
   } else {
-    // CLI/ACP, legacy gateway, remote and nanobot runtimes execute with the
-    // WebHost OS user's authority. They require the trusted desktop process and
-    // must never be instantiated from a LAN payload.
+    // Legacy gateway, remote and nanobot runtimes do not have a server-owned
+    // catalog contract suitable for authenticated LAN creation.
     return null;
   }
 
@@ -772,14 +873,24 @@ export async function createConversationTenantBoundary(
   };
 
   const loadTrustedCreateCatalog = async (): Promise<TrustedCreateCatalog> => {
-    return { providers: await fetchCatalogRows('/api/providers') };
+    const [providers, agents, assistants] = await Promise.all([
+      fetchCatalogRows('/api/providers'),
+      fetchCatalogRows('/api/agents/management'),
+      fetchCatalogRows('/api/assistants'),
+    ]);
+    return { providers, agents, assistants };
   };
 
   const hasTrustedRuntime = async (conversation: ConversationRecord): Promise<boolean> => {
     const type = safeString(conversation.type, 64);
-    if (type !== 'aionrs') return false;
     const catalog = await loadTrustedCreateCatalog();
-    return trustedProviderModel(conversation.model, catalog.providers) !== null;
+    if (type === 'aionrs') return trustedProviderModel(conversation.model, catalog.providers) !== null;
+    if (type === 'acp' && isRecord(conversation.extra)) {
+      const agent = trustedAcpAgentFromExtra(conversation.extra, catalog);
+      const backend = agent ? safeString(agent.backend, 256) : undefined;
+      return Boolean(agent && backend && backend === safeString(conversation.extra.backend, 256));
+    }
+    return false;
   };
 
   const resolveOwner = async (conversation: ConversationRecord, allowLegacyAdoption = true): Promise<string | null> => {
@@ -795,7 +906,7 @@ export async function createConversationTenantBoundary(
 
   const ownsRecord = async (identity: AuthGateIdentity, conversation: ConversationRecord): Promise<boolean> => {
     if (identity.userId === ADMIN_CONVERSATION_USER_ID) return true;
-    if (conversation.type !== 'aionrs') return false;
+    if (!isLanConversationType(conversation.type)) return false;
     return (await resolveOwner(conversation)) === identity.userId;
   };
 
@@ -805,7 +916,7 @@ export async function createConversationTenantBoundary(
     const recorded = store.get(id);
     if (identity.userId === ADMIN_CONVERSATION_USER_ID && recorded) return true;
     const cachedType = conversationTypes.get(id);
-    if (recorded && cachedType) return recorded === identity.userId && cachedType === 'aionrs';
+    if (recorded && cachedType) return recorded === identity.userId && isLanConversationType(cachedType);
     const conversation = await fetchConversation(id);
     if (!conversation) return false;
     return ownsRecord(identity, conversation);
@@ -826,7 +937,7 @@ export async function createConversationTenantBoundary(
     const visible =
       identity.userId === ADMIN_CONVERSATION_USER_ID
         ? rows
-        : rows.filter((row) => row.type === 'aionrs' && store.get(row.id) === identity.userId);
+        : rows.filter((row) => isLanConversationType(row.type) && store.get(row.id) === identity.userId);
     return visible.map((row) => {
       const authoritativeOwner = store.get(row.id);
       const withOwner = !authoritativeOwner
@@ -1005,7 +1116,8 @@ export async function createConversationTenantBoundary(
       }
       try {
         await store.set(created.id, identity.userId);
-        conversationTypes.set(created.id, 'aionrs');
+        const createdType = safeString(created.type, 64);
+        if (createdType) conversationTypes.set(created.id, createdType);
       } catch {
         // Do not leave an unindexed conversation behind. Without a durable
         // owner it would become ambiguous after restart and could later be
@@ -1177,6 +1289,15 @@ export async function createConversationTenantBoundary(
     if (isMutation && !outgoing) {
       sendJson(res, 400, { success: false, error: 'INVALID_REQUEST' });
       return;
+    }
+    if (req.method === 'PUT' && /^\/config-options\/(?:mode|model)$/.test(suffix) && current.type === 'acp') {
+      const catalog = await loadTrustedCreateCatalog();
+      const agent = isRecord(current.extra) ? trustedAcpAgentFromExtra(current.extra, catalog) : null;
+      const category = suffix.endsWith('/mode') ? 'mode' : 'model';
+      if (!agent || !catalogOptionValues(agent, category).has(safeString(outgoing?.value, 512) ?? '')) {
+        sendJson(res, 400, { success: false, error: 'INVALID_CONFIG_OPTION' });
+        return;
+      }
     }
     const outgoingBody = outgoing ? jsonBody(outgoing) : undefined;
     const response = await fetchBackendJson(opts.backendPort, req.url || '', {
