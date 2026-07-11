@@ -259,7 +259,8 @@ export async function httpRequest<T>(
   body?: unknown,
   options?: HttpRequestOptions
 ): Promise<T> {
-  const url = `${getBaseUrl()}${path}`;
+  const baseUrl = getBaseUrl();
+  const url = `${baseUrl}${path}`;
   const headers: Record<string, string> = {};
 
   if (body !== undefined) {
@@ -275,7 +276,10 @@ export async function httpRequest<T>(
   const response = await fetch(url, {
     method,
     headers,
-    credentials: 'include',
+    // Browser WebUI is same-origin and authenticates with its HttpOnly cookie.
+    // Desktop talks directly to loopback Core, where credentialed CORS would be
+    // rejected (and no cookie is required in local mode).
+    credentials: baseUrl ? 'omit' : 'include',
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 

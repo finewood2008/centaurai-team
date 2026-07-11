@@ -132,7 +132,7 @@ describe('httpBridge', () => {
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(fetchSpy.mock.calls[0][0]).toContain('/api/foo');
       expect(fetchSpy.mock.calls[0][1]?.method).toBe('GET');
-      expect(fetchSpy.mock.calls[0][1]?.credentials).toBe('include');
+      expect(fetchSpy.mock.calls[0][1]?.credentials).toBe('omit');
       expect(fetchSpy.mock.calls[0][1]?.body).toBeUndefined();
     });
   });
@@ -444,9 +444,27 @@ describe('httpBridge', () => {
       expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/api/test'), {
         method: 'GET',
         headers: {},
-        credentials: 'include',
+        credentials: 'omit',
         body: undefined,
       });
+    });
+
+    it('includes credentials for same-origin browser WebUI requests', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ data: { result: 'ok' } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+      vi.stubGlobal('window', {});
+      vi.stubGlobal('document', {});
+      vi.stubGlobal('fetch', fetchSpy);
+      vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+      await httpRequest('GET', '/api/test');
+
+      expect(fetchSpy.mock.calls[0][0]).toBe('/api/test');
+      expect(fetchSpy.mock.calls[0][1]?.credentials).toBe('include');
     });
 
     it('sends JSON body for POST with content-type', async () => {
