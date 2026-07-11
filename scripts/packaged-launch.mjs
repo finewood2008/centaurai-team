@@ -24,14 +24,53 @@ function killProcessByName(name) {
   });
 }
 
+function findWindowsExecutable(unpackedDir) {
+  const executableNames = fs
+    .readdirSync(unpackedDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^CentaurAI(?: .+)?\.exe$/i.test(entry.name))
+    .map((entry) => entry.name)
+    .filter((name) => name.toLowerCase() !== 'centaurai-core.exe');
+  const executableName = executableNames[0];
+  return executableName ? path.join(unpackedDir, executableName) : null;
+}
+
+function findMacExecutable(appPath) {
+  const infoPlistPath = path.join(appPath, 'Contents', 'Info.plist');
+  const macosDir = path.join(appPath, 'Contents', 'MacOS');
+  if (!fs.existsSync(infoPlistPath) || !fs.existsSync(macosDir)) return null;
+
+  const infoPlist = fs.readFileSync(infoPlistPath, 'utf8');
+  const configuredName = infoPlist.match(/<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/)?.[1];
+  const executableName =
+    configuredName ??
+    fs
+      .readdirSync(macosDir, { withFileTypes: true })
+      .find((entry) => entry.isFile() && /^CentaurAI(?: .+)?$/i.test(entry.name))?.name;
+  if (!executableName) return null;
+
+  const executablePath = path.join(macosDir, executableName);
+  return fs.existsSync(executablePath) ? executablePath : null;
+}
+
+function findLinuxExecutable(unpackedDir) {
+  const executableNames = fs
+    .readdirSync(unpackedDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^centaurai(?:[- ].+)?$/i.test(entry.name))
+    .map((entry) => entry.name);
+  const executableName = executableNames[0];
+  return executableName ? path.join(unpackedDir, executableName) : null;
+}
+
 function resolvePackagedApp(projectRoot) {
   const outDir = path.join(projectRoot, 'out');
   if (!fs.existsSync(outDir)) return null;
 
   if (process.platform === 'win32') {
     for (const dir of ['win-unpacked', 'win-x64-unpacked', 'win-arm64-unpacked']) {
-      const exe = path.join(outDir, dir, 'AionUi.exe');
-      if (fs.existsSync(exe)) return { executablePath: exe, cwd: path.join(outDir, dir) };
+      const unpackedDir = path.join(outDir, dir);
+      if (!fs.existsSync(unpackedDir)) continue;
+      const exe = findWindowsExecutable(unpackedDir);
+      if (exe) return { executablePath: exe, cwd: unpackedDir };
     }
   } else if (process.platform === 'darwin') {
     for (const dir of ['mac-arm64', 'mac-x64', 'mac', 'mac-universal']) {
@@ -39,17 +78,15 @@ function resolvePackagedApp(projectRoot) {
       if (!fs.existsSync(macDir)) continue;
       const appBundle = fs.readdirSync(macDir).find((f) => f.endsWith('.app'));
       if (!appBundle) continue;
-      const exe = path.join(macDir, appBundle, 'Contents', 'MacOS', 'AionUi');
-      if (fs.existsSync(exe)) return { executablePath: exe, cwd: macDir };
+      const exe = findMacExecutable(path.join(macDir, appBundle));
+      if (exe) return { executablePath: exe, cwd: macDir };
     }
   } else {
     for (const dir of ['linux-unpacked', 'linux-x64-unpacked', 'linux-arm64-unpacked']) {
       const dirPath = path.join(outDir, dir);
       if (!fs.existsSync(dirPath)) continue;
-      for (const name of ['aionui', 'AionUi']) {
-        const exe = path.join(dirPath, name);
-        if (fs.existsSync(exe)) return { executablePath: exe, cwd: dirPath };
-      }
+      const exe = findLinuxExecutable(dirPath);
+      if (exe) return { executablePath: exe, cwd: dirPath };
     }
   }
 
@@ -70,8 +107,7 @@ async function main() {
   }
 
   if (shouldClean) {
-    await killProcessByName('AionUi.exe');
-    await killProcessByName('AionUi');
+    await killProcessByName(path.basename(packaged.executablePath));
     await killProcessByName('electron.exe');
     await killProcessByName('electron');
   }

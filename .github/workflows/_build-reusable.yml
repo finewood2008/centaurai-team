@@ -308,13 +308,12 @@ jobs:
           MSVS_VERSION: 2022
           GYP_MSVS_VERSION: 2022
 
-      - name: Prepare aioncore binary
+      - name: Prepare CentaurAI Core binary
         shell: bash
-        run: node scripts/prepareAioncore.js
+        run: node scripts/prepareCentauraiCore.js
         env:
-          # Version is pinned in repo-root package.json (aioncoreVersion).
-          # Set AIONUI_BACKEND_VERSION here only to override for ad-hoc builds.
-          AIONUI_BACKEND_ARCH: ${{ matrix.arch }}
+          # Exact release tag is pinned in repo-root package.json (centauraiCoreVersion).
+          CENTAURAI_CORE_ARCH: ${{ matrix.arch }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -597,8 +596,7 @@ jobs:
             out/*.msi
             out/*.dmg
             out/*.deb
-            out/AionUi-*-win32-*.zip
-            out/AionUi-*-mac-*.zip
+            out/*.zip
             out/*.yml
           if-no-files-found: warn
           retention-days: 7

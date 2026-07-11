@@ -9,7 +9,9 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { connect, createServer, type Socket } from 'node:net';
+import { basename, dirname, join } from 'node:path';
 import { cleanupRegisteredAgentProcesses } from './agent-process-registry.js';
 import type { AppMetadata, BackendBinaryResolver } from './types.js';
 
@@ -48,12 +50,77 @@ type HealthCheckDiagnostics = {
   healthCheckTcpProbeErrorCode?: string;
   healthCheckTcpProbeElapsedMs?: number;
   healthCheckTcpProbeTimeoutMs?: number;
+  healthCheckExpectedService?: string;
+  healthCheckService?: string;
+  healthCheckVersion?: string;
+  healthCheckCommit?: string;
+  healthCheckIdentityMismatch?: string;
+  legacyFallbackAllowed?: boolean;
 };
 
 type HealthCheckResult = {
   ok: boolean;
   diagnostics: HealthCheckDiagnostics;
+  identity?: CoreHealthIdentity;
 };
+
+type CoreHealthIdentity = {
+  status: string;
+  service?: string;
+  version?: string;
+  commit?: string;
+  legacyAccepted: boolean;
+};
+
+type CoreProvenance = {
+  binaryPath: string;
+  binaryName: string;
+  manifestPath?: string;
+  repository?: string;
+  tag?: string;
+  commit?: string;
+  artifactUrl?: string;
+  sha256?: string;
+  sourceType?: string;
+  fallbackUsed: boolean;
+};
+
+const EXPECTED_CORE_SERVICE = 'centaurai-core';
+
+function getManifestString(manifest: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = manifest?.[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function inspectCoreProvenance(binaryPath: string): CoreProvenance {
+  const binaryName = basename(binaryPath);
+  const manifestPath = join(dirname(binaryPath), 'manifest.json');
+  let manifest: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
+    if (parsed && typeof parsed === 'object') manifest = parsed as Record<string, unknown>;
+  } catch {
+    // PATH and explicit development binaries do not necessarily have a manifest.
+  }
+  return {
+    binaryPath,
+    binaryName,
+    manifestPath: manifest ? manifestPath : undefined,
+    repository: getManifestString(manifest, 'repository'),
+    tag: getManifestString(manifest, 'tag') ?? getManifestString(manifest, 'version'),
+    commit: getManifestString(manifest, 'commit'),
+    artifactUrl: getManifestString(manifest, 'artifactUrl'),
+    sha256: getManifestString(manifest, 'sha256'),
+    sourceType: getManifestString(manifest, 'sourceType'),
+    fallbackUsed:
+      manifest?.fallbackUsed === true || /^aioncore(?:\.exe)?$/i.test(binaryName) || binaryPath.includes('bundled-aioncore'),
+  };
+}
+
+function legacyCoreFallbackAllowed(): boolean {
+  const value = process.env.CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK ?? process.env.AIONUI_BACKEND_ALLOW_LEGACY ?? '';
+  return /^(1|true|yes)$/i.test(value.trim());
+}
 
 type ParsedBackendBoundaryError = {
   code: string;
@@ -115,6 +182,12 @@ export type BackendStartupErrorDetails = {
   resourcesPath?: string;
   runtimeKey?: string;
   binaryName?: string;
+  coreRepository?: string;
+  coreTag?: string;
+  coreCommit?: string;
+  coreArtifactUrl?: string;
+  coreSha256?: string;
+  coreFallbackUsed?: boolean;
   checkedBundledPath?: string;
   bundledDirExists?: boolean;
   runtimeDirExists?: boolean;
@@ -147,6 +220,12 @@ export type BackendStartupErrorDetails = {
   healthCheckTcpProbeErrorCode?: string;
   healthCheckTcpProbeElapsedMs?: number;
   healthCheckTcpProbeTimeoutMs?: number;
+  healthCheckExpectedService?: string;
+  healthCheckService?: string;
+  healthCheckVersion?: string;
+  healthCheckCommit?: string;
+  healthCheckIdentityMismatch?: string;
+  legacyFallbackAllowed?: boolean;
   serverListeningObserved?: boolean;
   serverListeningObservedAfterMs?: number;
   serverListeningLine?: string;
@@ -237,7 +316,7 @@ export function findAvailablePort(
 
   const firstRequestedPort = preferredPort && !isFetchForbiddenPort(preferredPort) ? preferredPort : 0;
   if (preferredPort && firstRequestedPort === 0) {
-    console.info(`[aioncore] skipped fetch-blocked backend port ${preferredPort}`);
+    console.info(`[centaurai-core] skipped fetch-blocked backend port ${preferredPort}`);
   }
 
   const tryPort = (requestedPort: number, remainingAttempts: number, attempt: number): Promise<number> =>
@@ -264,12 +343,12 @@ export function findAvailablePort(
         server.close(() => {
           cleanup();
           if (resolvedPort > 0 && !isFetchForbiddenPort(resolvedPort)) {
-            console.info(`[aioncore] selected backend port ${resolvedPort} after ${attempt} attempts`);
+            console.info(`[centaurai-core] selected backend port ${resolvedPort} after ${attempt} attempts`);
             resolve(resolvedPort);
             return;
           }
           if (resolvedPort > 0 && remainingAttempts > 1) {
-            console.info(`[aioncore] skipped fetch-blocked backend port ${resolvedPort}`);
+            console.info(`[centaurai-core] skipped fetch-blocked backend port ${resolvedPort}`);
             tryPort(0, remainingAttempts - 1, attempt + 1).then(resolve, reject);
             return;
           }
@@ -443,6 +522,7 @@ export class BackendLifecycleManager {
   private restartWindowStart = 0;
   private readonly maxRestarts = 3;
   private readonly restartWindowMs = 60_000;
+  private lastCoreProvenance?: CoreProvenance;
 
   constructor(
     private readonly appMeta: AppMetadata,
@@ -485,6 +565,22 @@ export class BackendLifecycleManager {
         error
       );
     }
+    const provenance = inspectCoreProvenance(binaryPath);
+    const allowLegacyFallback = legacyCoreFallbackAllowed();
+    this.lastCoreProvenance = provenance;
+    if (provenance.fallbackUsed && !allowLegacyFallback) {
+      throw new BackendStartupError('legacy aioncore fallback is disabled', {
+        stage: 'resolve_binary',
+        appVersion,
+        isPackaged: this.appMeta.isPackaged,
+        binaryPath,
+        binaryName: provenance.binaryName,
+        legacyFallbackAllowed: false,
+      });
+    }
+    const provenanceLog = { ...provenance, legacyFallbackAllowed: allowLegacyFallback };
+    if (provenance.fallbackUsed) console.warn('[centaurai-core] LEGACY FALLBACK selected', provenanceLog);
+    else console.info('[centaurai-core] binary selected', provenanceLog);
     this._port = preferredPort ?? 0;
     this._status = 'starting';
     this._lastDbPath = dbPath;
@@ -513,6 +609,14 @@ export class BackendLifecycleManager {
           appVersion,
           isPackaged: this.appMeta.isPackaged,
           binaryPath,
+          binaryName: provenance.binaryName,
+          coreRepository: provenance.repository,
+          coreTag: provenance.tag,
+          coreCommit: provenance.commit,
+          coreArtifactUrl: provenance.artifactUrl,
+          coreSha256: provenance.sha256,
+          coreFallbackUsed: provenance.fallbackUsed,
+          legacyFallbackAllowed: allowLegacyFallback,
           port: this._port,
           dataDir: dbPath,
           logDir,
@@ -541,7 +645,7 @@ export class BackendLifecycleManager {
       appVersion,
       isPackaged: this.appMeta.isPackaged,
     });
-    console.log(`[aioncore] starting: ${binaryPath} ${args.join(' ')}`);
+    console.log(`[centaurai-core] starting: ${binaryPath} ${args.join(' ')}`);
 
     try {
       this.childProcess = spawn(binaryPath, args, {
@@ -626,7 +730,7 @@ export class BackendLifecycleManager {
               })
             )
           ).catch((error) => {
-            console.error('[aioncore] pending exit handler failed:', error);
+            console.error('[centaurai-core] pending exit handler failed:', error);
           });
         }
       });
@@ -678,14 +782,14 @@ export class BackendLifecycleManager {
           serverListeningObservedAfterMs = Date.now() - startupStartedAt;
           serverListeningLine = trimmed;
         }
-        if (trimmed) console.log(`[aioncore] ${line}`);
+        if (trimmed) console.log(`[centaurai-core] ${line}`);
       }
     });
 
     this.childProcess.stderr?.on('data', (data: Buffer) => {
       stderrTail = appendOutputTail(stderrTail, data);
       for (const line of data.toString().split('\n')) {
-        if (line.trim()) console.error(`[aioncore] ${line}`);
+        if (line.trim()) console.error(`[centaurai-core] ${line}`);
       }
     });
 
@@ -713,9 +817,9 @@ export class BackendLifecycleManager {
       );
       if (options?.allowPendingOnHealthTimeout && this.childProcess) {
         startupSettled = true;
-        console.warn(`[aioncore] health check timed out; keeping process alive on port ${this._port}`);
+        console.warn(`[centaurai-core] health check timed out; keeping process alive on port ${this._port}`);
         void Promise.resolve(options.onHealthTimeout?.(healthTimeoutError)).catch((error) => {
-          console.error('[aioncore] health timeout handler failed:', error);
+          console.error('[centaurai-core] health timeout handler failed:', error);
         });
         this.continueWaitingForHealth(this._port, this.childProcess, startupStartedAt, options.onReady);
         return this._port;
@@ -730,9 +834,22 @@ export class BackendLifecycleManager {
     startupSettled = true;
     this._status = 'running';
     this.restartCount = 0;
-    console.info(
-      `[aioncore] health ready on port ${this._port} after ${health.diagnostics.healthCheckAttempts} attempts, elapsed_ms=${health.diagnostics.healthCheckElapsedMs}, data-dir: ${dbPath}`
-    );
+    console.info('[centaurai-core] health ready', {
+      path: binaryPath,
+      service: health.identity?.service,
+      version: health.identity?.version,
+      commit: health.identity?.commit,
+      artifactSource: provenance.sourceType ?? (provenance.manifestPath ? 'manifest' : 'path-or-explicit'),
+      repository: provenance.repository,
+      tag: provenance.tag,
+      artifactUrl: provenance.artifactUrl,
+      sha256: provenance.sha256,
+      fallbackUsed: provenance.fallbackUsed || health.identity?.legacyAccepted === true,
+      port: this._port,
+      attempts: health.diagnostics.healthCheckAttempts,
+      elapsedMs: health.diagnostics.healthCheckElapsedMs,
+      dataDir: dbPath,
+    });
     return this._port;
   }
 
@@ -772,6 +889,8 @@ export class BackendLifecycleManager {
       healthCheckIntervalMs: intervalMs,
       healthCheckTimeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
       healthCheckExpectedAttempts: expectedAttempts,
+      healthCheckExpectedService: EXPECTED_CORE_SERVICE,
+      legacyFallbackAllowed: legacyCoreFallbackAllowed(),
     };
     let previousAttemptAt: number | undefined;
     while (Date.now() - start < timeoutMs && shouldContinue()) {
@@ -786,14 +905,55 @@ export class BackendLifecycleManager {
       diagnostics.healthCheckLastAttemptAfterMs = attemptStartedAt - start;
       try {
         const response = await fetch(healthCheckUrl);
-        if (response.ok) {
-          diagnostics.healthCheckElapsedMs = Date.now() - start;
-          return { ok: true, diagnostics };
-        }
         diagnostics.healthCheckLastStatus = response.status;
         clearHealthCheckErrorDiagnostics(diagnostics);
         try {
-          diagnostics.healthCheckLastBody = (await response.text()).slice(0, 500);
+          const body = (await response.text()).slice(0, 500);
+          diagnostics.healthCheckLastBody = body;
+          if (response.ok) {
+            let payload: Record<string, unknown> | undefined;
+            try {
+              const parsed = JSON.parse(body) as unknown;
+              if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>;
+            } catch {
+              diagnostics.healthCheckIdentityMismatch = 'health response is not JSON';
+            }
+            if (payload) {
+              const status = typeof payload.status === 'string' ? payload.status : '';
+              const service = typeof payload.service === 'string' ? payload.service : undefined;
+              const version = typeof payload.version === 'string' ? payload.version : undefined;
+              const commit = typeof payload.commit === 'string' ? payload.commit : undefined;
+              diagnostics.healthCheckService = service;
+              diagnostics.healthCheckVersion = version;
+              diagnostics.healthCheckCommit = commit;
+              const expectedVersion = this.lastCoreProvenance?.tag?.replace(/^v/, '');
+              const expectedCommit = this.lastCoreProvenance?.commit;
+              if (service === EXPECTED_CORE_SERVICE && status === 'ok' && version && commit) {
+                if (expectedVersion && version !== expectedVersion) {
+                  diagnostics.healthCheckIdentityMismatch = `version ${version} does not match manifest ${expectedVersion}`;
+                } else if (expectedCommit && commit !== expectedCommit) {
+                  diagnostics.healthCheckIdentityMismatch = `commit ${commit} does not match manifest ${expectedCommit}`;
+                } else {
+                  delete diagnostics.healthCheckIdentityMismatch;
+                  diagnostics.healthCheckElapsedMs = Date.now() - start;
+                  return {
+                    ok: true,
+                    diagnostics,
+                    identity: { status, service, version, commit, legacyAccepted: false },
+                  };
+                }
+              } else if (diagnostics.legacyFallbackAllowed && status === 'ok') {
+                diagnostics.healthCheckElapsedMs = Date.now() - start;
+                return {
+                  ok: true,
+                  diagnostics,
+                  identity: { status, service, version, commit, legacyAccepted: true },
+                };
+              } else {
+                diagnostics.healthCheckIdentityMismatch = `expected service=${EXPECTED_CORE_SERVICE} with version and commit`;
+              }
+            }
+          }
         } catch (error) {
           delete diagnostics.healthCheckLastBody;
           applyHealthCheckErrorDiagnostics(diagnostics, error);
@@ -836,11 +996,11 @@ export class BackendLifecycleManager {
       this.restartCount = 0;
       const elapsedMs = health.diagnostics.healthCheckElapsedMs ?? Date.now() - startupStartedAt;
       console.info(
-        `[aioncore] late health ready on port ${port} after ${health.diagnostics.healthCheckAttempts} attempts, elapsed_ms=${elapsedMs}, data-dir: ${this._lastDbPath}`
+        `[centaurai-core] late health ready on port ${port} after ${health.diagnostics.healthCheckAttempts} attempts, elapsed_ms=${elapsedMs}, data-dir: ${this._lastDbPath}`
       );
       await onReady?.(port);
     })().catch((error) => {
-      console.error('[aioncore] background health wait failed:', error);
+      console.error('[centaurai-core] background health wait failed:', error);
     });
   }
 
@@ -862,12 +1022,12 @@ export class BackendLifecycleManager {
 
     if (this.restartCount > this.maxRestarts) {
       this._status = 'error';
-      console.error('[aioncore] child exited unexpectedly; restart limit exceeded', crashContext);
+      console.error('[centaurai-core] child exited unexpectedly; restart limit exceeded', crashContext);
       return;
     }
 
     const delay = Math.pow(2, this.restartCount - 1) * 1000;
-    console.warn('[aioncore] child exited unexpectedly; scheduling restart', {
+    console.warn('[centaurai-core] child exited unexpectedly; scheduling restart', {
       ...crashContext,
       delayMs: delay,
     });
@@ -883,7 +1043,7 @@ export class BackendLifecycleManager {
         })
         .catch((error) => {
           this._status = 'error';
-          console.error('[aioncore] restart after crash failed', {
+          console.error('[centaurai-core] restart after crash failed', {
             port: this._port,
             restartCount: this.restartCount,
             maxRestarts: this.maxRestarts,

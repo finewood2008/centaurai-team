@@ -5,7 +5,16 @@
   "description": "Shared build scripts for AionUi packages",
   "type": "commonjs",
   "exports": {
-    "./prepare-aioncore": "./src/prepare-aioncore.js"
+    "./core-artifact-config": {
+      "types": "./src/core-artifact-config.d.ts",
+      "default": "./src/core-artifact-config.js"
+    },
+    "./prepare-aioncore": "./src/prepare-aioncore.js",
+    "./prepare-centaurai-core": "./src/prepare-centaurai-core.js",
+    "./resolve-core-binary": {
+      "types": "./src/resolve-core-binary.d.ts",
+      "default": "./src/resolve-core-binary.js"
+    }
   },
   "scripts": {
     "test": "vitest run",

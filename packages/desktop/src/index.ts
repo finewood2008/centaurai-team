@@ -95,11 +95,12 @@ import electronSquirrelStartup from 'electron-squirrel-startup';
 // When a second instance starts (e.g. from protocol URL), it sends its data
 // to the first instance via second-instance event, then quits.
 const isE2ETestMode = process.env.AIONUI_E2E_TEST === '1';
-const skipSingleInstanceLock = isE2ETestMode || process.env.AIONUI_MULTI_INSTANCE === '1';
+const skipSingleInstanceLock =
+  isE2ETestMode || process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1';
 const deepLinkFromArgv = process.argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
 const gotTheLock = skipSingleInstanceLock ? true : app.requestSingleInstanceLock({ deepLinkUrl: deepLinkFromArgv });
 if (!gotTheLock) {
-  console.warn('[AionUi] Another instance is already running; current process will exit.');
+  console.warn('[CentaurAI] Another instance is already running; current process will exit.');
   app.quit();
 } else {
   app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
@@ -122,7 +123,7 @@ if (!gotTheLock) {
       showOrCreateMainWindow({
         mainWindow,
         createWindow: () => {
-          console.log('[AionUi] second-instance received with no active main window, recreating main window');
+          console.log('[CentaurAI] second-instance received with no active main window, recreating main window');
           createWindow();
         },
       });
@@ -375,7 +376,7 @@ function registerImageWorkbenchProtocol(): void {
     try {
       session.fromPartition(partition).protocol.handle(IMAGE_WORKBENCH_PROTOCOL, createHandler(partition));
     } catch (error) {
-      console.warn(`[AionUi] Failed to register image workbench protocol on ${partition}:`, error);
+      console.warn(`[CentaurAI] Failed to register image workbench protocol on ${partition}:`, error);
     }
   }
 }
@@ -392,7 +393,7 @@ function registerLocalVectorProtocol(): void {
   try {
     protocol.handle(LOCAL_VECTOR_PROTOCOL, createLocalVectorProtocolHandler(resolveVectorEndpoint));
   } catch (error) {
-    console.warn('[AionUi] Failed to register local vector protocol:', error);
+    console.warn('[CentaurAI] Failed to register local vector protocol:', error);
   }
 }
 
@@ -483,7 +484,7 @@ function registerCronResumeBridge(backendPort: number): void {
         'x-aionui-internal': '1',
       },
     }).catch((error) => {
-      console.error('[AionUi] Failed to notify backend about system resume:', error);
+      console.error('[CentaurAI] Failed to notify backend about system resume:', error);
     });
   };
 
@@ -506,9 +507,9 @@ const scheduleBackendMigrations = (): void => {
     try {
       const { runBackendMigrations } = await import('./process/utils/runBackendMigrations');
       await runBackendMigrations(ProcessConfig);
-      console.info('[AionUi] runBackendMigrations completed');
+      console.info('[CentaurAI] runBackendMigrations completed');
     } catch (error) {
-      console.error('[AionUi] Backend migration hook threw:', error);
+      console.error('[CentaurAI] Backend migration hook threw:', error);
     }
   })();
 };
@@ -537,7 +538,7 @@ function ensureAdminUserOnce(backendPort: number): Promise<void> {
 
 function markBackendReady(backendPort: number, source: string): void {
   if (backendStartedOk) return;
-  console.log(`[AionUi] ${source} ready (port=${backendPort})`);
+  console.log(`[CentaurAI] ${source} ready (port=${backendPort})`);
   exposeBackendPort(backendPort);
   registerCronResumeBridge(backendPort);
   backendStartedOk = true;
@@ -551,7 +552,7 @@ function markBackendReady(backendPort: number, source: string): void {
 function openExternalHttpUrl(url: string): void {
   if (!isExternalHttpUrl(url)) return;
   void shell.openExternal(url).catch((error) => {
-    console.warn('[AionUi] Failed to open external URL:', error);
+    console.warn('[CentaurAI] Failed to open external URL:', error);
   });
 }
 
@@ -707,7 +708,7 @@ function installDistributedClientCorsBridge(): void {
 }
 
 const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): void => {
-  console.log('[AionUi] Creating main window...');
+  console.log('[CentaurAI] Creating main window...');
   const { x: windowX, y: windowY, width: windowWidth, height: windowHeight } = resolveInitialBounds();
 
   // Get app icon for development mode (Windows/Linux need icon in BrowserWindow)
@@ -762,7 +763,7 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
       webSecurity: true,
     },
   });
-  console.log(`[AionUi] Main window created (id=${mainWindow.id})`);
+  console.log(`[CentaurAI] Main window created (id=${mainWindow.id})`);
 
   const rendererUrl = process.env['ELECTRON_RENDERER_URL'];
   const fallbackFile = path.join(__dirname, '../renderer/index.html');
@@ -778,18 +779,18 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
   if (showOnReady) {
     const showWindow = () => {
       if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-        console.log('[AionUi] Showing main window');
+        console.log('[CentaurAI] Showing main window');
         mainWindow.show();
         mainWindow.focus();
       }
     };
     mainWindow.once('ready-to-show', () => {
-      console.log('[AionUi] Window ready-to-show');
+      console.log('[CentaurAI] Window ready-to-show');
       showWindow();
     });
     // Belt-and-suspenders: also show on did-finish-load in case ready-to-show already fired
     mainWindow.webContents.once('did-finish-load', () => {
-      console.log('[AionUi] Renderer did-finish-load');
+      console.log('[CentaurAI] Renderer did-finish-load');
       showWindow();
       scheduleBackendMigrations();
     });
@@ -832,56 +833,56 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
         console.error('[App] Failed to initialize autoUpdaterService:', error);
       });
   } else {
-    console.log('[AionUi] Auto-updater disabled via env/CI guard');
+    console.log('[CentaurAI] Auto-updater disabled via env/CI guard');
   }
 
   // Load the renderer: dev server URL in development, built HTML file in production
   if (!app.isPackaged && rendererUrl) {
-    console.log(`[AionUi] Loading renderer URL: ${rendererUrl}`);
+    console.log(`[CentaurAI] Loading renderer URL: ${rendererUrl}`);
     mainWindow.loadURL(rendererUrl).catch((error) => {
-      console.error('[AionUi] loadURL failed, falling back to file:', error.message || error);
+      console.error('[CentaurAI] loadURL failed, falling back to file:', error.message || error);
       mainWindow.loadFile(fallbackFile).catch((e2) => {
-        console.error('[AionUi] loadFile fallback also failed:', e2.message || e2);
+        console.error('[CentaurAI] loadFile fallback also failed:', e2.message || e2);
       });
     });
   } else {
-    console.log(`[AionUi] Loading renderer file: ${fallbackFile}`);
+    console.log(`[CentaurAI] Loading renderer file: ${fallbackFile}`);
     mainWindow.loadFile(fallbackFile).catch((error) => {
-      console.error('[AionUi] loadFile failed:', error.message || error);
+      console.error('[CentaurAI] loadFile failed:', error.message || error);
     });
   }
 
   mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    console.error('[AionUi] did-fail-load:', { errorCode, errorDescription, validatedURL, isMainFrame });
+    console.error('[CentaurAI] did-fail-load:', { errorCode, errorDescription, validatedURL, isMainFrame });
   });
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
-    console.error('[AionUi] render-process-gone:', details);
+    console.error('[CentaurAI] render-process-gone:', details);
 
     // Reload the renderer to recover from the crash.
     // The isDestroyed() guard in adapter/main.ts prevents further sends
     // to the dead webContents while the reload is in progress.
     if (!mainWindow.isDestroyed()) {
-      console.log('[AionUi] Attempting to recover from renderer crash by reloading...');
+      console.log('[CentaurAI] Attempting to recover from renderer crash by reloading...');
 
       if (!app.isPackaged && rendererUrl) {
         mainWindow.loadURL(rendererUrl).catch((error) => {
-          console.error('[AionUi] Recovery loadURL failed:', error.message || error);
+          console.error('[CentaurAI] Recovery loadURL failed:', error.message || error);
         });
       } else {
         mainWindow.loadFile(fallbackFile).catch((error) => {
-          console.error('[AionUi] Recovery loadFile failed:', error.message || error);
+          console.error('[CentaurAI] Recovery loadFile failed:', error.message || error);
         });
       }
     }
   });
 
   mainWindow.webContents.on('unresponsive', () => {
-    console.warn('[AionUi] Renderer became unresponsive');
+    console.warn('[CentaurAI] Renderer became unresponsive');
   });
 
   mainWindow.on('closed', () => {
-    console.log('[AionUi] Main window closed');
+    console.log('[CentaurAI] Main window closed');
     trustedMainRendererEntryUrl = null;
   });
 
@@ -910,7 +911,7 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
 
 const handleAppReady = async (): Promise<void> => {
   const t0 = performance.now();
-  const mark = (label: string) => console.log(`[AionUi:ready] ${label} +${Math.round(performance.now() - t0)}ms`);
+  const mark = (label: string) => console.log(`[CentaurAI:ready] ${label} +${Math.round(performance.now() - t0)}ms`);
   mark('start');
   registerImageWorkbenchProtocol();
   registerLocalVectorProtocol();
@@ -931,7 +932,7 @@ const handleAppReady = async (): Promise<void> => {
         permission === 'media' && isTrustedMainFrame(wc, details.isMainFrame)
     );
   } catch (e) {
-    console.warn('[AionUi] Failed to set media permission handler:', e);
+    console.warn('[CentaurAI] Failed to set media permission handler:', e);
   }
 
   installDistributedClientCorsBridge();
@@ -1074,7 +1075,7 @@ const handleAppReady = async (): Promise<void> => {
     initializeZoomFactor(await ProcessConfig.get('ui.zoomFactor'));
     mark('initializeZoomFactor');
   } catch (error) {
-    console.error('[AionUi] Failed to restore zoom factor:', error);
+    console.error('[CentaurAI] Failed to restore zoom factor:', error);
     initializeZoomFactor(undefined);
   }
 
@@ -1082,7 +1083,7 @@ const handleAppReady = async (): Promise<void> => {
     loadSavedWindowBounds(await ProcessConfig.get('window.bounds'));
     mark('restoreWindowBounds');
   } catch (error) {
-    console.error('[AionUi] Failed to restore window bounds:', error);
+    console.error('[CentaurAI] Failed to restore window bounds:', error);
     loadSavedWindowBounds(undefined);
   }
 
@@ -1288,7 +1289,7 @@ void app
   .then(handleAppReady)
   .catch((error) => {
     // App initialization failed
-    console.error('[AionUi] App initialization failed:', error);
+    console.error('[CentaurAI] App initialization failed:', error);
     app.quit();
   });
 
@@ -1349,11 +1350,11 @@ installQuitCleanup({
 });
 
 app.on('will-quit', () => {
-  console.log('[AionUi] will-quit — all cleanup should be complete');
+  console.log('[CentaurAI] will-quit — all cleanup should be complete');
 });
 
 app.on('quit', (_event, exitCode) => {
-  console.log(`[AionUi] quit (exitCode=${exitCode})`);
+  console.log(`[CentaurAI] quit (exitCode=${exitCode})`);
 });
 
 // In this file you can include the rest of your app's specific main process

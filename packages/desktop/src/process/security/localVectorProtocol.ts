@@ -108,7 +108,7 @@ export function createLocalVectorProtocolHandler(
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error('[AionUi] Local vector proxy failed:', message);
+      console.error('[CentaurAI] Local vector proxy failed:', message);
       return Response.json({ error: 'VECTOR_DB_UNREACHABLE' }, { status: 502, headers: responseCorsHeaders });
     }
   };

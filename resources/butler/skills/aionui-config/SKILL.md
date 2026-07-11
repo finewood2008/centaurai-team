@@ -1,6 +1,10 @@
 ---
 name: aionui-config
-description: Configure CentaurAI itself through its backend API — create and edit assistants (name, avatar, system prompt, quick-start prompts, engine), import and attach skills, manage MCP servers, configure LLM providers (add/edit a model endpoint, set the API key, fetch the model list, pick the default model), and change app/UI settings (language, theme, font size, zoom, notifications). Use when the user wants you to set up a CentaurAI assistant, sink a skill into CentaurAI's skill registry, attach skills to an assistant, change an assistant's avatar or system prompt, add or configure an MCP server, add an LLM/model provider or API key, switch the default model, change the theme or language, or otherwise configure their CentaurAI installation. This is "Agent-assisted CentaurAI configuration": you act on the user's behalf via the local backend.
+description: >-
+  Configure CentaurAI through its backend API: create and edit assistants,
+  import and attach skills, manage MCP servers, configure LLM providers and
+  API keys, select models, and change app or UI settings. Use when the user
+  wants Codex to configure a running CentaurAI installation on their behalf.
 ---
 
 > **⚠️ Platform note — read before running any command.** The shell snippets in this skill are written for **macOS / Linux** (bash/zsh). Always check which OS you are on first. On **Windows** do **not** run them verbatim — the underlying tool/CLI commands are usually cross-platform, but the surrounding shell syntax is not. Translate it to PowerShell before running:
@@ -21,12 +25,12 @@ description: Configure CentaurAI itself through its backend API — create and e
 
 # CentaurAI Config
 
-Configure a running CentaurAI installation by calling its backend (aioncore) REST API.
+Configure a running CentaurAI installation through the CentaurAI Core REST API.
 Everything here has been verified end-to-end against a live backend.
 
 ## How it works
 
-CentaurAI is front/back separated. The Electron UI talks to a local `aioncore`
+CentaurAI is front/back separated. The Electron UI talks to local `centaurai-core`
 backend over HTTP. Assistants, skills, and their rules all live behind that
 backend — there is no config file to edit anymore. You configure CentaurAI by
 calling the API.
@@ -44,6 +48,9 @@ python3 scripts/aionui_api.py discover          # prints e.g. http://127.0.0.1:5
 ```
 
 If `discover` fails, CentaurAI is not running — tell the user to launch it, don't guess a port.
+The helper accepts legacy `aioncore` only when
+`CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK=1` (or `AIONUI_BACKEND_ALLOW_LEGACY=1`)
+is set explicitly; never enable fallback silently.
 
 Helper commands (all print the JSON response):
 

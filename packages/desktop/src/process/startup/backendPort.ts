@@ -5,6 +5,7 @@ export function resolvePreferredBackendPort(
   isPackaged = false
 ): number | undefined {
   const raw =
+    env.CENTAURAI_DEV_BACKEND_PORT ??
     env.AIONUI_DEV_BACKEND_PORT ??
     env.AIONUI_BACKEND_PORT ??
     (!isPackaged && env.NODE_ENV === 'development' ? String(DEFAULT_DEV_BACKEND_PORT) : undefined);

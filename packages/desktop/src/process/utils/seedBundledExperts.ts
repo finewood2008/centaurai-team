@@ -135,7 +135,7 @@ async function syncExpertMetadata(manifest: ExpertManifestEntry[]): Promise<bool
   try {
     existingAssistants = await ipcBridge.assistants.list.invoke();
   } catch (error) {
-    console.error('[AionUi] Failed to read assistant catalog for expert metadata sync:', error);
+    console.error('[CentaurAI] Failed to read assistant catalog for expert metadata sync:', error);
     return false;
   }
 
@@ -165,10 +165,10 @@ async function syncExpertMetadata(manifest: ExpertManifestEntry[]): Promise<bool
   const results = await Promise.allSettled(updates.map((update) => ipcBridge.assistants.update.invoke(update)));
   const failed = results.filter((result) => result.status === 'rejected');
   if (failed.length > 0) {
-    console.error(`[AionUi] Expert metadata sync partial: ${failed.length}/${updates.length} failed`, failed[0]);
+    console.error(`[CentaurAI] Expert metadata sync partial: ${failed.length}/${updates.length} failed`, failed[0]);
     return false;
   }
-  console.log(`[AionUi] Synced localized metadata for ${updates.length} bundled experts`);
+  console.log(`[CentaurAI] Synced localized metadata for ${updates.length} bundled experts`);
   return true;
 }
 
@@ -217,7 +217,7 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
 
   const expertsDir = resolveExpertsDir();
   if (!expertsDir) {
-    console.warn('[AionUi] Bundled experts dataset not found; skipping expert seed');
+    console.warn('[CentaurAI] Bundled experts dataset not found; skipping expert seed');
     return true;
   }
 
@@ -227,7 +227,7 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
     const parsed = JSON.parse(raw) as unknown;
     manifest = Array.isArray(parsed) ? (parsed as ExpertManifestEntry[]) : [];
   } catch (error) {
-    console.error('[AionUi] Failed to read bundled experts manifest:', error);
+    console.error('[CentaurAI] Failed to read bundled experts manifest:', error);
     return false;
   }
   if (manifest.length === 0) return true;
@@ -236,14 +236,14 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
   try {
     const result = await ipcBridge.assistants.import.invoke({ assistants: manifest.map(toCreateRequest) });
     if (result.failed !== 0) {
-      console.error(`[AionUi] Expert seed import partial: ${result.failed} failed`, result.errors);
+      console.error(`[CentaurAI] Expert seed import partial: ${result.failed} failed`, result.errors);
       return false;
     }
     if (result.imported > 0 || result.skipped > 0) {
-      console.log(`[AionUi] Seeded ${result.imported} experts (skipped ${result.skipped})`);
+      console.log(`[CentaurAI] Seeded ${result.imported} experts (skipped ${result.skipped})`);
     }
   } catch (error) {
-    console.error('[AionUi] Expert seed import failed:', error);
+    console.error('[CentaurAI] Expert seed import failed:', error);
     return false;
   }
 
@@ -259,11 +259,11 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
   outcomes.forEach((outcome, index) => {
     if (outcome.status === 'rejected') {
       ruleFailures += 1;
-      console.error(`[AionUi] Failed to seed rules for '${manifest[index].id}':`, outcome.reason);
+      console.error(`[CentaurAI] Failed to seed rules for '${manifest[index].id}':`, outcome.reason);
     }
   });
   if (ruleFailures > 0) {
-    console.error(`[AionUi] Expert rule seed partial: ${ruleFailures}/${manifest.length} failed`);
+    console.error(`[CentaurAI] Expert rule seed partial: ${ruleFailures}/${manifest.length} failed`);
     return false;
   }
 
@@ -271,7 +271,7 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
     try {
       await accessor.set(SEED_FLAG, SEED_VERSION);
     } catch (error) {
-      console.warn('[AionUi] Failed to persist expert seed flag', error);
+      console.warn('[CentaurAI] Failed to persist expert seed flag', error);
     }
   }
   return true;

@@ -351,7 +351,7 @@ export const saveUserWebUIConfig = async (config: WebUIUserConfig): Promise<void
 //   production -> 25808, dev -> 25809, multi-instance dev -> 25810
 const DEFAULT_WEBUI_PORT = (() => {
   if (process.env.NODE_ENV === 'production') return 25808;
-  if (process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
+  if (process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
   return 25809;
 })();
 
@@ -362,7 +362,7 @@ export const resolveWebUIPort = (
   const cliPort = parsePortValue(getSwitchValue('port') ?? getSwitchValue('webui-port'));
   if (cliPort) return cliPort;
 
-  const envPort = parsePortValue(process.env.AIONUI_PORT ?? process.env.PORT);
+  const envPort = parsePortValue(process.env.CENTAURAI_PORT ?? process.env.AIONUI_PORT ?? process.env.PORT);
   if (envPort) return envPort;
 
   const configPort = parsePortValue(config.port);
@@ -372,7 +372,9 @@ export const resolveWebUIPort = (
 };
 
 export const resolveRemoteAccess = (config: WebUIUserConfig, isRemoteMode: boolean): boolean => {
-  const envRemote = parseBooleanEnv(process.env.AIONUI_ALLOW_REMOTE || process.env.AIONUI_REMOTE);
+  const envRemote = parseBooleanEnv(
+    process.env.CENTAURAI_ALLOW_REMOTE || process.env.AIONUI_ALLOW_REMOTE || process.env.AIONUI_REMOTE
+  );
   const hostHint = process.env.AIONUI_HOST?.trim();
   const hostRequestsRemote = hostHint ? ['0.0.0.0', '::', '::0'].includes(hostHint) : false;
   const configRemote = config.allowRemote === true;
@@ -766,10 +768,11 @@ export const restoreDesktopWebUIFromPreferences = async (opts?: {
   const { enabled, allowRemote, port } = prefs;
   if (!enabled) return;
 
-  const preferredPort = port ?? DEFAULT_WEBUI_PORT;
+  const preferredPort = resolveWebUIPort({ port }, () => undefined);
+  const resolvedAllowRemote = resolveRemoteAccess({ allowRemote }, false);
 
   try {
-    const handle = await startDesktopWebUI({ port: preferredPort, allowRemote });
+    const handle = await startDesktopWebUI({ port: preferredPort, allowRemote: resolvedAllowRemote });
     await opts?.onRestored?.(handle);
     console.log(
       `[WebUI] Auto-restored from desktop preferences (port=${handle.port}, allowRemote=${handle.allowRemote})`

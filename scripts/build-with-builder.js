@@ -197,10 +197,11 @@ function tryRemoveDir(targetDir) {
 function isProcessRunningWindows(imageName) {
   if (process.platform !== 'win32') return false;
   try {
-    const result = execSync(`tasklist /FI "IMAGENAME eq ${imageName}"`, {
-      stdio: ['ignore', 'pipe', 'ignore'],
+    const result = spawnSync('tasklist', ['/FI', `IMAGENAME eq ${imageName}`], {
+      encoding: 'utf8',
+      windowsHide: true,
     });
-    return result.toString().toLowerCase().includes(imageName.toLowerCase());
+    return result.status === 0 && result.stdout.toLowerCase().includes(imageName.toLowerCase());
   } catch {
     return false;
   }
@@ -210,9 +211,37 @@ function killWindowsProcesses(imageNames) {
   if (process.platform !== 'win32') return;
   for (const name of imageNames) {
     try {
-      execSync(`taskkill /F /IM ${name}`, { stdio: 'ignore' });
+      spawnSync('taskkill', ['/F', '/IM', name], { stdio: 'ignore', windowsHide: true });
     } catch {}
   }
+}
+
+function readBuilderConfigScalar(configPath, key) {
+  try {
+    const absolutePath = path.resolve(__dirname, '..', configPath);
+    const content = fs.readFileSync(absolutePath, 'utf8');
+    const match = content.match(new RegExp(`^${key}:\\s*(.+?)\\s*$`, 'm'));
+    if (!match) return null;
+    return match[1].trim().replace(/^(['"])(.*)\1$/, '$2');
+  } catch {
+    return null;
+  }
+}
+
+function listWindowsUnpackedDirs(outDir) {
+  if (!fs.existsSync(outDir)) return [];
+  return fs
+    .readdirSync(outDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && /^win(?:-[a-z0-9]+)?-unpacked$/i.test(entry.name))
+    .map((entry) => path.join(outDir, entry.name));
+}
+
+function findWindowsUnpackedExecutable(outDir, executableName) {
+  for (const unpackedDir of listWindowsUnpackedDirs(outDir)) {
+    const candidate = path.join(unpackedDir, executableName);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 function formatExecError(error) {
@@ -325,6 +354,7 @@ const editionBuilderConfig =
       : 'packages/desktop/electron-builder.yml';
 const builderConfig =
   builderConfigIdx >= 0 && args[builderConfigIdx + 1] ? args[builderConfigIdx + 1] : editionBuilderConfig;
+const windowsExecutableName = `${readBuilderConfigScalar(builderConfig, 'executableName') || 'CentaurAI'}.exe`;
 
 const builderArgs = args
   .filter((arg, i) => {
@@ -477,15 +507,15 @@ try {
     return;
   }
 
-  // 5. Prepare aioncore binary (for packaged runtime usage)
-  const { prepareAioncore } = require('../packages/shared-scripts/src/prepare-aioncore.js');
-  const { resolveAioncoreVersion } = require('./resolveAioncoreVersion.js');
+  // 5. Prepare the pinned CentaurAI Core release (for packaged runtime usage)
+  const { prepareCentauraiCore } = require('../packages/shared-scripts/src/prepare-centaurai-core.js');
+  const { resolveCentauraiCoreVersion } = require('./resolveCentauraiCoreVersion.js');
   const projectRoot = path.resolve(__dirname, '..');
-  prepareAioncore({
+  prepareCentauraiCore({
     projectRoot,
     platform: process.platform,
     arch: targetArch,
-    version: resolveAioncoreVersion(projectRoot),
+    version: resolveCentauraiCoreVersion(projectRoot),
   });
 
   // 6. Prepare hub resources (index.json + extension zips for offline fallback)
@@ -552,17 +582,19 @@ try {
   }
 
   if (process.platform === 'win32' && builderArgs.includes('--win')) {
-    const winUnpackedDir = path.join(outDir, 'win-unpacked');
-    let cleaned = tryRemoveDir(winUnpackedDir);
+    const removeWindowsUnpackedDirs = () => listWindowsUnpackedDirs(outDir).map(tryRemoveDir).every(Boolean);
+    let cleaned = removeWindowsUnpackedDirs();
     if (!cleaned) {
-      const aionRunning = isProcessRunningWindows('AionUi.exe');
+      const appRunning = isProcessRunningWindows(windowsExecutableName);
       const electronRunning = isProcessRunningWindows('electron.exe');
-      if (aionRunning || electronRunning) {
-        console.log('⚠️  Detected running AionUi/Electron process. Attempting to close...');
-        killWindowsProcesses(['AionUi.exe', 'electron.exe']);
-        cleaned = tryRemoveDir(winUnpackedDir);
+      if (appRunning || electronRunning) {
+        console.log(`⚠️  Detected running ${windowsExecutableName}/Electron process. Attempting to close...`);
+        killWindowsProcesses([windowsExecutableName, 'electron.exe']);
+        cleaned = removeWindowsUnpackedDirs();
         if (!cleaned) {
-          console.log('⚠️  Directory still locked. Please close any running AionUi/Electron processes and retry.');
+          console.log(
+            `⚠️  Directory still locked. Please close any running ${windowsExecutableName}/Electron processes and retry.`
+          );
         }
       }
     }
@@ -577,16 +609,16 @@ try {
   try {
     buildWithDmgRetry(builderCommand, targetArch);
   } catch (error) {
-    const winExePath = path.join(outDir, 'win-unpacked', 'AionUi.exe');
+    const winExePath = findWindowsUnpackedExecutable(outDir, windowsExecutableName);
     const firstError = formatExecError(error);
     const canRetryWithoutExecutableEdit =
-      process.platform === 'win32' && isWindowsBuild && process.env.CI !== 'true' && fs.existsSync(winExePath);
+      process.platform === 'win32' && isWindowsBuild && process.env.CI !== 'true' && Boolean(winExePath);
 
     if (!canRetryWithoutExecutableEdit) {
       throw error;
     }
 
-    console.log('⚠️  Windows local build failed after AionUi.exe was produced.');
+    console.log(`⚠️  Windows local build failed after ${windowsExecutableName} was produced.`);
     if (firstError) {
       console.log('   First failure summary:');
       console.log(
@@ -599,7 +631,7 @@ try {
     }
     console.log('   Retrying local build with win.signAndEditExecutable=false...');
     console.log('   This fallback is intended for transient rcedit / file-lock failures on developer machines.');
-    killWindowsProcesses(['AionUi.exe', 'electron.exe']);
+    killWindowsProcesses([windowsExecutableName, 'electron.exe']);
     cleanupWindowsPackOutput();
 
     try {

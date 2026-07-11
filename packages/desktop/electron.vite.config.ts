@@ -88,7 +88,12 @@ function iconParkPlugin() {
 // Common path aliases for main process and workers
 const desktopSrcRoot = resolve('packages/desktop/src');
 const rendererRoot = resolve('packages/desktop/src/renderer');
-const devBackendPort = Number.parseInt(process.env.AIONUI_DEV_BACKEND_PORT ?? String(DEFAULT_DEV_BACKEND_PORT), 10);
+const devBackendPort = Number.parseInt(
+  process.env.CENTAURAI_DEV_BACKEND_PORT ?? process.env.AIONUI_DEV_BACKEND_PORT ?? String(DEFAULT_DEV_BACKEND_PORT),
+  10
+);
+const buildEdition = process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION;
+const multiInstance = process.env.CENTAURAI_MULTI_INSTANCE ?? process.env.AIONUI_MULTI_INSTANCE ?? '';
 const devBackendTarget = `http://127.0.0.1:${devBackendPort}`;
 
 const mainAliases = {
@@ -162,6 +167,9 @@ export default defineConfig(({ mode }) => {
       build: {
         sourcemap: enableSentrySourceMaps ? 'hidden' : isDevelopment,
         reportCompressedSize: false,
+        commonjsOptions: {
+          include: [/node_modules/, /packages[\\/]shared-scripts[\\/]src/],
+        },
         rollupOptions: {
           input: {
             index: resolve('packages/desktop/src/index.ts'),
@@ -177,10 +185,13 @@ export default defineConfig(({ mode }) => {
       define: {
         'process.env.NODE_ENV': JSON.stringify(mode),
         'process.env.env': JSON.stringify(process.env.env),
+        'process.env.CENTAURAI_MULTI_INSTANCE': JSON.stringify(multiInstance),
+        'process.env.CENTAURAI_PORT': JSON.stringify(process.env.CENTAURAI_PORT ?? ''),
+        'process.env.CENTAURAI_ALLOW_REMOTE': JSON.stringify(process.env.CENTAURAI_ALLOW_REMOTE ?? ''),
         'process.env.SENTRY_DSN': JSON.stringify(process.env.SENTRY_DSN ?? ''),
         // Build-time product edition (full | decision | team), baked per installer.
         // See common/config/constants.ts. Unset ⇒ 'full' (the unsplit app).
-        __EDITION__: JSON.stringify(process.env.AIONUI_EDITION === 'decision' ? 'decision' : process.env.AIONUI_EDITION === 'team' ? 'team' : 'full'),
+        __EDITION__: JSON.stringify(buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'),
       },
     },
 
@@ -349,7 +360,8 @@ export default defineConfig(({ mode }) => {
       define: {
         'process.env.NODE_ENV': JSON.stringify(mode),
         'process.env.env': JSON.stringify(process.env.env),
-        'process.env.AIONUI_MULTI_INSTANCE': JSON.stringify(process.env.AIONUI_MULTI_INSTANCE ?? ''),
+        'process.env.CENTAURAI_MULTI_INSTANCE': JSON.stringify(multiInstance),
+        'process.env.AIONUI_MULTI_INSTANCE': JSON.stringify(multiInstance),
         'process.env.SENTRY_DSN': JSON.stringify(process.env.SENTRY_DSN ?? ''),
         // Inject the real AionUi version (root package.json) so renderer code
         // can show it without importing packages/desktop/package.json, which is
@@ -358,7 +370,7 @@ export default defineConfig(({ mode }) => {
         // Build-time product edition (full | decision | team), baked per installer.
         // Both define blocks read the SAME AIONUI_EDITION env → single build-time
         // source of truth across main + renderer. Unset ⇒ 'full' (the unsplit app).
-        __EDITION__: JSON.stringify(process.env.AIONUI_EDITION === 'decision' ? 'decision' : process.env.AIONUI_EDITION === 'team' ? 'team' : 'full'),
+        __EDITION__: JSON.stringify(buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'),
         global: 'globalThis',
       },
       optimizeDeps: {

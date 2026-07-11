@@ -54,7 +54,7 @@ export const DEFAULT_IMAGE_EXTENSION = '.png';
 /** WebUI default port: 25808 for production, 25809 for development, 25810 for multi-instance dev */
 export const WEBUI_DEFAULT_PORT = (() => {
   if (process.env.NODE_ENV === 'production') return 25808;
-  if (process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
+  if (process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
   return 25809;
 })();
 
@@ -82,7 +82,9 @@ function normalizeEdition(value: string | undefined): Edition {
   return value === 'decision' || value === 'team' ? value : 'full';
 }
 
-const ENV_EDITION: Edition = normalizeEdition(typeof process !== 'undefined' ? process.env.AIONUI_EDITION : undefined);
+const ENV_EDITION: Edition = normalizeEdition(
+  typeof process !== 'undefined' ? process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION : undefined
+);
 
 export const EDITION: Edition = typeof __EDITION__ !== 'undefined' ? normalizeEdition(__EDITION__) : ENV_EDITION;
 export const IS_DECISION = EDITION === 'decision';

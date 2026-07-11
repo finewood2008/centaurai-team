@@ -207,6 +207,7 @@ worktrees/
 docs/superpowers/
 resources/bundled-bun
 resources/bundled-aioncore
+resources/bundled-centaurai-core
 resources/hub
 
 # Server build output

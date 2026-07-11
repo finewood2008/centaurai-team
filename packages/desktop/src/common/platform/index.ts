@@ -9,7 +9,7 @@ let _services: IPlatformServices | null = null;
  * Centralised so that every call-site stays in sync.
  */
 export function getDevAppName(): string {
-  const isMultiInstance = process.env.AIONUI_MULTI_INSTANCE === '1';
+  const isMultiInstance = process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1';
   return isMultiInstance ? 'CentaurAI-Dev-2' : 'CentaurAI-Dev';
 }
 

@@ -98,4 +98,22 @@ describe('configureConsoleLog', () => {
 
     expect(log.transports.console.level).toBe('silly');
   });
+
+  it.each(['[centaurai-core]', '[aioncore]'])('normalizes %s backend logs to the canonical prefix', async (prefix) => {
+    const log = await loadConfigureConsoleLog(false);
+    const hook = log.hooks.push.mock.calls[0]?.[0] as
+      | ((message: { data: unknown[]; level: string }) => { data: unknown[]; level: string })
+      | undefined;
+
+    expect(hook).toBeTypeOf('function');
+    expect(
+      hook?.({
+        data: [`${prefix} 2026-07-11T12:34:56.000000Z  WARN centaurai_core::startup: delayed`, 'context'],
+        level: 'info',
+      })
+    ).toEqual({
+      data: ['[centaurai-core] centaurai_core::startup: delayed', 'context'],
+      level: 'warn',
+    });
+  });
 });

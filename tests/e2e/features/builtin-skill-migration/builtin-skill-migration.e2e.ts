@@ -22,6 +22,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { resolveTestCoreBinary } from '../../../coreBinary';
 import { test, expect } from '../../fixtures';
 import { httpDelete, httpGet, httpPost } from '../../helpers';
 
@@ -76,13 +77,7 @@ interface MaterializeResponse {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function resolveBackendBinary(): string {
-  const candidates = [process.env.AIONUI_BACKEND_BINARY, path.join(os.homedir(), '.cargo', 'bin', 'aioncore')].filter(
-    (x): x is string => typeof x === 'string' && x.length > 0
-  );
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  throw new Error('aioncore binary not found. Set AIONUI_BACKEND_BINARY or install to ~/.cargo/bin/aioncore.');
+  return resolveTestCoreBinary().path;
 }
 
 // ── Suite ───────────────────────────────────────────────────────────────────
@@ -279,7 +274,7 @@ test.describe('Built-in Skill Migration (T3)', () => {
 
   // ── Scenarios 6 & 8 — require a fresh data-dir / cold boot ────────────────
   //
-  // Run against a sibling `aioncore` process on port 25903 against a
+  // Run against a sibling CentaurAI Core process on port 25903 against a
   // tmp data-dir (same pattern as the assistant-user-data pilot's
   // S8/S9/S10). This lets us seed pre-existing state and observe the
   // startup/legacy-cleanup behaviour without tearing down the main
@@ -340,7 +335,7 @@ test.describe('Built-in Skill Migration (T3)', () => {
 
     async function startBackend(): Promise<void> {
       const bin = resolveBackendBinary();
-      const logPath = path.join(dataDir, 'sibling-aioncore.log');
+      const logPath = path.join(dataDir, 'sibling-centaurai-core.log');
       const logFd = fs.openSync(logPath, 'a');
       const parentEnv = { ...process.env };
       // Scrub any env vars that would leak main-Electron backend state.

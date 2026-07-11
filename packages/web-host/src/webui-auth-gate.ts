@@ -159,7 +159,8 @@ export function createAuthGate(opts?: {
 
     try {
       const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as AuthGatePayload;
-      if (!Number.isSafeInteger(decoded.exp) || decoded.exp <= nowSec()) return null;
+      const expiresAt = decoded.exp;
+      if (typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt) || expiresAt <= nowSec()) return null;
       if (typeof decoded.sid !== 'string' || !decoded.sid) return null;
       return decoded;
     } catch {
@@ -195,10 +196,11 @@ export function createAuthGate(opts?: {
       const sessionId = randomBytes(18).toString('base64url');
       const exp = nowSec() + args.ttlSec;
       const userId = args.identity?.userId.trim() || undefined;
+      const username = args.identity?.username;
       const body: AuthGatePayload = { exp, sid: sessionId };
       if (userId) {
         body.user_id = userId;
-        if (args.identity.username) body.username = args.identity.username;
+        if (username) body.username = username;
       }
       const payload = Buffer.from(JSON.stringify(body)).toString('base64url');
       reserveSessionSlot(userId);

@@ -43,6 +43,13 @@ export type BackendInstallDiagnostics = {
   manifestSize?: number;
   manifestSourceType?: string;
   manifestVersion?: string;
+  manifestRepository?: string;
+  manifestTag?: string;
+  manifestCommit?: string;
+  manifestArtifactUrl?: string;
+  manifestSha256?: string;
+  manifestBinaryName?: string;
+  manifestFallbackUsed?: boolean;
   platform: NodeJS.Platform;
   resourcesDirMtimeMs?: number;
   resourcesPath?: string;
@@ -52,7 +59,7 @@ export type BackendInstallDiagnostics = {
 };
 
 const MANIFEST_FILE_NAME = 'manifest.json';
-const BUNDLED_AIONCORE_DIR = 'bundled-aioncore';
+const BUNDLED_CENTAURAI_CORE_DIR = 'bundled-centaurai-core';
 
 function getString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -120,10 +127,23 @@ function applyManifest(diagnostics: BackendInstallDiagnostics, manifestText: str
   try {
     const manifest = JSON.parse(manifestText) as Record<string, unknown>;
     const version = getString(manifest.version);
+    const tag = getString(manifest.tag);
+    const repository = getString(manifest.repository);
+    const commit = getString(manifest.commit);
+    const artifactUrl = getString(manifest.artifactUrl);
+    const sha256 = getString(manifest.sha256);
+    const binaryName = getString(manifest.binaryName);
     const generatedAt = getString(manifest.generatedAt);
     const sourceType = getString(manifest.sourceType);
     const files = getStringArray(manifest.files);
     if (version) diagnostics.manifestVersion = version;
+    if (tag) diagnostics.manifestTag = tag;
+    if (repository) diagnostics.manifestRepository = repository;
+    if (commit) diagnostics.manifestCommit = commit;
+    if (artifactUrl) diagnostics.manifestArtifactUrl = artifactUrl;
+    if (sha256) diagnostics.manifestSha256 = sha256;
+    if (binaryName) diagnostics.manifestBinaryName = binaryName;
+    if (typeof manifest.fallbackUsed === 'boolean') diagnostics.manifestFallbackUsed = manifest.fallbackUsed;
     if (generatedAt) diagnostics.manifestGeneratedAt = generatedAt;
     if (sourceType) diagnostics.manifestSourceType = sourceType;
     if (files) diagnostics.manifestFiles = files;
@@ -143,11 +163,19 @@ export function collectBackendInstallDiagnostics(
   const resourcesPath = getString(details?.resourcesPath) ?? env.resourcesPath;
   const runtimeKey = getString(details?.runtimeKey);
   const binaryName = getString(details?.binaryName);
-  const bundledDirPath = resourcesPath ? pathApi.join(resourcesPath, BUNDLED_AIONCORE_DIR) : undefined;
-  const runtimeDirPath =
-    resourcesPath && runtimeKey ? pathApi.join(resourcesPath, BUNDLED_AIONCORE_DIR, runtimeKey) : undefined;
+  const checkedBundledPath = getString(details?.checkedBundledPath);
+  const runtimeDirPath = checkedBundledPath
+    ? pathApi.dirname(checkedBundledPath)
+    : resourcesPath && runtimeKey
+      ? pathApi.join(resourcesPath, BUNDLED_CENTAURAI_CORE_DIR, runtimeKey)
+      : undefined;
+  const bundledDirPath = runtimeDirPath
+    ? pathApi.dirname(runtimeDirPath)
+    : resourcesPath
+      ? pathApi.join(resourcesPath, BUNDLED_CENTAURAI_CORE_DIR)
+      : undefined;
   const binaryPath =
-    getString(details?.checkedBundledPath) ??
+    checkedBundledPath ??
     (runtimeDirPath && binaryName ? pathApi.join(runtimeDirPath, binaryName) : undefined);
   const manifestPath = runtimeDirPath ? pathApi.join(runtimeDirPath, MANIFEST_FILE_NAME) : undefined;
 

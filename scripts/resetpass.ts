@@ -12,7 +12,7 @@
  *   1. A `bun run webui` is already running on the default port → reach its
  *      reverse-proxied /api/webui/reset-password directly. Users don't have to
  *      stop the server first; the just-reset password can be used immediately.
- *   2. No webui running → spawn a short-lived aioncore against the same
+ *   2. No webui running → spawn a short-lived CentaurAI Core against the same
  *      data-dir, POST /api/webui/reset-password, and stop the backend. This is
  *      the offline / cold-start path.
  *
@@ -23,14 +23,12 @@
  *   NODE_ENV=production bun run resetpass
  */
 
-import { execSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { startBackend, stopBackend } from '@aionui/web-host';
-
-const BACKEND_BINARY = process.platform === 'win32' ? 'aioncore.exe' : 'aioncore';
+import { resolveCoreBinary } from '../packages/shared-scripts/src/resolve-core-binary.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), '..');
@@ -80,24 +78,21 @@ function resolveWorkDir(): string {
 }
 
 function resolveBackendBinary(): string {
-  if (process.env.AIONUI_BACKEND_BIN) return process.env.AIONUI_BACKEND_BIN;
-
-  const bundledBase = process.env.AIONUI_BACKEND_BUNDLED_DIR ?? path.join(repoRoot, 'resources', 'bundled-aioncore');
-  const runtimeKey = `${process.platform}-${process.arch}`;
-  const bundled = path.join(bundledBase, runtimeKey, BACKEND_BINARY);
-  if (fs.existsSync(bundled)) return bundled;
-
-  try {
-    const cmd = process.platform === 'win32' ? `where ${BACKEND_BINARY}` : `which ${BACKEND_BINARY}`;
-    const found = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim().split(/\r?\n/)[0];
-    if (found && fs.existsSync(found)) return found;
-  } catch {
-    // fall through
-  }
-
-  throw new Error(
-    `Cannot find "${BACKEND_BINARY}". Set AIONUI_BACKEND_BIN, put it on PATH, or place it at ${bundled}.`
-  );
+  const resolution = resolveCoreBinary({ resourcesRoot: path.join(repoRoot, 'resources') });
+  const manifest = resolution.manifest ?? {};
+  const details = {
+    path: resolution.path,
+    source: resolution.source,
+    fallbackUsed: resolution.fallbackUsed,
+    repository: manifest.repository,
+    tag: manifest.tag,
+    commit: manifest.commit,
+    artifactUrl: manifest.artifactUrl,
+    sha256: manifest.sha256,
+  };
+  if (resolution.fallbackUsed) log.warning(`LEGACY FALLBACK: ${JSON.stringify(details)}`);
+  else log.info(`CentaurAI Core: ${JSON.stringify(details)}`);
+  return resolution.path;
 }
 
 /**
