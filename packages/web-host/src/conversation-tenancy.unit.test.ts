@@ -52,7 +52,7 @@ async function startBackend(initial: Conversation[]): Promise<BackendFixture> {
   };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
-    if (req.method === 'GET' && url.pathname === '/api/agents') {
+    if (req.method === 'GET' && url.pathname === '/api/agents/management') {
       send(res, 200, {
         success: true,
         data: [

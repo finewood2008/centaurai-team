@@ -6,7 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import type { AgentMetadata } from '@/renderer/utils/model/agentTypes';
-import { DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents } from '@/renderer/utils/model/agentTypes';
+import { DETECTED_AGENTS_SWR_KEY, fetchManagedAgents, MANAGED_AGENTS_SWR_KEY } from '@/renderer/utils/model/agentTypes';
 import AionModal from '@/renderer/components/base/AionModal';
 import { Button, Typography } from '@arco-design/web-react';
 import React, { useCallback, useState } from 'react';
@@ -17,66 +17,16 @@ import AgentCard from './AgentCard';
 import InlineAgentEditor, { type CustomAgentDraft } from './InlineAgentEditor';
 import { getAgentKey } from '@/renderer/pages/guid/hooks/agentSelectionUtils';
 
-/** Local storage key for caching full agent metadata (including disabled agents). */
-const AGENT_CACHE_KEY = 'centaurai.agents.cache';
-
-function loadCachedAgents(): AgentMetadata[] {
-  try {
-    const raw = localStorage.getItem(AGENT_CACHE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveCachedAgents(agents: AgentMetadata[]): void {
-  try {
-    localStorage.setItem(AGENT_CACHE_KEY, JSON.stringify(agents));
-  } catch { /* storage full - silent */ }
-}
-
 const LocalAgents: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  // Fetch detected agents (enabled+available only). Disabled agents come from local cache.
-  const { data: apiAgents = [], mutate: mutateApi } = useSWR<AgentMetadata[]>(
-    DETECTED_AGENTS_SWR_KEY,
-    fetchDetectedAgents
+  // The settings page needs Core's complete management view so "disabled" is
+  // never confused with "enabled but not installed".
+  const { data: allAgents = [], mutate: mutateManaged } = useSWR<AgentMetadata[]>(
+    MANAGED_AGENTS_SWR_KEY,
+    fetchManagedAgents
   );
-
-  // On first mount, populate cache from DB so ALL agents (even disabled ones) are known
-  React.useEffect(() => {
-    const cached = loadCachedAgents();
-    if (cached.length === 0) {
-      ipcBridge.acpConversation.getAllAgentsFromDb.invoke().then((all) => {
-        if (all && all.length > 0) {
-          saveCachedAgents(all);
-          mutateApi();
-          mutate(DETECTED_AGENTS_SWR_KEY);
-        }
-      }).catch(() => {});
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Merge API agents with cached disabled agents
-  const allAgents = React.useMemo(() => {
-    const apiIds = new Set(apiAgents.map((a) => a.id));
-    const cached = loadCachedAgents();
-    // API agents always win (they have fresh enabled state)
-    const merged = [...apiAgents];
-    for (const cachedAgent of cached) {
-      if (!apiIds.has(cachedAgent.id)) {
-        // Agent is not in API response → it's disabled
-        merged.push({ ...cachedAgent, enabled: false });
-      }
-    }
-    // Save merged list for next time
-    if (apiAgents.length > 0) {
-      saveCachedAgents(merged);
-    }
-    return merged;
-  }, [apiAgents]);
 
   const detectedAgents = allAgents.filter((a) => a.agent_type !== 'remote' && a.agent_source !== 'custom');
 
@@ -86,10 +36,8 @@ const LocalAgents: React.FC = () => {
   const [editingAgent, setEditingAgent] = useState<AgentMetadata | null>(null);
 
   const refreshAll = useCallback(async () => {
-    await mutateApi();
-    await mutate(DETECTED_AGENTS_SWR_KEY);
-    await mutate('agents.detected.all');
-  }, [mutateApi]);
+    await Promise.all([mutateManaged(), mutate(DETECTED_AGENTS_SWR_KEY), mutate('agents.detected.all')]);
+  }, [mutateManaged]);
 
   const handleSaveCustomAgent = useCallback(
     async (draft: CustomAgentDraft) => {

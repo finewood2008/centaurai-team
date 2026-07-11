@@ -225,58 +225,75 @@ describe('static-server', () => {
     expect(JSON.stringify(json)).not.toContain('FRAGMENT-SECRET');
   });
 
-  it('GET /api/agents returns a safe runtime projection without commands, env or host paths', async () => {
-    const backend = await startMockBackend((req, res) => {
-      if (req.url === '/api/agents' && req.method === 'GET') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            data: [
-              {
-                id: 'agent-1',
-                name: 'Safe Agent',
-                agent_type: 'acp',
-                agent_source: 'custom',
-                enabled: true,
-                available: true,
-                command: '/usr/local/bin/private-agent',
-                args: ['--token', 'arg-secret'],
-                env: [{ name: 'API_TOKEN', value: 'env-secret' }],
-                native_skills_dirs: ['/srv/private/skills'],
-                agent_source_info: { bridge_binary: '/srv/private/bridge' },
-                handshake: {
-                  available_modes: [{ id: 'default' }],
-                  auth_methods: [{ token: 'handshake-secret' }],
-                  config_options: [{ env: { SECRET: 'config-secret' } }],
+  it.each(['/api/agents', '/api/agents/management'])(
+    'GET %s returns a safe runtime projection without commands, env or host paths',
+    async (agentPath) => {
+      const backend = await startMockBackend((req, res) => {
+        if (req.url === agentPath && req.method === 'GET') {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              data: [
+                {
+                  id: 'agent-1',
+                  name: 'Safe Agent',
+                  agent_type: 'acp',
+                  agent_source: 'custom',
+                  enabled: true,
+                  available: true,
+                  installed: true,
+                  status: 'unchecked',
+                  command: '/usr/local/bin/private-agent',
+                  args: ['--token', 'arg-secret'],
+                  env: [{ name: 'API_TOKEN', value: 'env-secret' }],
+                  native_skills_dirs: ['/srv/private/skills'],
+                  agent_source_info: { bridge_binary: '/srv/private/bridge' },
+                  available_modes: { available_modes: [{ id: 'default', name: 'Default' }] },
+                  available_models: { available_models: [{ id: 'safe-model', label: 'Safe Model' }] },
+                  config_options: [{ id: 'safe-option', env: { SECRET: 'config-secret' } }],
+                  handshake: {
+                    available_modes: [{ id: 'default' }],
+                    auth_methods: [{ token: 'handshake-secret' }],
+                    config_options: [{ env: { SECRET: 'config-secret' } }],
+                  },
                 },
-              },
-            ],
-          })
-        );
-        return;
-      }
-      res.writeHead(404).end();
-    });
-    stopBackend = backend.close;
-    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
+              ],
+            })
+          );
+          return;
+        }
+        res.writeHead(404).end();
+      });
+      stopBackend = backend.close;
+      handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
 
-    const response = await fetch(`${handle.localUrl}/api/agents`);
-    expect(response.status).toBe(200);
-    const payload = (await response.json()) as { data: Array<Record<string, unknown>> };
-    expect(payload.data[0]).toMatchObject({ id: 'agent-1', name: 'Safe Agent', enabled: true, available: true });
-    const text = JSON.stringify(payload);
-    for (const secret of [
-      'private-agent',
-      'arg-secret',
-      'env-secret',
-      '/srv/private/skills',
-      '/srv/private/bridge',
-      'handshake-secret',
-      'config-secret',
-    ]) {
-      expect(text).not.toContain(secret);
+      const response = await fetch(`${handle.localUrl}${agentPath}`);
+      expect(response.status).toBe(200);
+      const payload = (await response.json()) as { data: Array<Record<string, unknown>> };
+      expect(payload.data[0]).toMatchObject({
+        id: 'agent-1',
+        name: 'Safe Agent',
+        enabled: true,
+        available: true,
+        installed: true,
+        status: 'unchecked',
+        available_modes: { available_modes: [{ id: 'default', name: 'Default' }] },
+        available_models: { available_models: [{ id: 'safe-model', label: 'Safe Model' }] },
+      });
+      const text = JSON.stringify(payload);
+      for (const secret of [
+        'private-agent',
+        'arg-secret',
+        'env-secret',
+        '/srv/private/skills',
+        '/srv/private/bridge',
+        'handshake-secret',
+        'config-secret',
+      ]) {
+        expect(text).not.toContain(secret);
+      }
     }
-  });
+  );
 
   it('GET /api/providers/:id strips API keys before returning single provider metadata', async () => {
     const backend = await startMockBackend((req, res) => {
@@ -324,11 +341,11 @@ describe('static-server', () => {
     handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
 
     const statuses = await Promise.all(
-      ['/api/providers', '/api/settings/client', '/api/agents', '/api/assistants'].map(
+      ['/api/providers', '/api/settings/client', '/api/agents', '/api/agents/management', '/api/assistants'].map(
         async (apiPath) => (await fetch(`${handle!.localUrl}${apiPath}`)).status
       )
     );
-    expect(statuses).toEqual([502, 502, 502, 502]);
+    expect(statuses).toEqual([502, 502, 502, 502, 502]);
   });
 
   it('/login reverse-proxies to backend (no local handler)', async () => {

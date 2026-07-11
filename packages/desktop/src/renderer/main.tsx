@@ -253,7 +253,7 @@ const Main = () => {
 
   useEffect(() => {
     if (!ready) return;
-    // Prefetch `/api/agents` in parallel with configService.initialize() and
+    // Prefetch Core's agent management catalog in parallel with configService.initialize() and
     // seed the shared SWR cache so the Guid page's model/mode selectors can
     // read `handshake.available_models` on the very first render — without
     // waiting for a session to be created.

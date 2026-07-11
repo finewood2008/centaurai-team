@@ -782,10 +782,16 @@ const LAN_AGENT_FIELDS = new Set([
   'agent_source',
   'enabled',
   'available',
+  'installed',
+  'status',
   'team_capable',
   'behavior_policy',
   'yolo_id',
   'handshake',
+  'config_options',
+  'available_modes',
+  'available_models',
+  'available_commands',
 ]);
 
 function projectLanAgent(value: unknown): Record<string, unknown> | null {
@@ -2670,7 +2676,13 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         return;
       }
 
-      if (req.method === 'GET' && (req.url === '/api/agents' || req.url.startsWith('/api/agents?'))) {
+      if (
+        req.method === 'GET' &&
+        (req.url === '/api/agents' ||
+          req.url.startsWith('/api/agents?') ||
+          req.url === '/api/agents/management' ||
+          req.url.startsWith('/api/agents/management?'))
+      ) {
         proxyAgentsSanitized(req, res, opts.backendPort, requireAuth);
         return;
       }

@@ -53,7 +53,7 @@ describe('static server conversation tenancy', () => {
         json(res, 200, { success: true, user: { id: userId, username: userId } });
         return;
       }
-      if (req.method === 'GET' && url.pathname === '/api/agents') {
+      if (req.method === 'GET' && url.pathname === '/api/agents/management') {
         json(res, 200, {
           success: true,
           data: [
@@ -152,7 +152,7 @@ describe('static server conversation tenancy', () => {
     const aliceToken = await login('alice');
     const bobToken = await login('bob');
     const lanAgents = (await (
-      await fetch(`${handle.localUrl}/api/agents`, {
+      await fetch(`${handle.localUrl}/api/agents/management`, {
         headers: { 'x-webui-gate-token': aliceToken, connection: 'close' },
       })
     ).json()) as { data: Array<{ id: string }> };

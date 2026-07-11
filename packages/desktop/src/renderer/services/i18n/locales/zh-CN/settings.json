@@ -1053,6 +1053,8 @@
     "editCustomAgent": "编辑自定义 Agent",
     "localAgentsEmpty": "未检测到本地 Agent",
     "detected": "已检测",
+    "notInstalled": "未安装",
+    "unavailable": "不可用",
     "customAgents": "自定义 Agents",
     "custom": "自定义",
     "addCustomAgent": "添加自定义 Agent",

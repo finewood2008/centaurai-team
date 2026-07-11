@@ -9,6 +9,7 @@ import { ipcBridge } from '@/common';
 import { getAgents } from '@/renderer/hooks/agent/useAgents';
 
 export type AgentCheckResult = {
+  id: string;
   backend: string;
   name: string;
   available: boolean;
@@ -87,8 +88,20 @@ export function useAgentReadinessCheck(options: UseAgentReadinessCheckOptions) {
     }));
 
     try {
+      const agents = await ipcBridge.acpConversation.getManagedAgents.invoke();
+      const current =
+        agents.find(
+          (agent) =>
+            agent.enabled &&
+            agent.available &&
+            (agent.id === agentToCheck || agent.backend === agentToCheck || agent.agent_type === agentToCheck)
+        ) ||
+        agents.find(
+          (agent) => agent.id === agentToCheck || agent.backend === agentToCheck || agent.agent_type === agentToCheck
+        );
+      if (!current) throw new Error(`Agent '${agentToCheck}' was not found`);
       const result = await ipcBridge.acpConversation.checkAgentHealth.invoke({
-        backend: agentToCheck,
+        id: current.id,
       });
 
       if (result.available) {
@@ -152,6 +165,7 @@ export function useAgentReadinessCheck(options: UseAgentReadinessCheckOptions) {
         .map((agent) => {
           const backendKey = (agent.backend || agent.agent_type) as string;
           return {
+            id: agent.id,
             backend: backendKey,
             name: AGENT_NAMES[backendKey] || agent.name,
             available: false,
@@ -185,7 +199,7 @@ export function useAgentReadinessCheck(options: UseAgentReadinessCheckOptions) {
 
         try {
           const healthResult = await ipcBridge.acpConversation.checkAgentHealth.invoke({
-            backend: agent.backend,
+            id: agent.id,
           });
           const latency = Date.now() - startTime;
 

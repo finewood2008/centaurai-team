@@ -976,8 +976,21 @@ export const mode = {
 export const acpConversation = {
   sendMessage: conversation.sendMessage,
   responseStream: conversation.responseStream,
-  getAvailableAgents: httpGet<AgentMetadata[], void>('/api/agents'),
-  refreshCustomAgents: httpPost<void, void>('/api/agents/refresh'),
+  getAvailableAgents: withResponseMap(
+    httpGet<AgentManagementApiRow[], void>('/api/agents/management'),
+    toAvailableAgentMetadata
+  ),
+  getManagedAgents: withResponseMap(
+    httpGet<AgentManagementApiRow[], void>('/api/agents/management'),
+    toManagedAgentMetadata
+  ),
+  // Core refreshes a single row after every custom-agent mutation and health
+  // check. A management-list read is therefore the canonical replacement for
+  // the removed legacy POST /api/agents/refresh endpoint.
+  refreshCustomAgents: withResponseMap(
+    httpGet<AgentManagementApiRow[], void>('/api/agents/management'),
+    (_rows): void => {}
+  ),
   testCustomAgent: httpPost<
     { step: 'success' } | { step: 'fail_cli'; error: string } | { step: 'fail_acp'; error: string },
     { command: string; acp_args?: string[]; env?: Record<string, string>; runtime_scope_id?: string }
@@ -1028,8 +1041,12 @@ export const acpConversation = {
   ),
   /** Read ALL agent_metadata rows directly from SQLite (bypasses API filter). */
   getAllAgentsFromDb: bridge.buildProvider<AgentMetadata[], void>('agents.getAllFromDb'),
-  checkAgentHealth: httpPost<{ available: boolean; latency?: number; error?: string }, { backend: string }>(
-    '/api/agents/health-check'
+  checkAgentHealth: withResponseMap(
+    httpPost<AgentManagementApiRow, { id: string }>(
+      (p) => `/api/agents/${p.id}/health-check`,
+      () => undefined
+    ),
+    toAgentHealthResult
   ),
   checkProviderHealth: httpPost<ProviderHealthCheckResponse, ProviderHealthCheckRequest>(
     '/api/agents/provider-health-check'
@@ -2271,6 +2288,95 @@ export const channel = {
 
 import type { HubExtensionStatus, IHubAgentItem } from '@/common/types/agent/hub';
 import type { AgentMetadata } from '@/renderer/utils/model/agentTypes';
+
+type AgentManagementApiRow = Omit<AgentMetadata, 'available' | 'handshake'> & {
+  installed: boolean;
+  status: 'online' | 'unchecked' | 'missing' | 'offline';
+  config_options?: unknown;
+  available_modes?: unknown;
+  available_models?: unknown;
+  available_commands?: unknown;
+  last_check_status?: 'online' | 'offline';
+  last_check_kind?: 'startup' | 'scheduled' | 'manual' | 'session';
+  last_check_error_code?: string;
+  last_check_error_message?: string;
+  last_check_error_details?: unknown;
+  last_check_guidance?: string;
+  last_check_latency_ms?: number;
+  last_check_at?: number;
+  last_success_at?: number;
+  last_failure_at?: number;
+  has_command_override?: boolean;
+  env_override_key_count?: number;
+};
+
+type AgentHealthResult = { available: boolean; latency?: number; error?: string };
+
+function isUsableManagementAgent(row: AgentManagementApiRow): boolean {
+  return row.installed && (row.status === 'online' || row.status === 'unchecked');
+}
+
+function supportsNewConversation(row: AgentManagementApiRow): boolean {
+  return row.agent_type === 'acp' || row.agent_type === 'aionrs';
+}
+
+function toAgentMetadata(row: AgentManagementApiRow): AgentMetadata {
+  const {
+    installed: _installed,
+    status: _status,
+    config_options,
+    available_modes,
+    available_models,
+    available_commands,
+    last_check_status: _lastCheckStatus,
+    last_check_kind: _lastCheckKind,
+    last_check_error_code: _lastCheckErrorCode,
+    last_check_error_message: _lastCheckErrorMessage,
+    last_check_error_details: _lastCheckErrorDetails,
+    last_check_guidance: _lastCheckGuidance,
+    last_check_latency_ms: _lastCheckLatencyMs,
+    last_check_at: _lastCheckAt,
+    last_success_at: _lastSuccessAt,
+    last_failure_at: _lastFailureAt,
+    has_command_override: _hasCommandOverride,
+    env_override_key_count: _envOverrideKeyCount,
+    ...metadata
+  } = row;
+  return {
+    ...metadata,
+    available: isUsableManagementAgent(row),
+    management_status: row.status,
+    handshake: {
+      config_options,
+      available_modes,
+      available_models,
+      available_commands,
+    },
+  };
+}
+
+function toAvailableAgentMetadata(rows: AgentManagementApiRow[]): AgentMetadata[] {
+  return rows
+    .filter((row) => row.enabled && supportsNewConversation(row) && isUsableManagementAgent(row))
+    .map(toAgentMetadata);
+}
+
+function toManagedAgentMetadata(rows: AgentManagementApiRow[]): AgentMetadata[] {
+  return rows.map(toAgentMetadata);
+}
+
+function toAgentHealthResult(row: AgentManagementApiRow): AgentHealthResult {
+  const available = row.enabled && row.installed && row.status === 'online';
+  return {
+    available,
+    latency: row.last_check_latency_ms,
+    error: available
+      ? undefined
+      : row.last_check_error_message ||
+        row.last_check_guidance ||
+        (row.enabled ? `Agent is ${row.status}` : 'Agent is disabled'),
+  };
+}
 
 export const hub = {
   getExtensionList: httpGet<IHubAgentItem[], void>('/api/hub/extensions'),

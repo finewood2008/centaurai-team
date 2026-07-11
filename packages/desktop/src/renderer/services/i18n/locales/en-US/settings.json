@@ -1052,6 +1052,8 @@
     "editCustomAgent": "Edit Custom Agent",
     "localAgentsEmpty": "No local agents detected",
     "detected": "Detected",
+    "notInstalled": "Not installed",
+    "unavailable": "Unavailable",
     "customAgents": "Custom Agents",
     "custom": "Custom",
     "addCustomAgent": "Add Custom Agent",

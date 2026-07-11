@@ -22,6 +22,8 @@ type DetectedAgent = {
   isExtension?: boolean;
   avatar?: string;
   enabled: boolean;
+  available: boolean;
+  management_status?: 'online' | 'unchecked' | 'missing' | 'offline';
 };
 
 /** Minimal custom-agent fields consumed by the 'custom' card variant. */
@@ -35,6 +37,7 @@ type CustomAgentCardData = {
   /** Launch arguments for the CLI. */
   args?: string[];
   enabled: boolean;
+  available: boolean;
 };
 
 type AgentCardProps =
@@ -60,6 +63,7 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
   if (props.type === 'detected') {
     const { agent, onGoToChat, onToggle } = props;
     const displayName = getAgentDisplayName(agent);
+    const canStartChat = agent.enabled !== false && agent.available !== false;
     const extensionAvatar = resolveExtensionAssetUrl(agent.isExtension ? agent.avatar : undefined);
     const logo =
       extensionAvatar ||
@@ -92,7 +96,13 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
             <div className='flex items-center justify-center gap-6px'>
               <Switch size='small' checked={agent.enabled !== false} onChange={onToggle} />
               <Typography.Text className='text-11px text-t-tertiary'>
-                {agent.enabled !== false ? t('common.enable', { defaultValue: '已启用' }) : t('common.disable', { defaultValue: '已禁用' })}
+                {agent.enabled === false
+                  ? t('common.disable', { defaultValue: '已禁用' })
+                  : agent.management_status === 'missing'
+                    ? t('settings.agentManagement.notInstalled')
+                    : agent.available === false
+                      ? t('settings.agentManagement.unavailable')
+                      : t('common.enable', { defaultValue: '已启用' })}
               </Typography.Text>
             </div>
           )}
@@ -100,7 +110,7 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
             size='small'
             type='secondary'
             onClick={onGoToChat}
-            disabled={agent.enabled === false}
+            disabled={!canStartChat}
             className={goToChatButtonClassName}
           >
             {t('settings.agentManagement.goToChat')}
@@ -132,7 +142,12 @@ const AgentCard: React.FC<AgentCardProps> = (props) => {
       </div>
       <div className='flex items-center gap-8px'>
         <Switch size='small' checked={agent.enabled !== false} onChange={onToggle} />
-        <Button size='small' type='text' onClick={onGoToChat} disabled={agent.enabled === false}>
+        <Button
+          size='small'
+          type='text'
+          onClick={onGoToChat}
+          disabled={agent.enabled === false || agent.available === false}
+        >
           {t('settings.agentManagement.goToChat')}
         </Button>
         <Button size='small' type='text' icon={<EditTwo theme='outline' size='14' />} onClick={onEdit} />
