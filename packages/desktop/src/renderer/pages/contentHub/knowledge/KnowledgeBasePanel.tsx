@@ -7,7 +7,6 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Button, Message, Modal } from '@arco-design/web-react';
 import { Book, Copy, Delete, Open, Upload } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
-import { isElectronDesktop } from '@/renderer/utils/platform';
 import { useFileActions } from '@/renderer/hooks/file/useFileActions';
 import EmptyState from '../components/EmptyState';
 import BatchActionBar from '../components/manage/BatchActionBar';
@@ -28,7 +27,7 @@ import KnowledgeCard from './KnowledgeCard';
 import { useKnowledgeBase } from './useKnowledgeBase';
 import { useHubPreview } from '../useHubPreview';
 import type { FileEntry, HubFileRecord, HubToolbarControls } from '../types';
-import { deleteKnowledgeDoc, knowledgeImageUrl, uploadKnowledgeFile, type KnowledgeDoc } from './knowledgeApi';
+import { deleteKnowledgeDoc, loadKnowledgeImage, uploadKnowledgeFile, type KnowledgeDoc } from './knowledgeApi';
 
 type KnowledgeBasePanelProps = {
   controls: HubToolbarControls;
@@ -84,9 +83,17 @@ const KnowledgeBasePanel: React.FC<KnowledgeBasePanelProps> = ({ controls }) => 
       .catch(() => Message.error(t('contentHub.toast.openFailed')));
   };
 
-  const previewDoc = (doc: KnowledgeDoc) => {
-    if (!isElectronDesktop() && classifyHubFile(doc.name) === 'image') {
-      setUrlPreview({ title: doc.name, url: knowledgeImageUrl(doc.path) });
+  const previewDoc = async (doc: KnowledgeDoc) => {
+    if (classifyHubFile(doc.name) === 'image') {
+      const dataUrl = await loadKnowledgeImage(doc.path);
+      if (!dataUrl) {
+        Message.error(t('contentHub.toast.openFailed'));
+        return;
+      }
+      // Data URLs avoid iframe/img requests that cannot attach the distributed
+      // client's WebUI gate token. HubUrlPreviewModal still forces SVG to inert
+      // text based on the title, even though other images use <img>.
+      setUrlPreview({ title: doc.name, url: dataUrl, mode: 'image' });
       return;
     }
     void previewLocalFile({
@@ -217,7 +224,7 @@ const KnowledgeBasePanel: React.FC<KnowledgeBasePanelProps> = ({ controls }) => 
               selectedIds={selection.selectedIds}
               onToggleSelect={(id) => setSelection((state) => toggleHubSelection(state, id))}
               onToggleAll={(selected) => setSelection((state) => setHubSelectionForIds(state, visibleIds, selected))}
-              onOpen={(record) => previewDoc(record.raw)}
+              onOpen={(record) => void previewDoc(record.raw)}
               onDirectOpen={(record) => openDoc(record.raw)}
               renderActions={(record) => (
                 <>

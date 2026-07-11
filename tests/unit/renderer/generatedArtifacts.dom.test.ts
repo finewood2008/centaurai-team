@@ -32,6 +32,7 @@ import {
   registerGeneratedArtifacts,
   registerGeneratedArtifactsFromToolPayload,
 } from '@/renderer/utils/file/generatedArtifacts';
+import { draftFilesForReview } from '@/renderer/pages/contentHub/components/manage/contentAssets';
 
 describe('generatedArtifacts LAN/temp-space registration', () => {
   beforeEach(() => {
@@ -115,14 +116,17 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
     const files = await loadStandaloneGeneratedArtifactFiles();
 
     expect(files).toEqual([
-      {
+      expect.objectContaining({
         name: 'img-1.png',
         path: '/srv/centaur/temp/toolbox/img-1.png',
         size: 1200,
         mtime: 1_720_000_000,
         conversation: '工具箱',
-      },
+        draftProvenance: 'registered-generated-artifact',
+        canDiscardDraft: false,
+      }),
     ]);
+    expect(draftFilesForReview(files, [])).toEqual(files);
   });
 
   it('extracts generated documents and images from mixed payloads', () => {
@@ -150,7 +154,9 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
           status: 'completed',
           title: 'word creator',
           locations: [{ path: '/srv/tmp/conv-lan/output/计划书.docx' }],
-          content: [{ type: 'content', content: { type: 'text', text: 'Saved to /srv/tmp/conv-lan/output/deck.pptx' } }],
+          content: [
+            { type: 'content', content: { type: 'text', text: 'Saved to /srv/tmp/conv-lan/output/deck.pptx' } },
+          ],
           rawInput: { output_path: '/srv/tmp/conv-lan/output/report.pdf' },
         },
       })
@@ -216,9 +222,7 @@ describe('generatedArtifacts LAN/temp-space registration', () => {
     });
 
     const files = await registerGeneratedArtifacts({
-      paths: extractGeneratedArtifactPaths(
-        '已生成 /home/user/图片/截图/截图 2026-07-10 02-28-02.png，可直接使用。'
-      ),
+      paths: extractGeneratedArtifactPaths('已生成 /home/user/图片/截图/截图 2026-07-10 02-28-02.png，可直接使用。'),
       workspace: '/srv/centaur/tmp/conv-lan',
       conversationId: 'conv-lan',
       source: 'conversation',

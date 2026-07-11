@@ -103,6 +103,8 @@ export const DESKTOP_PET_ENABLED: boolean = false;
 
 export const PERSONAL_VECTOR_DB_ENDPOINT = 'http://127.0.0.1:8618';
 export const TEAM_VECTOR_DB_ENDPOINT = 'http://127.0.0.1:8619';
+/** CORS-safe Electron-main proxy for the co-located vector database. */
+export const LOCAL_VECTOR_DB_PROXY_BASE = 'centaur-vector://local';
 export const DEFAULT_VECTOR_DB_ENDPOINT = IS_TEAM ? TEAM_VECTOR_DB_ENDPOINT : PERSONAL_VECTOR_DB_ENDPOINT;
 
 export function normalizeVectorDbEndpoint(endpoint?: string | null): string {

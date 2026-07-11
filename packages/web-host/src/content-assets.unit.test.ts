@@ -95,4 +95,27 @@ describe('content assets', () => {
     expect(await readNasFile(nasRoot, publishedA!.nasStoragePath!)).toBe('A');
     expect(await readNasFile(nasRoot, publishedB!.nasStoragePath!)).toBe('B');
   });
+
+  it('truncates user-controlled NAS directory labels below filesystem byte limits', async () => {
+    const assetsDir = await makeRoot('content-assets-');
+    const nasRoot = await makeRoot('content-assets-nas-');
+    const source = path.join(assetsDir, 'source.txt');
+    await fs.writeFile(source, 'safe');
+    const saved = await contentAssetSaveFromPath(assetsDir, {
+      sourcePath: source,
+      name: 'safe.txt',
+      ownerUserId: 'alice',
+    });
+
+    const published = await contentAssetPublishToNas(
+      assetsDir,
+      nasRoot,
+      saved.id,
+      { conversationLabel: '🚀'.repeat(200) },
+      'alice'
+    );
+    const conversationSegment = published?.nasStoragePath?.split('/')[2] ?? '';
+    expect(Buffer.byteLength(conversationSegment)).toBeLessThanOrEqual(180);
+    expect(await readNasFile(nasRoot, published!.nasStoragePath!)).toBe('safe');
+  });
 });

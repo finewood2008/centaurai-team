@@ -5,6 +5,7 @@
  */
 
 import { ipcBridge } from '@/common';
+import { isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
 import type { PreviewContentType } from '@/common/types/office/preview';
 import {
   LARGE_TEXT_PREVIEW_MAX_LENGTH,
@@ -28,6 +29,7 @@ export type FilePreviewOptions = {
 };
 
 const BINARY_PREVIEW_TYPES = new Set<PreviewContentType>(['pdf', 'word', 'excel', 'ppt']);
+const canUseLocalShell = (): boolean => isElectronDesktop() && !isRemoteClientBridgeMode();
 
 function extensionFromName(name: string): string {
   return name.toLowerCase().split('.').pop() || '';
@@ -93,7 +95,7 @@ export function useFileActions() {
   }, []);
 
   const revealFile = useCallback(async (file: FileActionTarget): Promise<void> => {
-    if (!isElectronDesktop()) {
+    if (!canUseLocalShell()) {
       throw new Error('Reveal in folder is only available in the desktop app');
     }
     await ipcBridge.shell.showItemInFolder.invoke(file.path);
@@ -102,7 +104,7 @@ export function useFileActions() {
   const openFile = useCallback(
     async (rawFile: FileActionTarget): Promise<void> => {
       const file = normalizeTarget(rawFile);
-      if (isElectronDesktop()) {
+      if (canUseLocalShell()) {
         await ipcBridge.shell.openFile.invoke(file.path);
         return;
       }
@@ -117,7 +119,7 @@ export function useFileActions() {
 
   return useMemo(
     () => ({
-      canReveal: isElectronDesktop(),
+      canReveal: canUseLocalShell(),
       openFile,
       previewFile,
       downloadFile,

@@ -15,8 +15,9 @@
  * not the login handler). On a 2xx login response we mint a signed session
  * cookie; every other `/api/*` request and `/ws` upgrade must carry a valid one.
  *
- * The cookie is a stateless HMAC token signed with a per-process secret — there
- * is no server-side session store, and sessions do not survive a web-host
+ * The cookie is an HMAC token signed with a per-process secret and backed by a
+ * small in-memory session registry. The registry makes logout and password
+ * changes immediately revocable; sessions also do not survive a web-host
  * restart (acceptable: clients simply log in again). This adds NO new login UX:
  * it reuses the existing WebUI username/password and login page.
  */
@@ -24,8 +25,12 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export const GATE_COOKIE_NAME = 'webui_gate';
 
-/** Default session lifetime: 7 days. */
-const DEFAULT_TTL_SEC = 7 * 24 * 60 * 60;
+/** Default session lifetime: one working day. */
+const DEFAULT_TTL_SEC = 8 * 60 * 60;
+/** Bound successful-login churn from one compromised/abusive account. */
+const DEFAULT_MAX_SESSIONS_PER_USER = 16;
+/** Hard process-wide memory bound, independent of the number of accounts. */
+const DEFAULT_MAX_SESSIONS = 10_000;
 
 const nowSec = (): number => Math.floor(Date.now() / 1000);
 
@@ -36,8 +41,14 @@ export type AuthGateIdentity = {
 
 type AuthGatePayload = {
   exp?: number;
+  sid?: string;
   user_id?: string;
   username?: string;
+};
+
+type AuthGateSession = {
+  exp: number;
+  userId?: string;
 };
 
 function identityFromPayload(payload: AuthGatePayload | null): AuthGateIdentity | null {
@@ -55,6 +66,12 @@ export type AuthGate = {
   mintCookie: (identityOrTtlSec?: AuthGateIdentity | number, ttlSec?: number) => string;
   /** Build a `Set-Cookie` value that immediately clears the gate cookie. */
   clearCookie: () => string;
+  /** Revoke one raw bearer token. Returns true when an active session was revoked. */
+  revokeToken: (token: string | undefined | null) => boolean;
+  /** Revoke the gate token in a raw `Cookie` header. */
+  revokeCookie: (cookieHeader: string | undefined) => boolean;
+  /** Revoke every active gate session belonging to one user. */
+  revokeUserSessions: (userId: string) => number;
   /** Return the trusted identity embedded in a valid bearer token, when present. */
   getAuthorizedTokenIdentity: (token: string | undefined | null) => AuthGateIdentity | null;
   /** Return the trusted identity embedded in a valid cookie token, when present. */
@@ -79,11 +96,25 @@ export function parseCookie(cookieHeader: string | undefined, name: string): str
   return null;
 }
 
-export function createAuthGate(opts?: { secret?: Buffer; secure?: boolean }): AuthGate {
+export function createAuthGate(opts?: {
+  secret?: Buffer;
+  secure?: boolean;
+  maxSessions?: number;
+  maxSessionsPerUser?: number;
+}): AuthGate {
   // A fresh random secret per process: no key management, and a restart
   // transparently invalidates every outstanding session.
   const secret = opts?.secret ?? randomBytes(32);
   const secure = opts?.secure ?? process.env.AIONUI_HTTPS === 'true';
+  const sessions = new Map<string, AuthGateSession>();
+  const maxSessions =
+    Number.isSafeInteger(opts?.maxSessions) && (opts?.maxSessions ?? 0) > 0
+      ? (opts?.maxSessions as number)
+      : DEFAULT_MAX_SESSIONS;
+  const maxSessionsPerUser =
+    Number.isSafeInteger(opts?.maxSessionsPerUser) && (opts?.maxSessionsPerUser ?? 0) > 0
+      ? (opts?.maxSessionsPerUser as number)
+      : DEFAULT_MAX_SESSIONS_PER_USER;
 
   const sign = (payload: string): string => createHmac('sha256', secret).update(payload).digest('base64url');
 
@@ -93,7 +124,28 @@ export function createAuthGate(opts?: { secret?: Buffer; secure?: boolean }): Au
     return attrs.join('; ');
   };
 
-  const parseTokenPayload = (token: string | undefined | null): AuthGatePayload | null => {
+  const pruneExpiredSessions = (): void => {
+    const currentTime = nowSec();
+    for (const [sessionId, session] of sessions) {
+      if (session.exp <= currentTime) sessions.delete(sessionId);
+    }
+  };
+
+  /** Evict oldest sessions before inserting a new one (Map preserves insertion order). */
+  const reserveSessionSlot = (userId: string | undefined): void => {
+    const sameUser = Array.from(sessions.entries()).filter(([, session]) => session.userId === userId);
+    for (let index = 0; index <= sameUser.length - maxSessionsPerUser; index += 1) {
+      const sessionId = sameUser[index]?.[0];
+      if (sessionId) sessions.delete(sessionId);
+    }
+    while (sessions.size >= maxSessions) {
+      const oldest = sessions.keys().next().value as string | undefined;
+      if (!oldest) break;
+      sessions.delete(oldest);
+    }
+  };
+
+  const parseSignedTokenPayload = (token: string | undefined | null): AuthGatePayload | null => {
     if (!token) return null;
     const dot = token.indexOf('.');
     if (dot <= 0) return null;
@@ -107,30 +159,50 @@ export function createAuthGate(opts?: { secret?: Buffer; secure?: boolean }): Au
 
     try {
       const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as AuthGatePayload;
-      if (typeof decoded.exp !== 'number' || decoded.exp <= nowSec()) return null;
+      if (!Number.isSafeInteger(decoded.exp) || decoded.exp <= nowSec()) return null;
+      if (typeof decoded.sid !== 'string' || !decoded.sid) return null;
       return decoded;
     } catch {
       return null;
     }
   };
 
+  const parseActiveTokenPayload = (token: string | undefined | null): AuthGatePayload | null => {
+    pruneExpiredSessions();
+    const payload = parseSignedTokenPayload(token);
+    if (!payload?.sid || typeof payload.exp !== 'number') return null;
+    const session = sessions.get(payload.sid);
+    if (!session || session.exp !== payload.exp) return null;
+    const payloadUserId = typeof payload.user_id === 'string' ? payload.user_id.trim() || undefined : undefined;
+    if (session.userId !== payloadUserId) return null;
+    return payload;
+  };
+
   const normalizeMintArgs = (
     identityOrTtlSec?: AuthGateIdentity | number,
     ttlSec?: number
   ): { identity?: AuthGateIdentity; ttlSec: number } => {
-    if (typeof identityOrTtlSec === 'number') return { ttlSec: identityOrTtlSec };
-    return { identity: identityOrTtlSec, ttlSec: ttlSec ?? DEFAULT_TTL_SEC };
+    const requestedTtl = typeof identityOrTtlSec === 'number' ? identityOrTtlSec : (ttlSec ?? DEFAULT_TTL_SEC);
+    const normalizedTtl = Number.isFinite(requestedTtl) ? Math.trunc(requestedTtl) : DEFAULT_TTL_SEC;
+    if (typeof identityOrTtlSec === 'number') return { ttlSec: normalizedTtl };
+    return { identity: identityOrTtlSec, ttlSec: normalizedTtl };
   };
 
   return {
     mintToken(identityOrTtlSec?: AuthGateIdentity | number, ttlSec?: number): string {
       const args = normalizeMintArgs(identityOrTtlSec, ttlSec);
-      const body: AuthGatePayload = { exp: nowSec() + args.ttlSec };
-      if (args.identity?.userId) {
-        body.user_id = args.identity.userId;
+      pruneExpiredSessions();
+      const sessionId = randomBytes(18).toString('base64url');
+      const exp = nowSec() + args.ttlSec;
+      const userId = args.identity?.userId.trim() || undefined;
+      const body: AuthGatePayload = { exp, sid: sessionId };
+      if (userId) {
+        body.user_id = userId;
         if (args.identity.username) body.username = args.identity.username;
       }
       const payload = Buffer.from(JSON.stringify(body)).toString('base64url');
+      reserveSessionSlot(userId);
+      sessions.set(sessionId, { exp, userId });
       return `${payload}.${sign(payload)}`;
     },
 
@@ -143,8 +215,31 @@ export function createAuthGate(opts?: { secret?: Buffer; secure?: boolean }): Au
       return `${GATE_COOKIE_NAME}=; ${cookieAttrs(0)}`;
     },
 
+    revokeToken(token): boolean {
+      pruneExpiredSessions();
+      const payload = parseSignedTokenPayload(token);
+      return Boolean(payload?.sid && sessions.delete(payload.sid));
+    },
+
+    revokeCookie(cookieHeader): boolean {
+      return this.revokeToken(parseCookie(cookieHeader, GATE_COOKIE_NAME));
+    },
+
+    revokeUserSessions(userId): number {
+      pruneExpiredSessions();
+      const normalizedUserId = userId.trim();
+      if (!normalizedUserId) return 0;
+      let revoked = 0;
+      for (const [sessionId, session] of sessions) {
+        if (session.userId !== normalizedUserId) continue;
+        sessions.delete(sessionId);
+        revoked += 1;
+      }
+      return revoked;
+    },
+
     getAuthorizedTokenIdentity(token): AuthGateIdentity | null {
-      return identityFromPayload(parseTokenPayload(token));
+      return identityFromPayload(parseActiveTokenPayload(token));
     },
 
     getAuthorizedIdentity(cookieHeader): AuthGateIdentity | null {
@@ -152,7 +247,7 @@ export function createAuthGate(opts?: { secret?: Buffer; secure?: boolean }): Au
     },
 
     isAuthorizedToken(token): boolean {
-      return parseTokenPayload(token) !== null;
+      return parseActiveTokenPayload(token) !== null;
     },
 
     isAuthorized(cookieHeader): boolean {

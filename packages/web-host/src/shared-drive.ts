@@ -15,7 +15,7 @@
  *
  *   GET    /api/shared-drive/list?category=<slug>   → { data: SharedFile[] }
  *   GET    /api/shared-drive/categories             → { data: SharedCategory[] }
- *   POST   /api/shared-drive/upload?name=&category=&conversation_id=&uploader=&uploaderId=
+ *   POST   /api/shared-drive/upload?name=&category=&conversation_id=
  *                                                   (raw body = file bytes)
  *   GET    /api/shared-drive/download?id=<id>       → the file (attachment)
  *   GET    /api/shared-drive/preview?id=<id>        → the file (inline)
@@ -28,6 +28,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { safeFileResponseHeaders, safeInlineContentType } from './safe-preview.js';
 import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -57,6 +58,9 @@ export type SharedCategory = {
 };
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024; // 512MB safety cap
+const MAX_NAME_CHARS = 255;
+const MAX_CATEGORY_CHARS = 128;
+const MAX_CONVERSATION_ID_CHARS = 256;
 const UNCATEGORIZED = '';
 // Path separators, Windows-reserved characters and ASCII control characters.
 const UNSAFE_NAME_CHARS = /[/\\:*?"<>|]/g;
@@ -173,6 +177,13 @@ export type SharedAddInput = {
   conversationId?: string;
 };
 
+/** Trusted request identity supplied by the WebHost auth gate, never by query parameters. */
+export type SharedDriveActor = {
+  userId: string;
+  username?: string;
+  isAdmin?: boolean;
+};
+
 export async function sharedList(dir: string, category?: string | null): Promise<SharedFile[]> {
   const entries = await readManifest(dir);
   const filtered = category != null ? entries.filter((e) => slugifyCategory(e.category) === category) : entries;
@@ -191,11 +202,15 @@ export async function sharedCategories(dir: string): Promise<SharedCategory[]> {
   return [...map.values()].toSorted((a, b) => b.count - a.count || a.label.localeCompare(b.label));
 }
 
-export async function sharedRemove(dir: string, id: string): Promise<boolean> {
+export async function sharedRemove(dir: string, id: string, actor?: SharedDriveActor): Promise<boolean> {
   return withManifestLock(dir, async () => {
     const entries = await readManifest(dir);
     const entry = entries.find((e) => e.id === id);
     if (!entry) return false;
+    // Calls without an actor originate from the trusted main-process IPC bridge.
+    // HTTP callers must always supply the gate-derived actor. Legacy entries
+    // without an uploader remain removable only by an administrator.
+    if (actor && !actor.isAdmin && entry.uploaderId !== actor.userId) return false;
     const full = resolveBlob(dir, entry);
     if (full) await fs.promises.rm(full, { force: true }).catch(() => {});
     await writeManifest(
@@ -279,14 +294,15 @@ export async function handleSharedCategories(res: ServerResponse, dir: string | 
 }
 
 /**
- * POST /api/shared-drive/upload?name=&category=&conversation_id=&uploader=&uploaderId=
+ * POST /api/shared-drive/upload?name=&category=&conversation_id=
  * Body = raw file bytes. We never read a client-supplied server path (avoids a
  * traversal / arbitrary-read boundary); the client always streams the bytes.
  */
 export async function handleSharedUpload(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  actor: SharedDriveActor
 ): Promise<void> {
   if (!dir) {
     sendJson(res, 503, { success: false, error: 'SHARED_DRIVE_DISABLED' });
@@ -298,8 +314,21 @@ export async function handleSharedUpload(
     sendJson(res, 400, { success: false, error: 'MISSING_NAME' });
     return;
   }
+  if (rawName.length > MAX_NAME_CHARS) {
+    sendJson(res, 400, { success: false, error: 'INVALID_NAME' });
+    return;
+  }
   const name = sanitizeName(rawName);
   const category = url.searchParams.get('category') || '';
+  if (category.length > MAX_CATEGORY_CHARS) {
+    sendJson(res, 400, { success: false, error: 'INVALID_CATEGORY' });
+    return;
+  }
+  const conversationId = url.searchParams.get('conversation_id') || undefined;
+  if (conversationId && conversationId.length > MAX_CONVERSATION_ID_CHARS) {
+    sendJson(res, 400, { success: false, error: 'INVALID_CONVERSATION_ID' });
+    return;
+  }
   const categorySlug = slugifyCategory(category) || 'uncategorized';
   const id = crypto.randomUUID();
   const storedName = `${id}__${name}`;
@@ -361,9 +390,9 @@ export async function handleSharedUpload(
     category,
     size,
     mime: mimeOf(name),
-    uploaderId: url.searchParams.get('uploaderId') || undefined,
-    uploaderName: url.searchParams.get('uploader') || undefined,
-    conversationId: url.searchParams.get('conversation_id') || undefined,
+    uploaderId: actor.userId,
+    uploaderName: actor.username || actor.userId,
+    conversationId,
     createdAt: Date.now(),
   };
 
@@ -411,10 +440,11 @@ async function streamEntry(
     return;
   }
   res.writeHead(200, {
-    'content-type': disposition === 'inline' ? entry.mime : 'application/octet-stream',
+    'content-type': disposition === 'inline' ? safeInlineContentType(entry.mime) : 'application/octet-stream',
     'content-length': String(stat.size),
     'content-disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(entry.name)}`,
     'cache-control': 'no-store',
+    ...safeFileResponseHeaders(disposition === 'inline'),
   });
   const stream = fs.createReadStream(full);
   stream.on('error', () => {
@@ -442,7 +472,8 @@ export function handleSharedPreview(req: IncomingMessage, res: ServerResponse, d
 export async function handleSharedRemove(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  actor: SharedDriveActor
 ): Promise<void> {
   if (!dir) {
     sendJson(res, 404, { success: false, error: 'NOT_FOUND' });
@@ -454,7 +485,7 @@ export async function handleSharedRemove(
     sendJson(res, 400, { success: false, error: 'MISSING_ID' });
     return;
   }
-  const result = await sharedRemove(dir, id);
+  const result = await sharedRemove(dir, id, actor);
   if (!result) {
     sendJson(res, 404, { success: false, error: 'NOT_FOUND' });
     return;

@@ -1,35 +1,8 @@
 import type { ConfigKey, ConfigKeyMap } from './configKeys';
 import { normalizeVectorDbEndpoint } from './constants';
+import { fetchWithWebuiAuth, getBaseUrl } from '../adapter/httpBridge';
 
 type Subscriber = (value: unknown) => void;
-
-declare global {
-  interface Window {
-    __backendPort?: number;
-    __backendHost?: string;
-    __clientMode?: boolean;
-  }
-}
-
-const LOCAL_BACKEND_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
-
-function getBaseUrl(): string {
-  // WebUI browser mode: no preload, fetch same-origin so web-host's
-  // static-server reverse-proxies /api/* to the backend.
-  if (typeof window !== 'undefined' && typeof document !== 'undefined' && !(window as Window).__backendPort) {
-    return '';
-  }
-  if (
-    typeof window !== 'undefined' &&
-    (window as Window).__clientMode === true &&
-    (window as Window).__backendPort &&
-    !LOCAL_BACKEND_HOSTS.has((window as Window).__backendHost || '')
-  ) {
-    return `http://${(window as Window).__backendHost}:${(window as Window).__backendPort}`;
-  }
-  const port = typeof window !== 'undefined' ? (window as Window).__backendPort || 13400 : 13400;
-  return `http://127.0.0.1:${port}`;
-}
 
 async function fetchJson<T>(method: string, path: string, body?: unknown): Promise<T> {
   const url = `${getBaseUrl()}${path}`;
@@ -37,7 +10,7 @@ async function fetchJson<T>(method: string, path: string, body?: unknown): Promi
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
-  const response = await fetch(url, {
+  const response = await fetchWithWebuiAuth(url, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,

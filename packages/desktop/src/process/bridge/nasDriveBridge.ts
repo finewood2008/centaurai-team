@@ -5,6 +5,8 @@
  */
 
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { app } from 'electron';
 import {
   indexNasFolder,
   nasFileInfo,
@@ -139,6 +141,7 @@ export function initNasDriveBridge(): void {
     // Fire and forget; the renderer polls indexStatus.
     void indexNasFolder(root, relPath, {
       endpoint: normalizeVectorDbEndpoint(endpoint),
+      manifestDir: path.join(app.getPath('userData'), 'nas-index-manifests'),
       includeVideo,
       onProgress: (p) => {
         const cancelled = indexJobs.get(jobId)?.cancelled;

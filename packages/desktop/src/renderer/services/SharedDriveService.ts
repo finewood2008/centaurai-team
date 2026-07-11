@@ -12,7 +12,7 @@
  * resolve their own base URL (getBaseUrl() points at aioncore in Electron).
  */
 import { ipcBridge } from '@/common';
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { fetchWithWebuiAuth, getBaseUrl } from '@/common/adapter/httpBridge';
 import { downloadFileFromPath } from '@/renderer/utils/file/download';
 import { uploadFileViaHttp } from '@/renderer/services/FileService';
 import type { SharedFileEntry, SharedCategoryEntry } from '@/common/adapter/ipcBridge';
@@ -51,7 +51,7 @@ export async function resolveBase(): Promise<string> {
 
 async function getJson<T>(pathAndQuery: string): Promise<T> {
   const base = await resolveBase();
-  const resp = await fetch(`${base}${pathAndQuery}`);
+  const resp = await fetchWithWebuiAuth(`${base}${pathAndQuery}`);
   if (!resp.ok) throw new Error(`shared-drive ${pathAndQuery} failed: ${resp.status}`);
   const body = (await resp.json()) as { success?: boolean; data?: T };
   return (body.data ?? ([] as unknown)) as T;
@@ -74,7 +74,9 @@ export async function removeShared(id: string): Promise<void> {
     return;
   }
   const base = await resolveBase();
-  const resp = await fetch(`${base}/api/shared-drive/remove?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const resp = await fetchWithWebuiAuth(`${base}/api/shared-drive/remove?id=${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
   if (!resp.ok) throw new Error(`shared-drive remove failed: ${resp.status}`);
 }
 
@@ -203,7 +205,7 @@ export async function fetchSharedAsFile(id: string, name: string): Promise<File>
     return new File([base64ToBytes(base64)], name, { type: info.mime });
   }
   const url = await sharedDownloadUrl(id);
-  const resp = await fetch(url);
+  const resp = await fetchWithWebuiAuth(url);
   if (!resp.ok) throw new Error(`shared-drive fetch failed: ${resp.status}`);
   const blob = await resp.blob();
   return new File([blob], name, { type: blob.type || 'application/octet-stream' });
@@ -233,7 +235,7 @@ async function uploadBytes(body: BlobPart, name: string, meta: UploadMeta): Prom
   if (meta.conversationId) params.set('conversation_id', meta.conversationId);
   if (meta.uploader) params.set('uploader', meta.uploader);
   if (meta.uploaderId) params.set('uploaderId', meta.uploaderId);
-  const resp = await fetch(`${base}/api/shared-drive/upload?${params.toString()}`, {
+  const resp = await fetchWithWebuiAuth(`${base}/api/shared-drive/upload?${params.toString()}`, {
     method: 'POST',
     headers: { 'content-type': 'application/octet-stream' },
     body: body instanceof Blob ? body : new Blob([body]),

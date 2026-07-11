@@ -23,7 +23,6 @@ declare global {
   }
 }
 
-const LOCAL_BACKEND_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 const WEBUI_GATE_TOKEN_STORAGE_KEY = 'centaurai.webuiGateToken';
 
 /**
@@ -70,14 +69,21 @@ function getBackendHost(): string {
 export function isRemoteClientBridgeMode(): boolean {
   if (typeof window === 'undefined') return false;
   const win = window as Window & { __clientMode?: boolean; __backendHost?: string; __backendPort?: number };
-  return win.__clientMode === true && Boolean(win.__backendPort) && !LOCAL_BACKEND_HOSTS.has(win.__backendHost || '');
+  return win.__clientMode === true && Boolean(win.__backendHost) && Boolean(win.__backendPort);
 }
 
 export function setWebuiGateToken(token: string | null | undefined): void {
   if (typeof window === 'undefined') return;
   try {
-    if (token) window.localStorage.setItem(WEBUI_GATE_TOKEN_STORAGE_KEY, token);
-    else window.localStorage.removeItem(WEBUI_GATE_TOKEN_STORAGE_KEY);
+    // Browser WebUI already has the HttpOnly gate cookie. Persisting the same
+    // bearer in script-readable storage would nullify HttpOnly under any XSS.
+    // Only the distributed native client needs a bearer because its renderer is
+    // cross-origin to the selected WebHost and cannot rely on that cookie.
+    if (!isRemoteClientBridgeMode() || !token) {
+      window.localStorage.removeItem(WEBUI_GATE_TOKEN_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(WEBUI_GATE_TOKEN_STORAGE_KEY, token);
   } catch {
     /* ignore unavailable storage */
   }
@@ -95,6 +101,24 @@ function getWebuiGateToken(): string | null {
 export function getWebuiGateHeaders(): Record<string, string> {
   const gateToken = isRemoteClientBridgeMode() ? getWebuiGateToken() : null;
   return gateToken ? { 'X-WebUI-Gate-Token': gateToken } : {};
+}
+
+/**
+ * Fetch a WebHost-owned route with the same cookie/gate-token semantics as the
+ * typed HTTP bridge. Raw feature clients must use this instead of bare fetch:
+ * distributed Electron renderers are cross-origin and authenticate with the
+ * gate token rather than the browser cookie alone.
+ */
+export function fetchWithWebuiAuth(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(getWebuiGateHeaders())) {
+    if (!headers.has(name)) headers.set(name, value);
+  }
+  return fetch(input, {
+    ...init,
+    headers,
+    credentials: init.credentials ?? 'include',
+  });
 }
 
 /**

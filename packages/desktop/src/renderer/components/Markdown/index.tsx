@@ -7,7 +7,6 @@
 import ReactMarkdown from 'react-markdown';
 
 import rehypeKatex from 'rehype-katex';
-import rehypeRaw from 'rehype-raw';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -38,12 +37,10 @@ type MarkdownViewProps = {
   codeStyle?: React.CSSProperties;
   className?: string;
   onRef?: (el?: HTMLDivElement | null) => void;
-  /** Enable raw HTML rendering in markdown content. Use with caution — only for trusted sources. */
-  allowHtml?: boolean;
 };
 
 const MarkdownView: React.FC<MarkdownViewProps> = React.memo(
-  ({ hiddenCodeCopyButton, codeStyle, className, onRef, allowHtml, children: childrenProp }) => {
+  ({ hiddenCodeCopyButton, codeStyle, className, onRef, children: childrenProp }) => {
     const { t } = useTranslation();
 
     const normalizedChildren = useMemo(() => {
@@ -129,13 +126,11 @@ const MarkdownView: React.FC<MarkdownViewProps> = React.memo(
       [codeStyle, hiddenCodeCopyButton, handleLinkClick]
     );
 
-    const rehypePlugins = useMemo(() => (allowHtml ? [rehypeRaw, rehypeKatex] : [rehypeKatex]), [allowHtml]);
-
     return (
       <div className={classNames('relative w-full', className)}>
         <ShadowView>
           <div ref={onRef} className='markdown-shadow-body'>
-            <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins} components={components}>
+            <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={[rehypeKatex]} components={components}>
               {normalizedChildren}
             </ReactMarkdown>
           </div>

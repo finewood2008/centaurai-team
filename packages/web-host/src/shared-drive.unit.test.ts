@@ -11,6 +11,7 @@ import {
   handleSharedPreview,
   handleSharedRemove,
   handleSharedUpload,
+  type SharedDriveActor,
   type SharedFile,
 } from './shared-drive.js';
 
@@ -21,12 +22,18 @@ import {
 async function startServer(dir: string | undefined): Promise<{ port: number; close: () => Promise<void> }> {
   const server = http.createServer((req, res) => {
     const url = req.url || '';
+    const userId = typeof req.headers['x-test-user'] === 'string' ? req.headers['x-test-user'] : 'owner-1';
+    const actor: SharedDriveActor = {
+      userId,
+      username: userId === 'owner-1' ? 'Owner One' : userId,
+      isAdmin: req.headers['x-test-admin'] === 'true',
+    };
     if (url.startsWith('/api/shared-drive/list')) void handleSharedList(req, res, dir);
     else if (url.startsWith('/api/shared-drive/categories')) void handleSharedCategories(res, dir);
-    else if (url.startsWith('/api/shared-drive/upload')) void handleSharedUpload(req, res, dir);
+    else if (url.startsWith('/api/shared-drive/upload')) void handleSharedUpload(req, res, dir, actor);
     else if (url.startsWith('/api/shared-drive/download')) void handleSharedDownload(req, res, dir);
     else if (url.startsWith('/api/shared-drive/preview')) void handleSharedPreview(req, res, dir);
-    else if (url.startsWith('/api/shared-drive/remove')) void handleSharedRemove(req, res, dir);
+    else if (url.startsWith('/api/shared-drive/remove')) void handleSharedRemove(req, res, dir, actor);
     else res.writeHead(404).end();
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -76,7 +83,13 @@ describe('shared-drive endpoints', () => {
 
     const files = await list(srv.port);
     expect(files).toHaveLength(1);
-    expect(files[0]).toMatchObject({ name: 'report.pdf', category: 'marketing', size: 11 });
+    expect(files[0]).toMatchObject({
+      name: 'report.pdf',
+      category: 'marketing',
+      size: 11,
+      uploaderId: 'owner-1',
+      uploaderName: 'Owner One',
+    });
 
     const dl = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/download?id=${id}`);
     expect(dl.status).toBe(200);
@@ -92,6 +105,27 @@ describe('shared-drive endpoints', () => {
     const prev = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/preview?id=${id}`);
     expect(prev.headers.get('content-type')).toBe('image/png');
     expect(prev.headers.get('content-disposition')).toContain('inline');
+    expect(prev.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(prev.headers.get('content-security-policy')).toContain("sandbox; default-src 'none'");
+  });
+
+  it('serves uploaded active documents as inert text instead of same-origin script', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ws-shared-'));
+    srv = await startServer(dir);
+    const payload = '<script>fetch("/api/private")</script>';
+    const up = await upload(srv.port, 'attack.html', payload);
+    const { id } = (await up.json()).data as { id: string };
+
+    const preview = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/preview?id=${id}`);
+    expect(preview.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(preview.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(preview.headers.get('content-security-policy')).toContain("sandbox; default-src 'none'");
+    expect(await preview.text()).toBe(payload);
+
+    const download = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/download?id=${id}`);
+    expect(download.headers.get('content-type')).toBe('application/octet-stream');
+    expect(download.headers.get('content-disposition')).toContain('attachment');
+    expect(download.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
   it('keeps colliding display names as distinct blobs', async () => {
@@ -149,5 +183,29 @@ describe('shared-drive endpoints', () => {
     expect(await list(srv.port)).toHaveLength(0);
     const dl = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/download?id=${id}`);
     expect(dl.status).toBe(404);
+  });
+
+  it('ignores spoofed uploader query parameters and prevents another user deleting the file', async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ws-shared-'));
+    srv = await startServer(dir);
+    const up = await fetch(
+      `http://127.0.0.1:${srv.port}/api/shared-drive/upload?name=owned.txt&uploaderId=attacker&uploader=Attacker`,
+      { method: 'POST', body: 'owned' }
+    );
+    const { id } = (await up.json()).data as { id: string };
+    expect((await list(srv.port))[0]).toMatchObject({ uploaderId: 'owner-1', uploaderName: 'Owner One' });
+
+    const denied = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/remove?id=${id}`, {
+      method: 'DELETE',
+      headers: { 'x-test-user': 'attacker' },
+    });
+    expect(denied.status).toBe(404);
+    expect(await list(srv.port)).toHaveLength(1);
+
+    const admin = await fetch(`http://127.0.0.1:${srv.port}/api/shared-drive/remove?id=${id}`, {
+      method: 'DELETE',
+      headers: { 'x-test-user': 'admin', 'x-test-admin': 'true' },
+    });
+    expect(admin.status).toBe(200);
   });
 });

@@ -14,6 +14,7 @@ import {
 } from '@/common/utils/frontendUserScope';
 import type { IUserRecord, ICreateUserParams } from '@/common/adapter/ipcBridge';
 import { getDataPath } from '@process/utils';
+import { revokeDesktopWebUIUserSessions } from '@process/utils/webuiConfig';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 import path from 'path';
@@ -207,7 +208,10 @@ export function initUserManagementBridge(): void {
     if (!res.ok) {
       const err = await readBackendError(res);
       if (res.status === 404 || res.status === 405 || err.code === 'METHOD_NOT_ALLOWED') {
-        if (deleteLocalUser(params.user_id)) return;
+        if (deleteLocalUser(params.user_id)) {
+          revokeDesktopWebUIUserSessions(params.user_id);
+          return;
+        }
       }
       throw new Error(err.error || `Failed to delete user (${res.status})`);
     }
@@ -216,6 +220,7 @@ export function initUserManagementBridge(): void {
     if (!json.success || !json.data) {
       throw new Error('User not found or could not be deleted');
     }
+    revokeDesktopWebUIUserSessions(params.user_id);
   });
 
   // ── resetPassword ─────────────────────────────────────────────
@@ -240,6 +245,8 @@ export function initUserManagementBridge(): void {
       const err = (await res.json().catch(() => ({}))) as { error?: string };
       throw new Error(err.error || `Failed to reset password (${res.status})`);
     }
+
+    revokeDesktopWebUIUserSessions(params.user_id);
 
     return { new_password: newPassword };
   });

@@ -6,6 +6,7 @@
  * thumbnails through it too avoids img-src / blob: / cross-origin pitfalls.
  */
 import { ipcBridge } from '@/common';
+import { fetchWithWebuiAuth, isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
 import { isElectronDesktop } from '@/renderer/utils/platform';
 import { sharedDriveLocal } from '@/common/adapter/ipcBridge';
 import { sharedPreviewUrl } from '@/renderer/services/SharedDriveService';
@@ -27,12 +28,12 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
  */
 export async function loadSharedImage(id: string): Promise<string | null> {
   try {
-    if (isElectronDesktop()) {
+    if (isElectronDesktop() && !isRemoteClientBridgeMode()) {
       const info = await sharedDriveLocal.blobInfo.invoke({ id });
       if (!info?.path) return null;
       return await ipcBridge.fs.getImageBase64.invoke({ path: info.path });
     }
-    const resp = await fetch(await sharedPreviewUrl(id));
+    const resp = await fetchWithWebuiAuth(await sharedPreviewUrl(id));
     if (!resp.ok) return null;
     return await blobToDataUrl(await resp.blob());
   } catch {

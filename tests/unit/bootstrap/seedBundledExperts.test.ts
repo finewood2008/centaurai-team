@@ -5,15 +5,21 @@ import { promises as fs } from 'fs';
 
 import { seedBundledExperts } from '@/process/utils/seedBundledExperts';
 
-const { importMock, readRuleMock, writeRuleMock } = vi.hoisted(() => ({
+const { importMock, listAssistantsMock, updateAssistantMock, readRuleMock, writeRuleMock } = vi.hoisted(() => ({
   importMock: vi.fn(),
+  listAssistantsMock: vi.fn(),
+  updateAssistantMock: vi.fn(),
   readRuleMock: vi.fn(),
   writeRuleMock: vi.fn(),
 }));
 
 vi.mock('@/common', () => ({
   ipcBridge: {
-    assistants: { import: { invoke: importMock } },
+    assistants: {
+      import: { invoke: importMock },
+      list: { invoke: listAssistantsMock },
+      update: { invoke: updateAssistantMock },
+    },
     fs: {
       readAssistantRule: { invoke: readRuleMock },
       writeAssistantRule: { invoke: writeRuleMock },
@@ -58,6 +64,8 @@ async function makeFixture(): Promise<string> {
 describe('seedBundledExperts', () => {
   beforeEach(() => {
     importMock.mockReset().mockResolvedValue({ imported: 1, skipped: 0, failed: 0, errors: [] });
+    listAssistantsMock.mockReset().mockResolvedValue([]);
+    updateAssistantMock.mockReset().mockResolvedValue(undefined);
     readRuleMock.mockReset().mockResolvedValue('');
     writeRuleMock.mockReset().mockResolvedValue(true);
   });
@@ -75,12 +83,12 @@ describe('seedBundledExperts', () => {
     // rule_file is a manifest-only field — it must not leak into the wire contract.
     expect(payload.assistants[0]).not.toHaveProperty('rule_file');
     expect(writeRuleMock).toHaveBeenCalledTimes(2);
-    expect(config.store.get('migration.bundledExpertsSeeded')).toBe(1);
+    expect(config.store.get('migration.bundledExpertsSeeded')).toBe(2);
   });
 
   it('is a no-op when already seeded at the current version', async () => {
     await makeFixture();
-    const config = makeConfig(new Map([['migration.bundledExpertsSeeded', 1]]));
+    const config = makeConfig(new Map([['migration.bundledExpertsSeeded', 2]]));
 
     const ok = await seedBundledExperts(config as never);
 

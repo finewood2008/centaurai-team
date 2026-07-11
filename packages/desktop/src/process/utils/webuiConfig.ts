@@ -12,7 +12,7 @@ import { getSystemDir } from './initStorage';
 import { httpRequest } from '@/common/adapter/httpBridge';
 import { startWebHost, type WebHostHandle, type EntryHealth } from '@aionui/web-host';
 import { getDataPath } from './utils';
-import { IS_TEAM, MULTI_USER_ENABLED } from '@/common/config/constants';
+import { IS_TEAM, MULTI_USER_ENABLED, normalizeVectorDbEndpoint } from '@/common/config/constants';
 import type { IProvider } from '@/common/config/storage';
 import type { ConfigKeyMap } from '@/common/config/configKeys';
 import { resolveImageGenerationMcpEnv } from '@/common/config/imageGenerationMcpEnv';
@@ -110,6 +110,50 @@ export async function resolveNasRootDir(): Promise<string | undefined> {
     // Configured path missing / unreadable — disable rather than crash startup.
   }
   return undefined;
+}
+
+/**
+ * Resolve the vector origin on the trusted main-process side. The WebHost will
+ * accept browser endpoint hints only when they exactly match this value.
+ */
+export async function resolveVectorEndpoint(): Promise<string> {
+  const fromEnv = process.env.AIONUI_VECTOR_DB_ENDPOINT?.trim() || process.env.CENTAURAI_VECTOR_DB_ENDPOINT?.trim();
+  // Environment is controlled by the server administrator. StaticServer still
+  // performs strict origin validation before it starts.
+  if (fromEnv) return fromEnv;
+  try {
+    const settings = await httpRequest<Record<string, unknown>>('GET', '/api/settings/client');
+    const configured = settings?.['vectorDB.endpoint'];
+    if (typeof configured === 'string' && configured.trim()) {
+      const normalized = normalizeVectorDbEndpoint(configured);
+      try {
+        const parsed = new URL(normalized);
+        const hostname = parsed.hostname.toLowerCase();
+        const loopback =
+          hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]' || hostname === '::1';
+        if (
+          loopback &&
+          (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+          !parsed.username &&
+          !parsed.password &&
+          !parsed.search &&
+          !parsed.hash &&
+          (parsed.pathname === '/' || parsed.pathname === '')
+        ) {
+          return parsed.origin;
+        }
+      } catch {
+        // Fall through to the edition default below.
+      }
+      console.warn(
+        '[WebUI] Ignoring non-loopback or invalid vectorDB.endpoint from client settings; use AIONUI_VECTOR_DB_ENDPOINT for an admin-trusted external origin'
+      );
+    }
+    return normalizeVectorDbEndpoint();
+  } catch (error) {
+    console.error('[WebUI] Failed to read vector DB endpoint from backend:', error);
+    return normalizeVectorDbEndpoint();
+  }
 }
 
 /**
@@ -521,6 +565,9 @@ export async function startDesktopWebUI(opts: { port?: number; allowRemote?: boo
     // Enterprise LAN network drive (the company's large shared disk), browsed
     // read-only at /api/nas/*. Undefined when unconfigured → endpoints disabled.
     nasRootDir: await resolveNasRootDir(),
+    // Resolve on the trusted main-process side; browser endpoint parameters
+    // must only confirm this origin, never choose an arbitrary destination.
+    vectorEndpoint: await resolveVectorEndpoint(),
     // Image workbench for browser/LAN users. Mirror the desktop custom-protocol
     // root (getImageWorkbenchRoot in index.ts): packaged → bundled under the
     // renderer output; dev → the live public/ dist (out/renderer isn't copied
@@ -563,6 +610,14 @@ export async function stopDesktopWebUI(): Promise<void> {
   } catch (err) {
     console.error('[WebUI] stop error:', err);
   }
+}
+
+/**
+ * Revoke a user's active WebUI gate sessions after an administrator deletes
+ * the account or resets its password through the trusted desktop IPC path.
+ */
+export function revokeDesktopWebUIUserSessions(userId: string): number {
+  return currentHandle?.revokeUserSessions(userId) ?? 0;
 }
 
 /**

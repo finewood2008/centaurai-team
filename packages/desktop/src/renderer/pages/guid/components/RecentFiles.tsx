@@ -18,7 +18,10 @@ import { getCurrentFrontendUserId } from '@/common/utils/frontendUserScope';
 import { filterConversationsWithChannelScope } from '@/renderer/utils/user/conversationVisibility';
 import { useGeneratedFilesAutoRefresh } from '@/renderer/hooks/workspace/useGeneratedFilesAutoRefresh';
 import { useFileActions } from '@/renderer/hooks/file/useFileActions';
+import { isUnsafeTemporaryWorkspacePath } from '@/renderer/utils/workspace/workspace';
 import styles from '../index.module.css';
+
+export type DraftProvenance = 'managed-temporary-workspace' | 'registered-generated-artifact';
 
 export interface FileEntry {
   name: string;
@@ -27,6 +30,14 @@ export interface FileEntry {
   mtime: number;
   conversation: string;
   sourceConversationId?: string;
+  /** Root of the backend-managed temporary workspace that owns this file. */
+  workspaceRoot?: string;
+  /** Only values produced by the trusted collection/registration paths are
+   * eligible for Content Hub draft review. */
+  draftProvenance?: DraftProvenance;
+  /** Destructive draft removal is intentionally narrower than visibility.
+   * Standalone registered artifacts can be saved/published but not removed. */
+  canDiscardDraft?: boolean;
 }
 
 export const FILE_ICONS: Record<string, string> = {
@@ -182,6 +193,9 @@ async function collectWorkspaceFiles(
           mtime: mtimeSec,
           conversation: label,
           sourceConversationId,
+          workspaceRoot: workspace,
+          draftProvenance: 'managed-temporary-workspace',
+          canDiscardDraft: true,
         });
       }
     }
@@ -204,13 +218,33 @@ function collectConversationFiles(
   conversation: TChatConversation,
   teamNames: Map<string, string>
 ): Promise<FileEntry[]> {
-  const workspace = (conversation.extra as { workspace?: string } | undefined)?.workspace;
+  const extra = conversation.extra as
+    | {
+        workspace?: string;
+        custom_workspace?: boolean;
+        is_temporary_workspace?: boolean;
+        teamId?: string;
+        team_id?: string;
+      }
+    | undefined;
+  const workspace = extra?.workspace?.trim();
   if (!workspace) return Promise.resolve([]);
+
+  // Never infer delete authority from the mere presence or shape of a path.
+  // Only an explicit backend-managed temporary workspace is safe to enumerate
+  // as generated drafts. In particular, a user-selected repository/document
+  // folder must not be projected as disposable Content Hub content.
+  if (
+    extra?.is_temporary_workspace !== true ||
+    extra.custom_workspace === true ||
+    isUnsafeTemporaryWorkspacePath(workspace)
+  ) {
+    return Promise.resolve([]);
+  }
+
   // modified_at is epoch ms; FileEntry.mtime is epoch seconds (see formatTime).
   const mtimeSec = toEpochSeconds(conversation.modified_at || conversation.created_at || 0);
-  const teamId =
-    (conversation.extra as { teamId?: string; team_id?: string } | undefined)?.teamId ??
-    (conversation.extra as { team_id?: string } | undefined)?.team_id;
+  const teamId = extra.teamId ?? extra.team_id;
   const teamName = teamId ? teamNames.get(teamId) : undefined;
   const label = teamName ? `${teamName} · 圆桌会议` : conversation.name || workspace.split('/').pop() || '';
   return collectWorkspaceFiles(workspace, label, mtimeSec, conversation.id);

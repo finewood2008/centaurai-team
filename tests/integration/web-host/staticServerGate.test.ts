@@ -18,7 +18,7 @@ function startStubBackend(): Promise<StubBackend> {
   const server = http.createServer((req, res) => {
     if (req.url === '/login' && req.method === 'POST') {
       res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'session=backendjwt; Path=/' });
-      res.end(JSON.stringify({ success: true }));
+      res.end(JSON.stringify({ success: true, user: { id: 'user-test', username: 'tester' } }));
       return;
     }
     if (req.url?.startsWith('/api/assistants')) {
@@ -142,6 +142,51 @@ describe('static-server auth gate (allowRemote)', () => {
     expect(authed.status).toBe(200);
   });
 
+  it('lets the trusted desktop host revoke every session for a deleted or reset user', async () => {
+    const first = await fetch(`${base}/login`, { method: 'POST', body: '{}' });
+    const second = await fetch(`${base}/login`, { method: 'POST', body: '{}' });
+    const tokens = [first.headers.get('x-webui-gate-token'), second.headers.get('x-webui-gate-token')];
+    expect(tokens.every(Boolean)).toBe(true);
+
+    expect(handle.revokeUserSessions('user-test')).toBeGreaterThanOrEqual(2);
+    const statuses = await Promise.all(
+      tokens.map(async (token) => {
+        const response = await fetch(`${base}/api/auth/user`, {
+          headers: { 'x-webui-gate-token': token! },
+        });
+        return response.status;
+      })
+    );
+    expect(statuses).toEqual([401, 401]);
+  });
+
+  it('revokes both cookie and native-client access when logout carries only the gate header', async () => {
+    const login = await fetch(`${base}/login`, {
+      method: 'POST',
+      body: '{}',
+      headers: { 'content-type': 'application/json' },
+    });
+    const token = login.headers.get('x-webui-gate-token');
+    const gateCookie = login.headers
+      .getSetCookie()
+      .map((cookie) => cookie.split(';')[0] ?? '')
+      .find((cookie) => cookie.startsWith(`${GATE_COOKIE_NAME}=`));
+    if (!token || !gateCookie) throw new Error('Login did not return gate credentials');
+
+    expect(gateCookie).toBe(`${GATE_COOKIE_NAME}=${token}`);
+    const logout = await fetch(`${base}/logout`, {
+      method: 'POST',
+      headers: { 'x-webui-gate-token': token },
+    });
+    const [cookieAccess, headerAccess] = await Promise.all([
+      fetch(`${base}/api/assistants`, { headers: { cookie: gateCookie } }),
+      fetch(`${base}/api/assistants`, { headers: { 'x-webui-gate-token': token } }),
+    ]);
+
+    expect(logout.status).toBe(200);
+    expect([cookieAccess.status, headerAccess.status]).toEqual([401, 401]);
+  });
+
   it('rejects a forged gate cookie with 401', async () => {
     const r = await fetch(`${base}/api/assistants`, { headers: { cookie: `${GATE_COOKIE_NAME}=forged.signature` } });
     expect(r.status).toBe(401);
@@ -161,6 +206,66 @@ describe('static-server auth gate (allowRemote)', () => {
     expect(token).toBeTruthy();
 
     expect(await rawWsProbe(handle.port, undefined, `/ws?gate=${encodeURIComponent(token!)}`)).not.toContain('401');
+  });
+});
+
+describe('static-server gate session revocation', () => {
+  it('invalidates all sessions after a password change without affecting another user', async () => {
+    let passwordUpdates = 0;
+    const backendServer = http.createServer((req, res) => {
+      if (req.url === '/login' && req.method === 'POST') {
+        const username = String(req.headers['x-test-user'] || 'alice');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true, user: { id: `user-${username}`, username } }));
+        return;
+      }
+      if (req.url === '/api/auth/internal/users/user-alice/password' && req.method === 'POST') {
+        passwordUpdates += 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    const backend = await new Promise<StubBackend>((resolve) => {
+      backendServer.listen(0, '127.0.0.1', () => {
+        const port = (backendServer.address() as AddressInfo).port;
+        resolve({ port, close: () => new Promise<void>((done) => backendServer.close(() => done())) });
+      });
+    });
+    const handle = await startStaticServer({
+      staticDir: makeStaticDir('webui-revoke-'),
+      backendPort: backend.port,
+      port: 0,
+      allowRemote: true,
+    });
+    const base = `http://127.0.0.1:${handle.port}`;
+    const loginAs = async (username: string): Promise<string> => {
+      const response = await fetch(`${base}/login`, { method: 'POST', headers: { 'x-test-user': username } });
+      return response.headers.get('x-webui-gate-token') ?? '';
+    };
+
+    try {
+      const [aliceOne, aliceTwo, bob] = await Promise.all([loginAs('alice'), loginAs('alice'), loginAs('bob')]);
+      const changed = await fetch(`${base}/api/account/change-password`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-webui-gate-token': aliceOne },
+        body: JSON.stringify({ new_password: 'new-password' }),
+      });
+      const statuses = await Promise.all(
+        [aliceOne, aliceTwo, bob].map(async (token) => {
+          const response = await fetch(`${base}/api/auth/user`, { headers: { 'x-webui-gate-token': token } });
+          return response.status;
+        })
+      );
+
+      expect(changed.status).toBe(200);
+      expect(passwordUpdates).toBe(1);
+      expect(statuses).toEqual([401, 401, 200]);
+    } finally {
+      await handle.stop();
+      await backend.close();
+    }
   });
 });
 

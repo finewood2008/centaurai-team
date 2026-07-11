@@ -32,6 +32,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createVectorUploadPayloadFromPath } from './vector-upload.js';
+import { safeFileResponseHeaders, safeInlineContentType } from './safe-preview.js';
 
 /** Per-file upload cap. A NAS holds large media/datasets, so this is generous. */
 const NAS_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB
@@ -440,6 +441,8 @@ const INDEXABLE_IMAGE_EXT = ['jpg', 'jpeg', 'png', 'bmp', 'gif', 'webp'];
 const INDEXABLE_VIDEO_EXT = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v'];
 /** Per-file cap for indexing uploads — read fully into memory, so kept modest. */
 const NAS_INDEX_MAX_BYTES = 500 * 1024 * 1024; // 500 MB
+const NAS_INDEX_REQUEST_TIMEOUT_MS = 15_000;
+const NAS_INDEX_UPLOAD_TIMEOUT_MS = 5 * 60_000;
 /** Hidden folder holding the index manifest (uploaded doc ids + change keys). */
 const INDEX_DIR = '.nas-index';
 
@@ -524,34 +527,110 @@ export type NasIndexProgress = {
   error?: string;
 };
 
-/** Manifest entry: change key (size+mtime) + the vector-DB doc id we uploaded. */
-type IndexManifestEntry = { size: number; mtimeMs: number; docId: string; indexedAt: number };
+export type NasIndexOptions = {
+  endpoint: string;
+  /** App-private state directory. Production callers must set this so users
+   * with write access to the NAS cannot forge document ids to delete. */
+  manifestDir?: string;
+  includeVideo?: boolean;
+  onProgress?: (p: NasIndexProgress) => void;
+  isCancelled?: () => boolean;
+};
+
+/** Manifest entry: change key + the vector-DB identity we uploaded it to. */
+type IndexManifestEntry = {
+  size: number;
+  mtimeMs: number;
+  docId: string;
+  indexedAt: number;
+  /** SHA-256 of the normalized endpoint. Never persist a fetchable URL here. */
+  endpointKey?: string;
+  /** One-time migration guard for manifests written before endpoint ownership. */
+  needsReindex?: boolean;
+  /** False only for ids migrated from the old unsigned NAS-side manifest. */
+  deleteTrusted?: boolean;
+};
+type PendingIndexDelete = { endpointKey: string; docId: string };
 type IndexManifest = {
   version: number;
   files: Record<string, IndexManifestEntry>;
-  /** Doc ids whose delete failed (orphans) — retried at the next sync. */
-  pendingDeletes?: string[];
+  /** Failed deletes are only retried when that exact endpoint is active. */
+  pendingDeletes?: Array<string | PendingIndexDelete>;
+  /** In-memory migration marker; removed before the private manifest is saved. */
+  legacyImported?: boolean;
 };
 
-async function readIndexManifest(rootDir: string): Promise<IndexManifest> {
-  try {
-    const realRoot = await fs.promises.realpath(path.resolve(rootDir));
-    const raw = await fs.promises.readFile(path.join(realRoot, INDEX_DIR, 'manifest.json'), 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.files) return parsed as IndexManifest;
-  } catch {
-    // missing / corrupt → start fresh
+function vectorEndpointKey(endpoint: string): string {
+  return crypto.createHash('sha256').update(endpoint).digest('hex');
+}
+
+async function indexManifestPath(rootDir: string, manifestDir?: string): Promise<string> {
+  const realRoot = await fs.promises.realpath(path.resolve(rootDir));
+  if (manifestDir) {
+    const rootKey = crypto.createHash('sha256').update(realRoot).digest('hex');
+    return path.join(path.resolve(manifestDir), `${rootKey}.json`);
   }
+  return path.join(realRoot, INDEX_DIR, 'manifest.json');
+}
+
+async function readManifestFile(filePath: string): Promise<IndexManifest | null> {
+  try {
+    const raw = await fs.promises.readFile(filePath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.files && !Array.isArray(parsed.files)) {
+      return parsed as IndexManifest;
+    }
+  } catch {
+    // missing / corrupt
+  }
+  return null;
+}
+
+async function readIndexManifest(rootDir: string, manifestDir?: string): Promise<IndexManifest> {
+  const target = await indexManifestPath(rootDir, manifestDir);
+  const current = await readManifestFile(target);
+  if (current) return current;
+
+  if (manifestDir) {
+    // One-time compatibility import. The NAS-side file is unsigned and may be
+    // attacker-controlled, so never import pending deletes and mark every old
+    // doc id as non-deletable. The caller also forces a one-time re-index before
+    // it may skip; only that fresh upload becomes trusted private state.
+    const legacy = await readManifestFile(await indexManifestPath(rootDir));
+    if (legacy) {
+      legacy.pendingDeletes = [];
+      legacy.legacyImported = true;
+      for (const [rel, entry] of Object.entries(legacy.files)) {
+        if (
+          !entry ||
+          typeof entry !== 'object' ||
+          path.posix.isAbsolute(rel) ||
+          rel.split('/').some((segment) => segment === '..') ||
+          !Number.isFinite(entry.size) ||
+          !Number.isFinite(entry.mtimeMs) ||
+          typeof entry.docId !== 'string' ||
+          !entry.docId ||
+          entry.docId.length > 4096
+        ) {
+          delete legacy.files[rel];
+          continue;
+        }
+        entry.deleteTrusted = false;
+      }
+      return legacy;
+    }
+  }
+
   return { version: 1, files: {} };
 }
 
-async function writeIndexManifest(rootDir: string, manifest: IndexManifest): Promise<void> {
-  const realRoot = await fs.promises.realpath(path.resolve(rootDir));
-  const dir = path.join(realRoot, INDEX_DIR);
+async function writeIndexManifest(rootDir: string, manifest: IndexManifest, manifestDir?: string): Promise<void> {
+  const target = await indexManifestPath(rootDir, manifestDir);
+  const dir = path.dirname(target);
   await fs.promises.mkdir(dir, { recursive: true });
   const tmp = path.join(dir, `.manifest.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
   await fs.promises.writeFile(tmp, JSON.stringify(manifest, null, 2), 'utf-8');
-  await fs.promises.rename(tmp, path.join(dir, 'manifest.json'));
+  await fs.promises.rename(tmp, target);
 }
 
 /**
@@ -565,6 +644,8 @@ async function deleteVectorDoc(endpoint: string, docId: string): Promise<boolean
     const resp = await fetch(`${endpoint}/api/documents/${encodeURIComponent(docId)}`, {
       method: 'DELETE',
       headers: { 'X-Requested-By': 'centaur-vdb' },
+      redirect: 'error',
+      signal: AbortSignal.timeout(NAS_INDEX_REQUEST_TIMEOUT_MS),
     });
     return resp.ok || resp.status === 404;
   } catch {
@@ -583,13 +664,15 @@ async function waitForVectorJob(
   endpoint: string,
   docId: string,
   isCancelled?: () => boolean
-): Promise<'done' | 'failed' | 'pending'> {
+): Promise<'done' | 'failed' | 'pending' | 'cancelled'> {
   const deadline = Date.now() + 45_000; // bound: catch fast failures, don't block hours
   while (Date.now() < deadline) {
-    if (isCancelled?.()) return 'pending';
+    if (isCancelled?.()) return 'cancelled';
     try {
       const resp = await fetch(`${endpoint}/api/jobs/${encodeURIComponent(docId)}`, {
         headers: { 'X-Requested-By': 'centaur-vdb' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(NAS_INDEX_REQUEST_TIMEOUT_MS),
       });
       const state = resp.ok ? ((await resp.json()) as { state?: string }).state : undefined;
       if (state === 'done') return 'done';
@@ -609,23 +692,46 @@ async function waitForVectorJob(
  * a DUPLICATE (its content-hash dedup is keyed on the unique saved path, so it
  * never fires across uploads). We therefore keep our own manifest of what we've
  * indexed (change key = size+mtime, plus the vector-DB doc id) under
- * `<root>/.nas-index/` and make indexing a proper SYNC:
+ * app-private `manifestDir` (keyed by a hash of the real NAS root) and make
+ * indexing a proper SYNC. The legacy `<root>/.nas-index/` location is imported
+ * without delete authority because users of the share can modify it:
  *   - unchanged file (same size+mtime) → skip
  *   - new / changed file → (delete the old doc if any) + upload, record doc id
  *   - file that disappeared from the subtree → delete its doc, drop from manifest
  * Serialized (the vector DB indexer is single-worker). Honors `isCancelled`.
  */
+const indexManifestLocks = new Map<string, Promise<void>>();
+
 export async function indexNasFolder(
   rootDir: string,
   relPath: string | null | undefined,
-  opts: {
-    endpoint: string;
-    includeVideo?: boolean;
-    onProgress?: (p: NasIndexProgress) => void;
-    isCancelled?: () => boolean;
+  opts: NasIndexOptions
+): Promise<NasIndexProgress> {
+  const lockKey = await indexManifestPath(rootDir, opts.manifestDir);
+  const previous = indexManifestLocks.get(lockKey) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => mine);
+  indexManifestLocks.set(lockKey, tail);
+
+  await previous;
+  try {
+    return await indexNasFolderUnlocked(rootDir, relPath, opts);
+  } finally {
+    release();
+    if (indexManifestLocks.get(lockKey) === tail) indexManifestLocks.delete(lockKey);
   }
+}
+
+async function indexNasFolderUnlocked(
+  rootDir: string,
+  relPath: string | null | undefined,
+  opts: NasIndexOptions
 ): Promise<NasIndexProgress> {
   const endpoint = opts.endpoint.trim().replace(/\/+$/, '');
+  const endpointKey = vectorEndpointKey(endpoint);
   const prog: NasIndexProgress = { phase: 'walking', total: 0, done: 0, failed: 0, skipped: 0, pruned: 0 };
   const emit = () => opts.onProgress?.({ ...prog });
   emit();
@@ -656,19 +762,56 @@ export async function indexNasFolder(
     emit();
     return prog;
   }
-  const manifest = await readIndexManifest(rootDir);
+  const manifest = await readIndexManifest(rootDir, opts.manifestDir);
+  if (manifest.legacyImported) {
+    // An unsigned legacy entry cannot authorize either deletion or skipping:
+    // a NAS writer could forge size/mtime/docId. Re-index every source once to
+    // establish a trusted private manifest, while leaving the old id untouched.
+    for (const entry of Object.values(manifest.files)) {
+      entry.endpointKey = endpointKey;
+      entry.needsReindex = true;
+      entry.deleteTrusted = false;
+    }
+    delete manifest.legacyImported;
+    manifest.version = 2;
+  } else if (manifest.version < 2) {
+    // V1 app-private manifests did not record endpoint ownership. Re-index
+    // every entry once while associating it with the configured endpoint.
+    for (const entry of Object.values(manifest.files)) {
+      entry.endpointKey = endpointKey;
+      entry.needsReindex = true;
+      entry.deleteTrusted = true;
+    }
+    manifest.version = 2;
+  }
   prog.total = files.length;
   prog.phase = 'indexing';
   emit();
 
   // Orphans whose delete failed on a prior run — retry, keep the ones that fail.
-  const pending = new Set<string>(manifest.pendingDeletes ?? []);
-  const orphan = async (docId: string | undefined) => {
+  const pending = new Map<string, PendingIndexDelete>();
+  const pendingKey = (item: PendingIndexDelete) => JSON.stringify([item.endpointKey, item.docId]);
+  for (const raw of manifest.pendingDeletes ?? []) {
+    const item = typeof raw === 'string' ? { endpointKey, docId: raw } : raw;
+    if (!item?.endpointKey || !item.docId) continue;
+    pending.set(pendingKey(item), item);
+  }
+  const orphan = async (docId: string | undefined, ownerEndpointKey = endpointKey) => {
     if (!docId) return;
-    if (await deleteVectorDoc(endpoint, docId)) pending.delete(docId);
-    else pending.add(docId);
+    const item = { endpointKey: ownerEndpointKey, docId };
+    const key = pendingKey(item);
+    // A manifest is stored on a user-writable share. Never fetch an endpoint
+    // recovered from it; retry only against the currently trusted endpoint.
+    if (ownerEndpointKey !== endpointKey) {
+      pending.set(key, item);
+      return;
+    }
+    if (await deleteVectorDoc(endpoint, docId)) pending.delete(key);
+    else pending.set(key, item);
   };
-  for (const docId of Array.from(pending)) await orphan(docId);
+  for (const item of Array.from(pending.values())) {
+    if (item.endpointKey === endpointKey) await orphan(item.docId, item.endpointKey);
+  }
 
   const seen = new Set<string>();
   for (const f of files) {
@@ -677,12 +820,20 @@ export async function indexNasFolder(
     prog.current = f.relPath;
     emit();
     const prev = manifest.files[f.relPath];
-    if (prev && prev.size === f.size && prev.mtimeMs === f.modifiedAt) {
+    const prevBelongsHere = prev?.endpointKey === endpointKey;
+    if (prev && prevBelongsHere && !prev.needsReindex && prev.size === f.size && prev.mtimeMs === f.modifiedAt) {
       prog.skipped++; // unchanged since last index
       emit();
       continue;
     }
     if (f.size > NAS_INDEX_MAX_BYTES) {
+      // Do not leave a stale, smaller version searchable after the source grows
+      // beyond the ingestion limit.
+      if (prev) {
+        if (prev.deleteTrusted !== false) await orphan(prev.docId, prev.endpointKey);
+        delete manifest.files[f.relPath];
+        prog.pruned++;
+      }
       prog.skipped++;
       emit();
       continue;
@@ -695,14 +846,27 @@ export async function indexNasFolder(
         method: 'POST',
         headers: { 'X-Requested-By': 'centaur-vdb' },
         body: form,
+        redirect: 'error',
+        signal: AbortSignal.timeout(NAS_INDEX_UPLOAD_TIMEOUT_MS),
       });
       if (!resp.ok) {
         prog.failed++;
         emit();
         continue;
       }
-      const body = (await resp.json().catch(() => ({}))) as { doc_id?: string; saved_path?: string; queued?: boolean };
+      const body = (await resp.json().catch(() => ({}))) as {
+        doc_id?: string;
+        saved_path?: string;
+        queued?: boolean;
+      };
       const docId = body.doc_id || body.saved_path || '';
+      if (!docId) {
+        // Without a stable id we cannot update, prune, or deduplicate this
+        // upload. Treat the protocol violation as a failure and retry later.
+        prog.failed++;
+        emit();
+        continue;
+      }
       // Queued (video) uploads index in the background — confirm they don't
       // fail outright before counting them as done.
       if (body.queued && docId) {
@@ -713,10 +877,29 @@ export async function indexNasFolder(
           emit();
           continue;
         }
+        if (state === 'pending' || state === 'cancelled') {
+          // Never replace a known-good manifest entry with a job that has not
+          // completed. Queue the speculative upload for cleanup on the next
+          // sync; a timeout is a failure, while user cancellation is a skip.
+          await orphan(docId);
+          if (state === 'pending') prog.failed++;
+          else prog.skipped++;
+          emit();
+          continue;
+        }
       }
       // New version landed → drop the previous one (retry-tracked on failure).
-      if (prev?.docId && prev.docId !== docId) await orphan(prev.docId);
-      manifest.files[f.relPath] = { size: f.size, mtimeMs: f.modifiedAt, docId, indexedAt: Date.now() };
+      if (prev?.docId && prev.deleteTrusted !== false && (!prevBelongsHere || prev.docId !== docId)) {
+        await orphan(prev.docId, prev.endpointKey);
+      }
+      manifest.files[f.relPath] = {
+        size: f.size,
+        mtimeMs: f.modifiedAt,
+        docId,
+        indexedAt: Date.now(),
+        endpointKey,
+        deleteTrusted: true,
+      };
       prog.done++;
     } catch {
       prog.failed++;
@@ -728,16 +911,18 @@ export async function indexNasFolder(
   if (!opts.isCancelled?.()) {
     for (const rel of Object.keys(manifest.files)) {
       if (!inScope(rel) || seen.has(rel)) continue;
-      await orphan(manifest.files[rel].docId);
+      const stale = manifest.files[rel];
+      if (stale.deleteTrusted !== false) await orphan(stale.docId, stale.endpointKey);
       delete manifest.files[rel];
       prog.pruned++;
       emit();
     }
   }
 
-  manifest.pendingDeletes = [...pending];
+  manifest.version = 2;
+  manifest.pendingDeletes = [...pending.values()];
   try {
-    await writeIndexManifest(rootDir, manifest);
+    await writeIndexManifest(rootDir, manifest, opts.manifestDir);
   } catch {
     // manifest write failed — index still happened; next run may re-add dupes
   }
@@ -760,8 +945,20 @@ export async function nasList(rootDir: string, relPath?: string | null): Promise
   const dir = resolveWithinRoot(rootDir, relPath);
   if (dir == null) throw new Error('NAS_PATH_FORBIDDEN');
   // The dir may be reached via a symlink that escapes the root — readdir would
-  // then leak an outside directory's contents. Reject unless it really stays in.
-  if (!(await isRealContained(rootDir, dir))) throw new Error('NAS_PATH_FORBIDDEN');
+  // then leak an outside directory's contents. Explicit paths to the recycle or
+  // index folders must also be rejected; merely hiding dot entries in a parent
+  // listing does not stop a caller from naming `.nas-trash` directly.
+  let realRoot: string;
+  let realDir: string;
+  try {
+    realRoot = await fs.promises.realpath(path.resolve(rootDir));
+    realDir = await fs.promises.realpath(dir);
+  } catch {
+    throw new Error('NAS_PATH_FORBIDDEN');
+  }
+  if ((realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) || isReservedPath(realRoot, realDir)) {
+    throw new Error('NAS_PATH_FORBIDDEN');
+  }
 
   let dirents: fs.Dirent[];
   try {
@@ -812,13 +1009,17 @@ export type NasFileInfo = { path: string; name: string; mime: string; size: numb
 export async function nasFileInfo(rootDir: string, relPath: string | null | undefined): Promise<NasFileInfo | null> {
   const full = resolveWithinRoot(rootDir, relPath);
   if (full == null) return null;
-  // Reject files whose real (symlink-resolved) path escapes the root, so a
-  // symlink inside the drive cannot be used to read arbitrary server files.
-  if (!(await isRealContained(rootDir, full))) return null;
   try {
-    const st = await fs.promises.stat(full);
+    const realRoot = await fs.promises.realpath(path.resolve(rootDir));
+    const real = await fs.promises.realpath(full);
+    // Reject escaping symlinks and all files below server-private recycle/index
+    // directories, even when a caller reaches one through an in-root symlink.
+    if ((real !== realRoot && !real.startsWith(realRoot + path.sep)) || isReservedPath(realRoot, real)) return null;
+    const st = await fs.promises.stat(real);
     if (!st.isFile()) return null;
-    return { path: full, name: path.basename(full), mime: mimeOf(full), size: st.size };
+    // Stream the resolved path rather than re-following the caller-controlled
+    // symlink after the containment decision.
+    return { path: real, name: path.basename(full), mime: mimeOf(full), size: st.size };
   } catch {
     return null;
   }
@@ -903,20 +1104,24 @@ async function streamNasFile(
     return;
   }
 
+  const inline = disposition === 'inline';
+  const contentType = inline ? safeInlineContentType(info.mime) : 'application/octet-stream';
+  const securityHeaders = safeFileResponseHeaders(inline);
+
   // HEAD: answer with metadata headers only — never open a read stream (avoids
   // an fd / first-byte read on a slow network mount).
   if (req.method === 'HEAD') {
     res.writeHead(200, {
-      'content-type': disposition === 'inline' ? info.mime : 'application/octet-stream',
+      'content-type': contentType,
       'accept-ranges': 'bytes',
       'content-length': String(info.size),
+      ...securityHeaders,
     });
     res.end();
     return;
   }
 
   const filename = encodeURIComponent(info.name);
-  const contentType = disposition === 'inline' ? info.mime : 'application/octet-stream';
   const range = parseRange(req.headers.range, info.size);
 
   if (range === 'unsatisfiable') {
@@ -934,6 +1139,7 @@ async function streamNasFile(
       'content-range': `bytes ${start}-${end}/${info.size}`,
       'accept-ranges': 'bytes',
       'content-length': String(end - start + 1),
+      ...securityHeaders,
     });
     const stream = fs.createReadStream(info.path, { start, end });
     stream.on('error', () => res.destroy());
@@ -946,6 +1152,7 @@ async function streamNasFile(
     'content-disposition': `${disposition}; filename*=UTF-8''${filename}`,
     'accept-ranges': 'bytes',
     'content-length': String(info.size),
+    ...securityHeaders,
   });
   const stream = fs.createReadStream(info.path);
   stream.on('error', () => res.destroy());

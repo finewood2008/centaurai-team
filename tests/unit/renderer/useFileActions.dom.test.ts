@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   isDesktop: vi.fn(() => false),
+  isRemoteClient: vi.fn(() => false),
   openPreview: vi.fn(),
   downloadFileFromPath: vi.fn(),
   shellOpenFile: vi.fn(),
@@ -13,6 +14,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/renderer/utils/platform', () => ({
   isElectronDesktop: mocks.isDesktop,
+}));
+
+vi.mock('@/common/adapter/httpBridge', () => ({
+  isRemoteClientBridgeMode: mocks.isRemoteClient,
 }));
 
 vi.mock('@/renderer/pages/conversation/Preview/context/PreviewContext', () => ({
@@ -42,6 +47,7 @@ describe('useFileActions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.isDesktop.mockReturnValue(false);
+    mocks.isRemoteClient.mockReturnValue(false);
   });
 
   it('opens Office files through preview in WebUI/LAN mode', async () => {
@@ -92,5 +98,23 @@ describe('useFileActions', () => {
     expect(mocks.openPreview).not.toHaveBeenCalled();
     expect(mocks.downloadFileFromPath).not.toHaveBeenCalled();
     expect(mocks.shellOpenFile).toHaveBeenCalledWith('/srv/work/report.xlsx');
+  });
+
+  it('does not invoke server shell routes from a distributed desktop client', async () => {
+    mocks.isDesktop.mockReturnValue(true);
+    mocks.isRemoteClient.mockReturnValue(true);
+    const { result } = renderHook(() => useFileActions());
+
+    await act(async () => {
+      await result.current.openFile({ path: '/srv/work/archive.zip', name: 'archive.zip' });
+    });
+
+    expect(result.current.canReveal).toBe(false);
+    expect(mocks.shellOpenFile).not.toHaveBeenCalled();
+    expect(mocks.downloadFileFromPath).toHaveBeenCalledWith('/srv/work/archive.zip', 'archive.zip', undefined);
+    await expect(result.current.revealFile({ path: '/srv/work/archive.zip', name: 'archive.zip' })).rejects.toThrow(
+      'only available in the desktop app'
+    );
+    expect(mocks.shellShowItemInFolder).not.toHaveBeenCalled();
   });
 });

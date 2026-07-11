@@ -75,7 +75,12 @@ describe('static-server vector upload proxy', () => {
     });
     stopVector = vector.close;
 
-    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
+    handle = await startStaticServer({
+      staticDir,
+      backendPort: backend.port,
+      port: 0,
+      vectorEndpoint: `http://127.0.0.1:${vector.port}`,
+    });
     const form = new FormData();
     form.append('file', new Blob(['fake pptx bytes']), 'lan-deck.pptx');
 

@@ -49,9 +49,18 @@ import {
   handleNasUpload,
 } from './nas-drive.js';
 import { handleImageWorkbenchProxy, handleImageWorkbenchStatic, handleComfyUIProxy } from './image-workbench.js';
-import { type AuthGate, type AuthGateIdentity, createAuthGate } from './webui-auth-gate.js';
+import {
+  GATE_COOKIE_NAME,
+  type AuthGate,
+  type AuthGateIdentity,
+  createAuthGate,
+  parseCookie,
+} from './webui-auth-gate.js';
 import { createEntryGuard, type EntryGuard } from './entry-html-guard.js';
 import { createVectorUploadPayloadFromFile } from './vector-upload.js';
+import { createConversationTenantBoundary, isConversationTenantHttpRequest } from './conversation-tenancy.js';
+import { proxyTenantWebSocket } from './tenant-websocket.js';
+import { safeFileResponseHeaders, safeInlineContentType } from './safe-preview.js';
 import type { ImageWorkbenchConfig } from './types.js';
 
 export type StaticServerOptions = {
@@ -105,6 +114,13 @@ export type StaticServerOptions = {
   blockTeamRoutes?: boolean;
   /** Backend/user data directory. Used for admin audit logs. */
   dataDir?: string;
+  /**
+   * Server-owned vector DB origin. Browser-supplied endpoint values are only
+   * accepted when they exactly match this origin. Defaults to loopback:8619.
+   */
+  vectorEndpoint?: string;
+  /** Explicit administrator opt-in for plaintext HTTP to a non-loopback vector origin. */
+  allowInsecureVectorEndpoint?: boolean;
 };
 
 export type StaticServerHandle = {
@@ -118,9 +134,14 @@ export type StaticServerHandle = {
   inspectEntry: EntryGuard['inspect'];
   /** Force a check + heal of the entry document; returns the resulting health. */
   repairEntry: EntryGuard['repair'];
+  /** Immediately revoke every active LAN session belonging to a backend user. */
+  revokeUserSessions: (userId: string) => number;
 };
 
 const DEFAULT_PORT = 25808;
+const AUTH_REQUEST_MAX_BYTES = 64 * 1024;
+const AUTH_RESPONSE_MAX_BYTES = 1024 * 1024;
+const AUTH_PROXY_TIMEOUT_MS = 15_000;
 
 /**
  * Assistant ids that are desktop/admin-only and must not be exposed to WebUI
@@ -176,8 +197,21 @@ type AuthUserEnvelope = {
 };
 
 function sendJsonResponse(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json' });
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  });
   res.end(JSON.stringify(body));
+}
+
+function sendApiBuffer(res: ServerResponse, status: number, body: Buffer | string): void {
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  });
+  res.end(body);
 }
 
 function normalizeAuthUser(value: unknown): AuthGateIdentity | null {
@@ -222,6 +256,8 @@ async function fetchBackendCurrentUser(backendPort: number, cookieHeader?: strin
   try {
     const res = await fetch(`http://127.0.0.1:${backendPort}/api/auth/user`, {
       headers: cookieHeader ? { cookie: cookieHeader } : undefined,
+      redirect: 'error',
+      signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) return null;
     const json = (await res.json()) as AuthUserEnvelope;
@@ -238,19 +274,55 @@ async function fetchBackendCurrentUser(backendPort: number, cookieHeader?: strin
  * bad credentials and we mint nothing.
  */
 function proxyLoginWithGate(req: IncomingMessage, res: ServerResponse, gate: AuthGate, backendPort: number): void {
+  const declaredLength = Number(req.headers['content-length']);
+  if (Number.isFinite(declaredLength) && declaredLength > AUTH_REQUEST_MAX_BYTES) {
+    req.resume();
+    sendJsonResponse(res, 413, { success: false, error: 'AUTH_REQUEST_TOO_LARGE' });
+    return;
+  }
   const options: http.RequestOptions = {
     hostname: '127.0.0.1',
     port: backendPort,
     path: req.url,
     method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${backendPort}` },
+    headers: { ...req.headers, host: `127.0.0.1:${backendPort}`, 'accept-encoding': 'identity' },
   };
-  const proxy = http.request(options, (proxyRes) => {
+  let terminal = false;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  let upstreamResponse: IncomingMessage | null = null;
+  let proxy: ReturnType<typeof http.request>;
+  const finish = (): void => {
+    if (deadline) clearTimeout(deadline);
+    deadline = undefined;
+  };
+  const fail = (status: number, error: string): void => {
+    if (terminal) return;
+    terminal = true;
+    finish();
+    proxy?.destroy();
+    upstreamResponse?.destroy();
+    req.resume();
+    if (!res.headersSent) sendJsonResponse(res, status, { success: false, error });
+    else res.destroy();
+  };
+
+  proxy = http.request(options, (proxyRes) => {
+    upstreamResponse = proxyRes;
     const headers = { ...proxyRes.headers };
     const status = proxyRes.statusCode ?? 502;
     const chunks: Buffer[] = [];
-    proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let responseBytes = 0;
+    proxyRes.on('data', (chunk: Buffer) => {
+      if (terminal) return;
+      responseBytes += chunk.length;
+      if (responseBytes > AUTH_RESPONSE_MAX_BYTES) {
+        fail(502, 'AUTH_RESPONSE_TOO_LARGE');
+        return;
+      }
+      chunks.push(chunk);
+    });
     proxyRes.on('end', () => {
+      if (terminal) return;
       void (async () => {
         const body = Buffer.concat(chunks);
         if (status >= 200 && status < 300) {
@@ -266,35 +338,68 @@ function proxyLoginWithGate(req: IncomingMessage, res: ServerResponse, gate: Aut
                 responseCookies
               )
             ));
-          const gateToken = gate.mintToken(identity ?? undefined);
-          headers['set-cookie'] = [...list, gate.mintCookie(identity ?? undefined)];
+          if (!identity) {
+            fail(502, 'AUTH_IDENTITY_UNAVAILABLE');
+            return;
+          }
+          const gateCookie = gate.mintCookie(identity);
+          const gateToken = parseCookie(gateCookie, GATE_COOKIE_NAME);
+          if (!gateToken) {
+            fail(502, 'AUTH_SESSION_UNAVAILABLE');
+            return;
+          }
+          headers['set-cookie'] = [...list, gateCookie];
           headers['x-webui-gate-token'] = gateToken;
           headers['access-control-expose-headers'] = appendCsvHeader(headers['access-control-expose-headers'], [
             'X-WebUI-Gate-Token',
           ]);
         }
+        terminal = true;
+        finish();
+        headers['content-type'] = 'application/json; charset=utf-8';
+        headers['cache-control'] = 'no-store';
+        headers['x-content-type-options'] = 'nosniff';
         headers['content-length'] = String(Buffer.byteLength(body));
+        delete headers['content-encoding'];
         delete headers['transfer-encoding'];
         res.writeHead(status, headers);
         res.end(body);
       })().catch(() => {
-        if (!res.headersSent) {
-          sendJsonResponse(res, 502, { error: 'BACKEND_UNREACHABLE' });
-        } else {
-          res.destroy();
-        }
+        fail(502, 'BACKEND_UNREACHABLE');
       });
     });
   });
-  proxy.on('error', () => {
-    if (!res.headersSent) {
-      res.writeHead(502, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: 'BACKEND_UNREACHABLE' }));
-    } else {
-      res.destroy();
+  proxy.on('error', () => fail(502, 'BACKEND_UNREACHABLE'));
+  deadline = setTimeout(() => fail(504, 'AUTH_TIMEOUT'), AUTH_PROXY_TIMEOUT_MS);
+
+  let requestBytes = 0;
+  req.on('data', (chunk: Buffer) => {
+    if (terminal) return;
+    requestBytes += chunk.length;
+    if (requestBytes > AUTH_REQUEST_MAX_BYTES) {
+      fail(413, 'AUTH_REQUEST_TOO_LARGE');
+      return;
     }
+    if (!proxy.write(chunk)) req.pause();
   });
-  req.pipe(proxy);
+  proxy.on('drain', () => req.resume());
+  req.on('end', () => {
+    if (!terminal) proxy.end();
+  });
+  req.on('aborted', () => {
+    if (terminal) return;
+    terminal = true;
+    finish();
+    proxy.destroy();
+    upstreamResponse?.destroy();
+  });
+  req.on('error', () => {
+    if (terminal) return;
+    terminal = true;
+    finish();
+    proxy.destroy();
+    upstreamResponse?.destroy();
+  });
 }
 
 function appendCsvHeader(value: string | string[] | number | undefined, additions: string[]): string {
@@ -321,6 +426,149 @@ function isGateAuthorized(gate: AuthGate, req: IncomingMessage): boolean {
 
 function requestPathFromUrl(url: string): string {
   return (url.split('?')[0] || '/').split('#')[0];
+}
+
+/**
+ * Canonicalise a URL path for security-policy checks. Decode more than once so
+ * percent-encoded spellings cannot cross the WebHost/backend parsing boundary
+ * and turn a permitted-looking path into an internal route downstream.
+ */
+function canonicalSecurityPath(url: string): string | null {
+  let value: string;
+  try {
+    value = new URL(url, 'http://localhost').pathname;
+    for (let i = 0; i < 3; i += 1) {
+      const decoded = decodeURIComponent(value);
+      if (decoded === value) break;
+      value = decoded;
+    }
+  } catch {
+    return null;
+  }
+  return value
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')
+    .toLowerCase();
+}
+
+function pathHasUnsafeSyntax(value: string): boolean {
+  if (value.includes('\\') || value.includes('\0') || value.includes('//')) return true;
+  return value.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
+/**
+ * Reject ambiguous API paths before the auth gate or any special dispatcher.
+ * Node's outbound http client normalises dot segments, so forwarding a raw
+ * `/api/downloads/../fs/read` would otherwise turn an anonymous download route
+ * into an authenticated-looking filesystem request at the backend.
+ */
+function isHazardousApiPath(url: string): boolean {
+  const rawPath = (url.split('?')[0] || '/').split('#')[0];
+  let value = rawPath;
+  let isApi = /^\/api(?:\/|$)/i.test(value);
+  for (let i = 0; i < 3; i += 1) {
+    const looksLikeApi = isApi || /^\/api(?:%|\\|\/|$)/i.test(value);
+    if (pathHasUnsafeSyntax(value) || /%(?:2f|5c|00)/i.test(value)) return looksLikeApi;
+    const segments = value.split('/');
+    // Static top-level route names must not be encoded. Dynamic IDs live in
+    // later segments and remain valid unless they encode a path delimiter.
+    if (isApi && segments[2]?.includes('%')) return true;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      return isApi;
+    }
+    if (decoded === value) break;
+    value = decoded;
+    isApi ||= /^\/api(?:\/|$)/i.test(value);
+  }
+  return isApi && pathHasUnsafeSyntax(value);
+}
+
+const PRIVATE_LAN_SKILL_ROUTES = [
+  '/api/skills/assistant-rule/write',
+  '/api/skills/assistant-skill/write',
+  '/api/skills/import',
+  '/api/skills/import-symlink',
+  '/api/skills/scan',
+  '/api/skills/external-paths',
+  '/api/skills/market/enable',
+  '/api/skills/market/disable',
+];
+
+const PRIVATE_LAN_ROUTE_PREFIXES = [
+  '/api/mcp',
+  '/api/remote-agents',
+  '/api/cron',
+  '/api/channel',
+  '/api/system',
+  '/api/extensions',
+  '/api/document',
+  '/api/ppt-preview',
+  '/api/word-preview',
+  '/api/excel-preview',
+  '/api/preview-history',
+  '/api/star-office',
+  '/api/ppt-proxy',
+  '/api/office-watch-proxy',
+];
+const ADMIN_MUTATION_ROUTE_PREFIXES = ['/api/assistants', '/api/agents', '/api/hub'];
+
+/** Backend routes intended only for the Electron main process / local CLI. */
+function isPrivateLanBackendRoute(url: string, method = 'GET'): boolean {
+  const pathname = canonicalSecurityPath(url);
+  if (!pathname) return true;
+  const mutation = method !== 'GET' && method !== 'HEAD';
+  return (
+    pathname === '/api/auth/internal' ||
+    pathname.startsWith('/api/auth/internal/') ||
+    pathname === '/api/webui' ||
+    pathname.startsWith('/api/webui/') ||
+    pathname.startsWith('/api/assistants/') ||
+    pathname === '/api/agents/custom' ||
+    pathname.startsWith('/api/agents/custom/') ||
+    pathname === '/api/agents/health-check' ||
+    pathname === '/api/agents/provider-health-check' ||
+    pathname === '/api/shell' ||
+    pathname.startsWith('/api/shell/') ||
+    pathname === '/api/fs' ||
+    pathname.startsWith('/api/fs/') ||
+    PRIVATE_LAN_ROUTE_PREFIXES.some((route) => pathname === route || pathname.startsWith(`${route}/`)) ||
+    (mutation &&
+      ADMIN_MUTATION_ROUTE_PREFIXES.some((route) => pathname === route || pathname.startsWith(`${route}/`))) ||
+    ((method === 'DELETE' || method === 'PUT' || method === 'PATCH') &&
+      (pathname === '/api/skills' || pathname.startsWith('/api/skills/'))) ||
+    PRIVATE_LAN_SKILL_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`))
+  );
+}
+
+/**
+ * Authentication routes that a browser really needs. Other `/api/auth/*`
+ * routes must be added deliberately instead of falling through the generic
+ * local-mode backend proxy.
+ */
+function isAllowedLanAuthRoute(url: string): boolean {
+  const pathname = canonicalSecurityPath(url);
+  return (
+    pathname === '/api/auth/status' ||
+    pathname === '/api/auth/csrf-token' ||
+    pathname === '/api/auth/user' ||
+    pathname === '/api/auth/logout'
+  );
+}
+
+/**
+ * The LAN WebHost must be an allowlist boundary, not a best-effort blocklist.
+ * Every authenticated browser API with host privileges is dispatched by an
+ * explicit handler above. Only these two bootstrap reads still need the plain
+ * backend proxy; an unknown/new aioncore route must never become remotely
+ * reachable merely because it was added to the bundled backend.
+ */
+function isAllowedLanGenericBackendRoute(url: string, method: string): boolean {
+  if (method !== 'GET') return false;
+  const pathname = canonicalSecurityPath(url);
+  return pathname === '/api/auth/status' || pathname === '/api/auth/csrf-token';
 }
 
 async function resolveRequestIdentity(
@@ -355,13 +603,17 @@ async function resolveRequestIdentity(
  * the login page itself always loads.
  */
 function enforceGate(req: IncomingMessage, res: ServerResponse, gate: AuthGate, backendPort: number): boolean {
-  const requestPath = (req.url ?? '').split('?')[0] ?? '';
+  const requestPath = canonicalSecurityPath(req.url ?? '') ?? '';
 
   if (req.method === 'POST' && requestPath === '/login') {
     proxyLoginWithGate(req, res, gate, backendPort);
     return true;
   }
   if (requestPath === '/logout' || requestPath === '/api/auth/logout') {
+    // Revoke either transport (both normally carry the same token) immediately
+    // so logout remains effective even if the backend is down.
+    gate.revokeCookie(req.headers.cookie);
+    gate.revokeToken(requestGateToken(req));
     const options: http.RequestOptions = {
       hostname: '127.0.0.1',
       port: backendPort,
@@ -442,7 +694,12 @@ function rawGateToken(head: Buffer): string | undefined {
  * WebUI client. Accept-encoding is forced to identity so the body is plain JSON
  * to rewrite; on any non-JSON/parse failure the original bytes pass through.
  */
-function proxyAssistantsFiltered(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
+function proxyAssistantsFiltered(
+  req: IncomingMessage,
+  res: ServerResponse,
+  backendPort: number,
+  lanSafeOnly = false
+): void {
   const options: http.RequestOptions = {
     hostname: '127.0.0.1',
     port: backendPort,
@@ -464,17 +721,38 @@ function proxyAssistantsFiltered(req: IncomingMessage, res: ServerResponse, back
       let body = Buffer.concat(chunks);
       if (status >= 200 && status < 300) {
         try {
-          const json = JSON.parse(body.toString('utf-8')) as { data?: unknown };
-          const keep = (a: unknown): boolean => !ADMIN_ONLY_ASSISTANT_IDS.has((a as { id?: string })?.id ?? '');
-          const data = json.data as unknown;
-          if (Array.isArray(data)) {
-            json.data = data.filter(keep);
-          } else if (data && Array.isArray((data as { items?: unknown[] }).items)) {
-            (data as { items: unknown[] }).items = (data as { items: unknown[] }).items.filter(keep);
+          const parsed = JSON.parse(body.toString('utf-8')) as unknown;
+          const keep = (a: unknown): boolean =>
+            !lanSafeOnly && !ADMIN_ONLY_ASSISTANT_IDS.has((a as { id?: string })?.id ?? '');
+          if (Array.isArray(parsed)) {
+            body = Buffer.from(JSON.stringify(parsed.filter(keep)), 'utf-8');
+          } else if (parsed && typeof parsed === 'object') {
+            const json = parsed as { success?: unknown; data?: unknown };
+            if (Array.isArray(json.data)) {
+              body = Buffer.from(JSON.stringify({ success: json.success, data: json.data.filter(keep) }), 'utf-8');
+            } else if (json.data && Array.isArray((json.data as { items?: unknown[] }).items)) {
+              body = Buffer.from(
+                JSON.stringify({
+                  success: json.success,
+                  data: { items: (json.data as { items: unknown[] }).items.filter(keep) },
+                }),
+                'utf-8'
+              );
+            } else {
+              throw new Error('unexpected assistants response');
+            }
+          } else {
+            throw new Error('unexpected assistants response');
           }
-          body = Buffer.from(JSON.stringify(json), 'utf-8');
         } catch {
-          // Non-JSON or unexpected shape — pass the original bytes through.
+          body = Buffer.from(JSON.stringify({ error: 'INVALID_BACKEND_RESPONSE' }), 'utf-8');
+          res.writeHead(502, {
+            ...headers,
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(body),
+          });
+          res.end(body);
+          return;
         }
       }
       res.writeHead(status, { ...headers, 'content-length': Buffer.byteLength(body) });
@@ -492,12 +770,153 @@ function proxyAssistantsFiltered(req: IncomingMessage, res: ServerResponse, back
   req.pipe(proxy);
 }
 
-function stripProviderSecrets(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stripProviderSecrets);
+const LAN_AGENT_FIELDS = new Set([
+  'id',
+  'icon',
+  'name',
+  'name_i18n',
+  'description',
+  'description_i18n',
+  'backend',
+  'agent_type',
+  'agent_source',
+  'enabled',
+  'available',
+  'team_capable',
+  'behavior_policy',
+  'yolo_id',
+  'handshake',
+]);
+
+function projectLanAgent(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.id !== 'string' || !input.id) return null;
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(input)) {
+    if (!LAN_AGENT_FIELDS.has(key)) continue;
+    if (key === 'handshake' && child && typeof child === 'object' && !Array.isArray(child)) {
+      const handshake = child as Record<string, unknown>;
+      output.handshake = stripSensitiveFields({
+        agent_capabilities: handshake.agent_capabilities,
+        available_modes: handshake.available_modes,
+        available_models: handshake.available_models,
+        available_commands: handshake.available_commands,
+      });
+      continue;
+    }
+    output[key] = stripSensitiveFields(child);
+  }
+  return output;
+}
+
+function projectLanAgentPayload(value: unknown, lanSafeOnly = false): unknown | null {
+  const projectList = (items: unknown[]): Record<string, unknown>[] =>
+    items
+      .filter(
+        (item) =>
+          !lanSafeOnly ||
+          Boolean(
+            item &&
+            typeof item === 'object' &&
+            !Array.isArray(item) &&
+            (item as Record<string, unknown>).agent_type === 'aionrs'
+          )
+      )
+      .map(projectLanAgent)
+      .filter((item): item is Record<string, unknown> => item !== null);
+  if (Array.isArray(value)) return projectList(value);
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Record<string, unknown>;
+  if (Array.isArray(input.data)) return { success: input.success, data: projectList(input.data) };
+  if (input.data && typeof input.data === 'object' && Array.isArray((input.data as { items?: unknown }).items)) {
+    return {
+      success: input.success,
+      data: { items: projectList((input.data as { items: unknown[] }).items) },
+    };
+  }
+  return null;
+}
+
+/** Return only runtime-selection metadata; never process commands, env or host paths. */
+function proxyAgentsSanitized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  backendPort: number,
+  lanSafeOnly = false
+): void {
+  const proxy = http.request(
+    {
+      hostname: '127.0.0.1',
+      port: backendPort,
+      path: req.url,
+      method: req.method,
+      headers: { ...req.headers, host: `127.0.0.1:${backendPort}`, 'accept-encoding': 'identity' },
+    },
+    (proxyRes) => {
+      const chunks: Buffer[] = [];
+      proxyRes.on('data', (chunk: Buffer) => chunks.push(chunk));
+      proxyRes.on('end', () => {
+        const status = proxyRes.statusCode ?? 502;
+        const headers = { ...proxyRes.headers };
+        delete headers['content-length'];
+        delete headers['content-encoding'];
+        delete headers['transfer-encoding'];
+        let body = Buffer.concat(chunks);
+        if (status >= 200 && status < 300) {
+          try {
+            const projected = projectLanAgentPayload(JSON.parse(body.toString('utf-8')), lanSafeOnly);
+            if (!projected) throw new Error('unexpected agents response');
+            body = Buffer.from(JSON.stringify(projected), 'utf-8');
+          } catch {
+            body = Buffer.from(JSON.stringify({ error: 'INVALID_BACKEND_RESPONSE' }), 'utf-8');
+            res.writeHead(502, {
+              ...headers,
+              'content-type': 'application/json',
+              'content-length': Buffer.byteLength(body),
+            });
+            res.end(body);
+            return;
+          }
+        }
+        res.writeHead(status, { ...headers, 'content-length': Buffer.byteLength(body) });
+        res.end(body);
+      });
+    }
+  );
+  proxy.on('error', () => {
+    if (!res.headersSent) sendJsonResponse(res, 502, { error: 'BACKEND_UNREACHABLE' });
+    else res.destroy();
+  });
+  req.pipe(proxy);
+}
+
+function isSensitiveFieldName(key: string): boolean {
+  const compact = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return (
+    compact === 'env' ||
+    compact === 'headers' ||
+    compact === 'originaljson' ||
+    compact === 'profile' ||
+    compact.includes('apikey') ||
+    compact.includes('secret') ||
+    compact.includes('token') ||
+    compact.includes('password') ||
+    compact.includes('authorization') ||
+    compact.includes('cookie') ||
+    compact.includes('privatekey') ||
+    compact.includes('accesskey') ||
+    compact.includes('credential')
+  );
+}
+
+function stripSensitiveFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripSensitiveFields);
   if (!value || typeof value !== 'object') return value;
 
   const input = value as Record<string, unknown>;
   const output: Record<string, unknown> = {};
+  let hasCredentials = false;
   for (const [key, child] of Object.entries(input)) {
     if (key === 'api_key' || key === 'apiKey') {
       const hasKey = typeof child === 'string' && child.trim().length > 0;
@@ -505,9 +924,189 @@ function stripProviderSecrets(value: unknown): unknown {
       output[key === 'api_key' ? 'has_api_key' : 'hasApiKey'] = hasKey;
       continue;
     }
-    output[key] = stripProviderSecrets(child);
+    if (isSensitiveFieldName(key)) {
+      hasCredentials ||= child !== undefined && child !== null && child !== '';
+      continue;
+    }
+    output[key] = stripSensitiveFields(child);
+  }
+  if (hasCredentials) output.has_credentials = true;
+  return output;
+}
+
+const LAN_PROVIDER_FIELDS = new Set([
+  'id',
+  'platform',
+  'name',
+  'base_url',
+  'models',
+  'capabilities',
+  'context_limit',
+  'model_protocols',
+  'enabled',
+  'model_enabled',
+  'model_health',
+  'is_full_url',
+]);
+
+function publicProviderBaseUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    parsed.username = '';
+    parsed.password = '';
+    // Query strings on provider endpoints frequently carry deployment keys or
+    // signed routing tokens. LAN clients select the provider by id/model and do
+    // not need those server-owned URL decorations.
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function projectLanProvider(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if (typeof input.id !== 'string' || !input.id) return null;
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(input)) {
+    if (!LAN_PROVIDER_FIELDS.has(key)) continue;
+    if (key === 'base_url' && typeof child === 'string') {
+      const safeUrl = publicProviderBaseUrl(child);
+      if (safeUrl) output[key] = safeUrl;
+      continue;
+    }
+    output[key] = stripSensitiveFields(child);
+  }
+  const apiKey = typeof input.api_key === 'string' ? input.api_key : '';
+  output.api_key = '';
+  output.has_api_key = apiKey.trim().length > 0;
+  if (input.bedrock_config && typeof input.bedrock_config === 'object' && !Array.isArray(input.bedrock_config)) {
+    const bedrock = input.bedrock_config as Record<string, unknown>;
+    output.bedrock_config = {
+      auth_method: bedrock.auth_method,
+      region: bedrock.region,
+      has_credentials: Boolean(bedrock.access_key_id || bedrock.secret_access_key || bedrock.profile),
+    };
   }
   return output;
+}
+
+function projectLanProviderPayload(value: unknown): unknown | null {
+  const projectList = (items: unknown[]): Record<string, unknown>[] =>
+    items.map(projectLanProvider).filter((item): item is Record<string, unknown> => item !== null);
+  if (Array.isArray(value)) return projectList(value);
+  if (!value || typeof value !== 'object') return null;
+  const input = value as Record<string, unknown>;
+  if (Array.isArray(input.data)) return { success: input.success, data: projectList(input.data) };
+  if (input.data && typeof input.data === 'object') {
+    if (Array.isArray((input.data as { items?: unknown }).items)) {
+      return {
+        success: input.success,
+        data: { items: projectList((input.data as { items: unknown[] }).items) },
+      };
+    }
+    const provider = projectLanProvider(input.data);
+    if (provider) return { success: input.success, data: provider };
+  }
+  return projectLanProvider(input);
+}
+
+const LAN_SAFE_SETTING_KEYS = new Set([
+  'language',
+  'theme',
+  'colorScheme',
+  'ui.zoomFactor',
+  'ui.fontSize.chat',
+  'ui.fontSize.markdown',
+  'ui.fontSize.code',
+  'customCss',
+  'css.themes',
+  'css.activeThemeId',
+  'theme.activeId',
+  'theme.userThemes',
+  'aionrs.config',
+  'aionrs.defaultModel',
+  'tools.imageGenerationModel',
+  'tools.imageGenerationModels',
+  'workspace.pasteConfirm',
+  'upload.saveToWorkspace',
+  'guid.lastSelectedAgent',
+  'system.closeToTray',
+  'system.notificationEnabled',
+  'system.cronNotificationEnabled',
+  'system.keepAwake',
+  'system.autoPreviewOfficeFiles',
+  // Legacy aliases still queried by older WebUI renderers.
+  'notificationEnabled',
+  'cronNotificationEnabled',
+  'keepAwake',
+  'saveUploadToWorkspace',
+  'autoPreviewOfficeFiles',
+  'assistant.telegram.defaultModel',
+  'assistant.telegram.agent',
+  'assistant.lark.defaultModel',
+  'assistant.lark.agent',
+  'assistant.dingtalk.defaultModel',
+  'assistant.dingtalk.agent',
+  'assistant.weixin.defaultModel',
+  'assistant.weixin.agent',
+  'assistant.wecom.defaultModel',
+  'assistant.wecom.agent',
+  'skillsMarket.enabled',
+  'pet.enabled',
+  'pet.size',
+  'pet.dnd',
+  'pet.confirmEnabled',
+  'vectorDB.enabled',
+  'vectorDB.endpoint',
+  'vectorDB.searchCount',
+  'vectorDB.searchMode',
+]);
+
+function projectLanSettingsRecord(
+  value: unknown,
+  vectorEndpoint: TrustedVectorEndpoint
+): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const output: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (LAN_SAFE_SETTING_KEYS.has(key)) output[key] = stripSensitiveFields(child);
+  }
+  output['vectorDB.endpoint'] = vectorEndpoint;
+  return output;
+}
+
+function projectLanSettings(value: unknown, vectorEndpoint: TrustedVectorEndpoint): unknown | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  if ('data' in input) {
+    const data = projectLanSettingsRecord(input.data, vectorEndpoint);
+    if (!data) return null;
+    return { success: input.success, data };
+  }
+  return projectLanSettingsRecord(input, vectorEndpoint);
+}
+
+function requestedClientSettingKey(req: IncomingMessage): string | null {
+  return new URL(req.url || '/', 'http://localhost').searchParams.get('key');
+}
+
+function projectRequestedLanSetting(
+  value: unknown,
+  key: string,
+  vectorEndpoint: TrustedVectorEndpoint
+): unknown | null {
+  if (!LAN_SAFE_SETTING_KEYS.has(key)) return null;
+  const projectValue = (settingValue: unknown): unknown =>
+    key === 'vectorDB.endpoint' ? vectorEndpoint : stripSensitiveFields(settingValue);
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'data' in value) {
+    const input = value as Record<string, unknown>;
+    return { success: input.success, data: projectValue(input.data) };
+  }
+  return projectValue(value);
 }
 
 /**
@@ -535,9 +1134,18 @@ function proxyProvidersSanitized(req: IncomingMessage, res: ServerResponse, back
       let body = Buffer.concat(chunks);
       if (status >= 200 && status < 300) {
         try {
-          body = Buffer.from(JSON.stringify(stripProviderSecrets(JSON.parse(body.toString('utf-8')))), 'utf-8');
+          const projected = projectLanProviderPayload(JSON.parse(body.toString('utf-8')));
+          if (!projected) throw new Error('unexpected provider response');
+          body = Buffer.from(JSON.stringify(projected), 'utf-8');
         } catch {
-          // Non-JSON or unexpected shape — pass the original bytes through.
+          body = Buffer.from(JSON.stringify({ error: 'INVALID_BACKEND_RESPONSE' }), 'utf-8');
+          res.writeHead(502, {
+            ...headers,
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(body),
+          });
+          res.end(body);
+          return;
         }
       }
       res.writeHead(status, { ...headers, 'content-length': Buffer.byteLength(body) });
@@ -560,7 +1168,12 @@ function proxyProvidersSanitized(req: IncomingMessage, res: ServerResponse, back
  * live in admin-owned settings blobs (for example the shared image workbench
  * profile synced from the desktop image app).
  */
-function proxySettingsSanitized(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
+function proxySettingsSanitized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  backendPort: number,
+  vectorEndpoint: TrustedVectorEndpoint
+): void {
   const options: http.RequestOptions = {
     hostname: '127.0.0.1',
     port: backendPort,
@@ -581,9 +1194,22 @@ function proxySettingsSanitized(req: IncomingMessage, res: ServerResponse, backe
       let body = Buffer.concat(chunks);
       if (status >= 200 && status < 300) {
         try {
-          body = Buffer.from(JSON.stringify(stripProviderSecrets(JSON.parse(body.toString('utf-8')))), 'utf-8');
+          const parsed = JSON.parse(body.toString('utf-8')) as unknown;
+          const requestedKey = requestedClientSettingKey(req);
+          const projected = requestedKey
+            ? projectRequestedLanSetting(parsed, requestedKey, vectorEndpoint)
+            : projectLanSettings(parsed, vectorEndpoint);
+          if (!projected) throw new Error('unexpected settings response');
+          body = Buffer.from(JSON.stringify(projected), 'utf-8');
         } catch {
-          // Non-JSON or unexpected shape — pass the original bytes through.
+          body = Buffer.from(JSON.stringify({ error: 'INVALID_BACKEND_RESPONSE' }), 'utf-8');
+          res.writeHead(502, {
+            ...headers,
+            'content-type': 'application/json',
+            'content-length': Buffer.byteLength(body),
+          });
+          res.end(body);
+          return;
         }
       }
       res.writeHead(status, { ...headers, 'content-length': Buffer.byteLength(body) });
@@ -614,7 +1240,14 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-const DEFAULT_VECTOR_ENDPOINT = 'http://127.0.0.1:8619';
+declare const trustedVectorEndpointBrand: unique symbol;
+type TrustedVectorEndpoint = string & { readonly [trustedVectorEndpointBrand]: true };
+
+const DEFAULT_VECTOR_ENDPOINT = 'http://127.0.0.1:8619' as TrustedVectorEndpoint;
+const VECTOR_REQUEST_TIMEOUT_MS = 15_000;
+const VECTOR_UPLOAD_TIMEOUT_MS = 120_000;
+const VECTOR_JSON_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const VECTOR_IMAGE_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const ACCOUNT_PROFILE_BLOCK_RE = /<!-- centaurai-account-profile\n([\s\S]*?)\n-->/;
 const ADMIN_USER_ID = 'system_default_user';
 
@@ -654,16 +1287,34 @@ type MemoryFileRecord = {
   updated_at?: string;
 };
 
-function endpointFromRequest(req: IncomingMessage, body?: Record<string, unknown>): string | null {
+function normalizeVectorEndpoint(value: string): TrustedVectorEndpoint | null {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
+    if (parsed.pathname !== '/' && parsed.pathname !== '') return null;
+    return parsed.origin as TrustedVectorEndpoint;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackVectorEndpoint(endpoint: TrustedVectorEndpoint): boolean {
+  const hostname = new URL(endpoint).hostname.toLowerCase();
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]' || hostname === '::1';
+}
+
+function endpointFromRequest(
+  req: IncomingMessage,
+  body: Record<string, unknown> | undefined,
+  allowedEndpoint: TrustedVectorEndpoint
+): TrustedVectorEndpoint | null {
   const query = new URL(req.url || '/', 'http://localhost').searchParams.get('endpoint');
-  const raw =
-    typeof body?.endpoint === 'string'
-      ? body.endpoint.trim()
-      : typeof query === 'string'
-        ? query.trim()
-        : DEFAULT_VECTOR_ENDPOINT;
-  const endpoint = raw.replace(/\/+$/, '');
-  return /^https?:\/\//i.test(endpoint) ? endpoint : null;
+  const requested =
+    typeof body?.endpoint === 'string' ? body.endpoint.trim() : typeof query === 'string' ? query.trim() : '';
+  if (!requested) return allowedEndpoint;
+  const normalized = normalizeVectorEndpoint(requested);
+  return normalized === allowedEndpoint ? allowedEndpoint : null;
 }
 
 function safeUserPathSegment(userId: string): string {
@@ -688,10 +1339,15 @@ function memoryApiPath(apiPath: string, scope?: string): string {
   return `${apiPath}${apiPath.includes('?') ? '&' : '?'}scope=${encodeURIComponent(scope)}`;
 }
 
+function isSafeMemoryRelPath(relPath: string): boolean {
+  if (!relPath || relPath.startsWith('/') || relPath.includes('\\') || relPath.includes('\0')) return false;
+  return !relPath.split('/').some((segment) => !segment || segment === '.' || segment === '..');
+}
+
 function scopedMemoryPath(userId: string, requestedPath: string, scope = 'auto'): string | null {
   const relPath = normalizeRequestedMemoryPath(requestedPath);
-  if (!relPath || relPath.includes('..') || relPath.startsWith('users/')) return null;
-  if (scope === 'shared') return relPath;
+  if (!isSafeMemoryRelPath(relPath) || relPath.startsWith('users/')) return null;
+  if (scope === 'shared') return isSharedMemoryPath(relPath) ? relPath : null;
   const userPrefix = `users/${safeUserPathSegment(userId)}`;
   if (relPath === 'USER.md' || relPath === 'MEMORY.md') return `${userPrefix}/${relPath}`;
   if (relPath.startsWith('journal/') && relPath.endsWith('.md')) return `${userPrefix}/${relPath}`;
@@ -725,6 +1381,7 @@ function isLegacyJournalPath(relPath: string): boolean {
 }
 
 function isSharedMemoryPath(relPath: string): boolean {
+  if (!isSafeMemoryRelPath(relPath)) return false;
   return (
     relPath === 'AGENTS.md' ||
     relPath === 'USER.md' ||
@@ -738,34 +1395,96 @@ function isSharedMemoryPath(relPath: string): boolean {
 
 function isVisibleMemoryItem(item: MemorySearchItem, userId: string): boolean {
   const relPath = memoryItemRelPath(item).replace(/\\/g, '/');
+  if (!isSafeMemoryRelPath(relPath)) return false;
   const userPrefix = `users/${safeUserPathSegment(userId)}/`;
   return relPath.startsWith(userPrefix) || isSharedMemoryPath(relPath);
 }
 
-function applyVectorIdentityHeaders(headers: Record<string, string>, identity?: AuthGateIdentity): void {
+function canMutateScopedMemoryPath(identity: AuthGateIdentity, relPath: string): boolean {
+  if (identity.userId === ADMIN_USER_ID) return true;
+  return relPath.startsWith(`users/${safeUserPathSegment(identity.userId)}/`);
+}
+
+function applyVectorIdentityHeaders(
+  headers: Record<string, string>,
+  identity: AuthGateIdentity | undefined,
+  endpoint: TrustedVectorEndpoint
+): void {
   if (!identity) return;
   headers['X-CentaurAI-User-Id'] = identity.userId;
-  headers['X-CentaurAI-Username'] = identity.username;
+  if (identity.username) headers['X-CentaurAI-Username'] = identity.username;
   headers['X-CentaurAI-Role'] = identity.userId === ADMIN_USER_ID ? 'admin' : 'user';
+
+  // `endpoint` is branded only after exact comparison with the server-owned
+  // configured origin. This credential must never be attached to a raw client
+  // URL, including through redirects (all vector fetches use redirect:error).
   const proxyToken = process.env.VDB_TRUSTED_PROXY_TOKEN || process.env.CENTAURAI_VDB_TRUSTED_PROXY_TOKEN;
-  if (proxyToken) headers['X-CentaurAI-Proxy-Token'] = proxyToken;
+  if (proxyToken && normalizeVectorEndpoint(endpoint) === endpoint) {
+    headers['X-CentaurAI-Proxy-Token'] = proxyToken;
+  }
+}
+
+class VectorResponseTooLargeError extends Error {}
+
+async function readResponseBufferLimited(response: Response, maxBytes: number): Promise<Buffer> {
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel().catch(() => {});
+    throw new VectorResponseTooLargeError('vector DB response exceeds limit');
+  }
+  if (!response.body) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      // eslint-disable-next-line no-await-in-loop -- a response stream is inherently sequential
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        // eslint-disable-next-line no-await-in-loop -- cancellation must finish before releasing the reader lock
+        await reader.cancel().catch(() => {});
+        throw new VectorResponseTooLargeError('vector DB response exceeds limit');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, size);
+}
+
+function fetchVector(
+  endpoint: TrustedVectorEndpoint,
+  apiPath: string,
+  init: RequestInit = {},
+  timeoutMs = VECTOR_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  if (!apiPath.startsWith('/')) throw new Error('vector API path must be absolute');
+  return fetch(`${endpoint}${apiPath}`, {
+    ...init,
+    redirect: 'error',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
 }
 
 async function vectorJson(
-  endpoint: string,
+  endpoint: TrustedVectorEndpoint,
   apiPath: string,
   init?: { method?: string; body?: unknown; requestedBy?: boolean; identity?: AuthGateIdentity }
-): Promise<{ status: number; body: unknown; text: string; contentType: string }> {
+): Promise<{ status: number; body: unknown; text: string }> {
   const headers: Record<string, string> = {};
   if (init?.body !== undefined) headers['content-type'] = 'application/json';
   if (init?.requestedBy) headers['X-Requested-By'] = 'centaur-vdb';
-  applyVectorIdentityHeaders(headers, init?.identity);
-  const upstream = await fetch(`${endpoint}${apiPath}`, {
+  applyVectorIdentityHeaders(headers, init?.identity, endpoint);
+  const upstream = await fetchVector(endpoint, apiPath, {
     method: init?.method ?? 'GET',
     headers,
     body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
   });
-  const text = await upstream.text();
+  const text = (await readResponseBufferLimited(upstream, VECTOR_JSON_MAX_RESPONSE_BYTES)).toString('utf-8');
   let parsed: unknown = text;
   try {
     parsed = text ? JSON.parse(text) : {};
@@ -776,12 +1495,11 @@ async function vectorJson(
     status: upstream.status,
     body: parsed,
     text,
-    contentType: upstream.headers.get('content-type') || 'application/json',
   };
 }
 
 async function readMemoryDocument(
-  endpoint: string,
+  endpoint: TrustedVectorEndpoint,
   relPath: string,
   identity?: AuthGateIdentity
 ): Promise<{ content: string; updatedAt?: string }> {
@@ -796,7 +1514,7 @@ async function readMemoryDocument(
 }
 
 async function writeMemoryDocument(
-  endpoint: string,
+  endpoint: TrustedVectorEndpoint,
   relPath: string,
   content: string,
   sourceAgent: string,
@@ -812,7 +1530,11 @@ async function writeMemoryDocument(
   return result.body;
 }
 
-async function deleteMemoryDocument(endpoint: string, relPath: string, identity?: AuthGateIdentity): Promise<void> {
+async function deleteMemoryDocument(
+  endpoint: TrustedVectorEndpoint,
+  relPath: string,
+  identity?: AuthGateIdentity
+): Promise<void> {
   const result = await vectorJson(endpoint, `/api/memory/files/${encodeMemoryPath(relPath)}`, {
     method: 'DELETE',
     requestedBy: true,
@@ -898,7 +1620,7 @@ function mergeProfileFromBody(body: Record<string, unknown>): AccountProfile {
 }
 
 async function readAccountProfile(
-  endpoint: string,
+  endpoint: TrustedVectorEndpoint,
   userId: string,
   identity?: AuthGateIdentity
 ): Promise<{
@@ -922,7 +1644,7 @@ async function readAccountProfile(
 }
 
 async function writeAccountProfile(
-  endpoint: string,
+  endpoint: TrustedVectorEndpoint,
   identity: AuthGateIdentity,
   body: Record<string, unknown>,
   targetUserId = identity.userId
@@ -988,14 +1710,20 @@ async function fetchBackendUsers(backendPort: number): Promise<LanUserRecord[]> 
 }
 
 function latestMemoryUpdate(files: MemoryFileRecord[]): string {
-  return files
-    .map((file) => file.updated_at || '')
-    .filter(Boolean)
-    .sort()
-    .pop() ?? '';
+  return (
+    files
+      .map((file) => file.updated_at || '')
+      .filter(Boolean)
+      .toSorted()
+      .pop() ?? ''
+  );
 }
 
-function summarizeMemoryUser(user: LanUserRecord, files: MemoryFileRecord[], source: 'webui' | 'memory'): Record<string, unknown> {
+function summarizeMemoryUser(
+  user: LanUserRecord,
+  files: MemoryFileRecord[],
+  source: 'webui' | 'memory'
+): Record<string, unknown> {
   const owner = safeUserPathSegment(user.id);
   const root = `users/${owner}/`;
   const userFiles = files.filter((file) => typeof file.path === 'string' && file.path.startsWith(root));
@@ -1010,8 +1738,10 @@ function summarizeMemoryUser(user: LanUserRecord, files: MemoryFileRecord[], sou
     file_count: userFiles.length,
     has_user_md: userFiles.some((file) => file.path === `${root}USER.md`),
     has_memory_md: userFiles.some((file) => file.path === `${root}MEMORY.md`),
-    import_count: userFiles.filter((file) => file.path?.startsWith(`${root}imports/`) && file.path.endsWith('.md')).length,
-    journal_count: userFiles.filter((file) => file.path?.startsWith(`${root}journal/`) && file.path.endsWith('.md')).length,
+    import_count: userFiles.filter((file) => file.path?.startsWith(`${root}imports/`) && file.path.endsWith('.md'))
+      .length,
+    journal_count: userFiles.filter((file) => file.path?.startsWith(`${root}journal/`) && file.path.endsWith('.md'))
+      .length,
     updated_at: latestMemoryUpdate(userFiles),
   };
 }
@@ -1037,7 +1767,8 @@ async function handleAdminMemoryUsers(
   req: IncomingMessage,
   res: ServerResponse,
   identity: AuthGateIdentity,
-  backendPort: number
+  backendPort: number,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   if (req.method !== 'GET') {
     sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
@@ -1047,7 +1778,7 @@ async function handleAdminMemoryUsers(
     sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
     return;
   }
-  const endpoint = endpointFromRequest(req);
+  const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
   if (!endpoint) {
     sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
     return;
@@ -1084,7 +1815,7 @@ async function handleAdminMemoryUsers(
     byOwner.set(owner, summary);
   }
 
-  const users = [...byOwner.values()].sort((a, b) => {
+  const users = [...byOwner.values()].toSorted((a, b) => {
     if (a.id === ADMIN_USER_ID) return -1;
     if (b.id === ADMIN_USER_ID) return 1;
     return String(a.username || a.id).localeCompare(String(b.username || b.id), 'zh');
@@ -1101,7 +1832,8 @@ async function handleAdminMemoryUsers(
 async function handleScopedMemoryFile(
   req: IncomingMessage,
   res: ServerResponse,
-  identity: AuthGateIdentity
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   let body: Record<string, unknown> | undefined;
   if (req.method === 'PUT') {
@@ -1112,7 +1844,7 @@ async function handleScopedMemoryFile(
       return;
     }
   }
-  const endpoint = endpointFromRequest(req, body);
+  const endpoint = endpointFromRequest(req, body, allowedEndpoint);
   if (!endpoint) {
     sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
     return;
@@ -1125,16 +1857,19 @@ async function handleScopedMemoryFile(
       sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
       return;
     }
-    const result = await vectorJson(endpoint, memoryApiPath('/api/memory/files', scope === 'auto' ? 'visible' : scope), {
-      identity,
-    });
+    const result = await vectorJson(
+      endpoint,
+      memoryApiPath('/api/memory/files', scope === 'auto' ? 'visible' : scope),
+      {
+        identity,
+      }
+    );
     if (result.status < 200 || result.status >= 300) {
-      res.writeHead(result.status, { 'content-type': result.contentType });
-      res.end(result.text);
+      sendApiBuffer(res, result.status, result.text);
       return;
     }
-    const body = result.body as { files?: Array<{ path?: string }> };
-    const files = (body.files ?? []).filter((file) => {
+    const payload = result.body as { files?: Array<{ path?: string }> };
+    const files = (payload.files ?? []).filter((file) => {
       const item = { rel_path: file.path };
       return isVisibleMemoryItem(item, identity.userId);
     });
@@ -1147,6 +1882,10 @@ async function handleScopedMemoryFile(
     sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
     return;
   }
+  if (req.method !== 'GET' && !canMutateScopedMemoryPath(identity, relPath)) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
 
   const apiPath = memoryApiPath(`/api/memory/files/${encodeMemoryPath(relPath)}`, scope);
   if (req.method === 'GET') {
@@ -1155,8 +1894,7 @@ async function handleScopedMemoryFile(
       sendJsonResponse(res, 404, { error: 'NOT_FOUND' });
       return;
     }
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
 
@@ -1169,8 +1907,7 @@ async function handleScopedMemoryFile(
       identity,
       body: { content, source_agent: sourceAgent },
     });
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
 
@@ -1180,8 +1917,7 @@ async function handleScopedMemoryFile(
       requestedBy: true,
       identity,
     });
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
 
@@ -1191,7 +1927,8 @@ async function handleScopedMemoryFile(
 async function handleScopedJournal(
   req: IncomingMessage,
   res: ServerResponse,
-  identity: AuthGateIdentity
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   let body: Record<string, unknown> | undefined;
   if (req.method === 'PUT') {
@@ -1202,7 +1939,7 @@ async function handleScopedJournal(
       return;
     }
   }
-  const endpoint = endpointFromRequest(req, body);
+  const endpoint = endpointFromRequest(req, body, allowedEndpoint);
   if (!endpoint) {
     sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
     return;
@@ -1216,17 +1953,20 @@ async function handleScopedJournal(
       sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
       return;
     }
-    const result = await vectorJson(endpoint, memoryApiPath('/api/memory/files', scope === 'auto' ? 'visible' : scope), {
-      identity,
-    });
+    const result = await vectorJson(
+      endpoint,
+      memoryApiPath('/api/memory/files', scope === 'auto' ? 'visible' : scope),
+      {
+        identity,
+      }
+    );
     if (result.status < 200 || result.status >= 300) {
-      res.writeHead(result.status, { 'content-type': result.contentType });
-      res.end(result.text);
+      sendApiBuffer(res, result.status, result.text);
       return;
     }
     const prefix = scope === 'shared' ? 'journal/' : `users/${safeUserPathSegment(identity.userId)}/journal/`;
-    const body = result.body as { files?: Array<{ path?: string; size?: number; updated_at?: string }> };
-    const journals = (body.files ?? [])
+    const payload = result.body as { files?: Array<{ path?: string; size?: number; updated_at?: string }> };
+    const journals = (payload.files ?? [])
       .filter((file) => typeof file.path === 'string' && file.path.startsWith(prefix) && file.path.endsWith('.md'))
       .map((file) => ({
         date: path.basename(file.path ?? '', '.md'),
@@ -1244,6 +1984,10 @@ async function handleScopedJournal(
     sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
     return;
   }
+  if (req.method !== 'GET' && !canMutateScopedMemoryPath(identity, relPath)) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
   const apiPath = memoryApiPath(`/api/memory/files/${encodeMemoryPath(relPath)}`, scope);
   if (req.method === 'GET') {
     const result = await vectorJson(endpoint, apiPath, { identity });
@@ -1251,8 +1995,7 @@ async function handleScopedJournal(
       sendJsonResponse(res, 200, { date: normalizedDate, content: '', exists: false });
       return;
     }
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
 
@@ -1265,8 +2008,7 @@ async function handleScopedJournal(
       identity,
       body: { content, source_agent: sourceAgent },
     });
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
 
@@ -1276,8 +2018,7 @@ async function handleScopedJournal(
       requestedBy: true,
       identity,
     });
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
 
@@ -1287,7 +2028,8 @@ async function handleScopedJournal(
 async function handleScopedMemorySearch(
   req: IncomingMessage,
   res: ServerResponse,
-  identity: AuthGateIdentity
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   let body: Record<string, unknown>;
   try {
@@ -1296,7 +2038,7 @@ async function handleScopedMemorySearch(
     sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
     return;
   }
-  const endpoint = endpointFromRequest(req, body);
+  const endpoint = endpointFromRequest(req, body, allowedEndpoint);
   if (!endpoint) {
     sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
     return;
@@ -1315,8 +2057,7 @@ async function handleScopedMemorySearch(
     body: upstreamBody,
   });
   if (result.status < 200 || result.status >= 300) {
-    res.writeHead(result.status, { 'content-type': result.contentType });
-    res.end(result.text);
+    sendApiBuffer(res, result.status, result.text);
     return;
   }
   const parsed = result.body as { results?: MemorySearchItem[] };
@@ -1329,10 +2070,11 @@ async function handleScopedMemorySearch(
 async function handleAccountProfile(
   req: IncomingMessage,
   res: ServerResponse,
-  identity: AuthGateIdentity
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   if (req.method === 'GET') {
-    const endpoint = endpointFromRequest(req);
+    const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
     if (!endpoint) {
       sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
       return;
@@ -1357,7 +2099,7 @@ async function handleAccountProfile(
       sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
       return;
     }
-    const endpoint = endpointFromRequest(req, body);
+    const endpoint = endpointFromRequest(req, body, allowedEndpoint);
     if (!endpoint) {
       sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
       return;
@@ -1373,13 +2115,14 @@ async function handleAccountProfile(
 async function handleAccountMemoryClear(
   req: IncomingMessage,
   res: ServerResponse,
-  identity: AuthGateIdentity
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   if (req.method !== 'DELETE') {
     sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
     return;
   }
-  const endpoint = endpointFromRequest(req);
+  const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
   if (!endpoint) {
     sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
     return;
@@ -1395,7 +2138,8 @@ async function handleAccountPassword(
   req: IncomingMessage,
   res: ServerResponse,
   identity: AuthGateIdentity,
-  backendPort: number
+  backendPort: number,
+  gate: AuthGate
 ): Promise<void> {
   if (req.method !== 'POST') {
     sendJsonResponse(res, 405, { error: 'METHOD_NOT_ALLOWED' });
@@ -1424,10 +2168,10 @@ async function handleAccountPassword(
   );
   if (!upstream.ok) {
     const text = await upstream.text();
-    res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
-    res.end(text);
+    sendApiBuffer(res, upstream.status, text);
     return;
   }
+  gate.revokeUserSessions(identity.userId);
   sendJsonResponse(res, 200, { success: true });
 }
 
@@ -1442,7 +2186,8 @@ async function handleAdminMemoryUserRoute(
   req: IncomingMessage,
   res: ServerResponse,
   identity: AuthGateIdentity,
-  opts: Pick<StaticServerOptions, 'dataDir'>
+  opts: Pick<StaticServerOptions, 'dataDir'>,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
   const route = parseAdminMemoryRoute(req);
   if (!route) {
@@ -1454,7 +2199,7 @@ async function handleAdminMemoryUserRoute(
     return;
   }
   if (req.method === 'GET') {
-    const endpoint = endpointFromRequest(req);
+    const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
     if (!endpoint) {
       sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
       return;
@@ -1474,7 +2219,7 @@ async function handleAdminMemoryUserRoute(
       sendJsonResponse(res, 400, { error: 'INVALID_JSON' });
       return;
     }
-    const endpoint = endpointFromRequest(req, body);
+    const endpoint = endpointFromRequest(req, body, allowedEndpoint);
     if (!endpoint) {
       sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
       return;
@@ -1515,63 +2260,73 @@ function isUploadedFile(value: FormDataEntryValue | null): value is File {
   return value != null && typeof value !== 'string' && typeof value.arrayBuffer === 'function';
 }
 
-/**
- * Proxy a knowledge-base search to the local vector DB on behalf of a WebUI
- * browser client. The renderer cannot reach the vector DB itself: it binds
- * loopback on the *server* host, so a LAN client's `127.0.0.1:8619` points at
- * the wrong machine. The server runs co-located with the vector DB and can
- * reach it, so the browser POSTs here and we forward the search. The client
- * supplies the endpoint it has configured (default http://127.0.0.1:8619);
- * only http/https URLs are honored.
- */
+function sendVectorProxyError(res: ServerResponse, error: unknown): void {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  const tooLarge = error instanceof VectorResponseTooLargeError;
+  sendJsonResponse(res, 502, { error: tooLarge ? 'VECTOR_DB_RESPONSE_TOO_LARGE' : 'VECTOR_DB_UNREACHABLE' });
+}
+
+/** Proxy a knowledge-base search to the server-configured vector DB. */
 async function handleVectorSearch(
   req: IncomingMessage,
   res: ServerResponse,
-  identity?: AuthGateIdentity
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
 ): Promise<void> {
-  const sendJson = (status: number, body: unknown): void => {
-    res.writeHead(status, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
-  };
   try {
     const body = await readJsonBody(req);
-    const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim().replace(/\/+$/, '') : '';
-    const query = typeof body.query === 'string' ? body.query : '';
-    if (!/^https?:\/\//i.test(endpoint)) {
-      sendJson(400, { error: 'INVALID_ENDPOINT' });
+    const endpoint = endpointFromRequest(req, body, allowedEndpoint);
+    const query = typeof body.query === 'string' ? body.query.trim() : '';
+    if (!endpoint) {
+      sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
       return;
     }
-    if (!query.trim()) {
-      sendJson(400, { error: 'EMPTY_QUERY' });
+    if (!query) {
+      sendJsonResponse(res, 400, { error: 'EMPTY_QUERY' });
       return;
     }
-    const nResults = typeof body.n_results === 'number' && body.n_results > 0 ? body.n_results : 5;
+    if (query.length > 4_000) {
+      sendJsonResponse(res, 400, { error: 'QUERY_TOO_LONG' });
+      return;
+    }
+    const rawNResults = body.n_results;
+    const nResults =
+      typeof rawNResults === 'number' && Number.isFinite(rawNResults)
+        ? Math.min(Math.max(Math.trunc(rawNResults), 1), 20)
+        : 5;
     const mode = body.mode === 'visual' || body.mode === 'hybrid' ? body.mode : 'text';
 
     const headers: Record<string, string> = { 'content-type': 'application/json' };
-    applyVectorIdentityHeaders(headers, identity);
-    const upstream = await fetch(`${endpoint}/api/search`, {
+    applyVectorIdentityHeaders(headers, identity, endpoint);
+    const upstream = await fetchVector(endpoint, '/api/search', {
       method: 'POST',
       headers,
       body: JSON.stringify({ query, n_results: nResults, mode }),
     });
-    const text = await upstream.text();
-    res.writeHead(upstream.status, { 'content-type': 'application/json' });
-    res.end(text);
-  } catch {
-    sendJson(502, { error: 'VECTOR_DB_UNREACHABLE' });
+    const responseBody = await readResponseBufferLimited(upstream, VECTOR_JSON_MAX_RESPONSE_BYTES);
+    sendApiBuffer(res, upstream.status, responseBody);
+  } catch (error) {
+    sendVectorProxyError(res, error);
   }
 }
 
 /** Proxy a knowledge-base file upload to the local vector DB for LAN/WebUI clients. */
-async function handleVectorUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const sendJson = (status: number, body: unknown): void => {
-    res.writeHead(status, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
-  };
-  const endpoint = new URL(req.url || '', 'http://localhost').searchParams.get('endpoint')?.trim().replace(/\/+$/, '');
-  if (!endpoint || !/^https?:\/\//i.test(endpoint)) {
-    sendJson(400, { error: 'INVALID_ENDPOINT' });
+async function handleVectorUpload(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
+): Promise<void> {
+  if (identity.userId !== ADMIN_USER_ID) {
+    sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
+    return;
+  }
+  const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
     return;
   }
 
@@ -1580,17 +2335,17 @@ async function handleVectorUpload(req: IncomingMessage, res: ServerResponse): Pr
     const form = await readMultipartForm(req);
     const value = form.get('file');
     if (!isUploadedFile(value)) {
-      sendJson(400, { error: 'MISSING_FILE' });
+      sendJsonResponse(res, 400, { error: 'MISSING_FILE' });
       return;
     }
     file = value;
   } catch {
-    sendJson(400, { error: 'INVALID_MULTIPART' });
+    sendJsonResponse(res, 400, { error: 'INVALID_MULTIPART' });
     return;
   }
 
   if (file.size > VECTOR_UPLOAD_MAX_BYTES) {
-    sendJson(413, { error: 'FILE_TOO_LARGE' });
+    sendJsonResponse(res, 413, { error: 'FILE_TOO_LARGE' });
     return;
   }
 
@@ -1598,94 +2353,121 @@ async function handleVectorUpload(req: IncomingMessage, res: ServerResponse): Pr
   try {
     upload = await createVectorUploadPayloadFromFile(file);
   } catch {
-    sendJson(422, { error: 'PPTX_PARSE_FAILED' });
+    sendJsonResponse(res, 422, { error: 'PPTX_PARSE_FAILED' });
     return;
   }
 
   try {
     const form = new FormData();
     form.append('file', upload.blob, upload.filename);
-    const upstream = await fetch(`${endpoint}/api/upload`, {
-      method: 'POST',
-      headers: { 'X-Requested-By': 'centaur-vdb' },
-      body: form,
-    });
-    const text = await upstream.text();
-    res.writeHead(upstream.status, { 'content-type': upstream.headers.get('content-type') || 'application/json' });
-    res.end(text);
-  } catch {
-    sendJson(502, { error: 'VECTOR_DB_UNREACHABLE' });
+    const headers: Record<string, string> = { 'X-Requested-By': 'centaur-vdb' };
+    applyVectorIdentityHeaders(headers, identity, endpoint);
+    const upstream = await fetchVector(
+      endpoint,
+      '/api/upload',
+      {
+        method: 'POST',
+        headers,
+        body: form,
+      },
+      VECTOR_UPLOAD_TIMEOUT_MS
+    );
+    const responseBody = await readResponseBufferLimited(upstream, VECTOR_JSON_MAX_RESPONSE_BYTES);
+    sendApiBuffer(res, upstream.status, responseBody);
+  } catch (error) {
+    sendVectorProxyError(res, error);
   }
 }
 
 /** Proxy knowledge-base document list/delete requests to the local vector DB. */
-async function handleVectorDocuments(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const sendJson = (status: number, body: unknown): void => {
-    res.writeHead(status, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
-  };
+async function handleVectorDocuments(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
+): Promise<void> {
   try {
     const body = await readJsonBody(req);
-    const endpoint = typeof body.endpoint === 'string' ? body.endpoint.trim().replace(/\/+$/, '') : '';
-    if (!/^https?:\/\//i.test(endpoint)) {
-      sendJson(400, { error: 'INVALID_ENDPOINT' });
+    const endpoint = endpointFromRequest(req, body, allowedEndpoint);
+    if (!endpoint) {
+      sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
       return;
     }
     const action = typeof body.action === 'string' ? body.action : 'list';
     if (action === 'delete') {
-      const docId = typeof body.docId === 'string' ? body.docId.trim() : '';
-      if (!docId) {
-        sendJson(400, { error: 'INVALID_DOCUMENT_ID' });
+      if (identity.userId !== ADMIN_USER_ID) {
+        sendJsonResponse(res, 403, { error: 'FORBIDDEN' });
         return;
       }
-      const upstream = await fetch(`${endpoint}/api/documents/${encodeURIComponent(docId)}`, {
+      const docId = typeof body.docId === 'string' ? body.docId.trim() : '';
+      if (!docId) {
+        sendJsonResponse(res, 400, { error: 'INVALID_DOCUMENT_ID' });
+        return;
+      }
+      const headers: Record<string, string> = { 'X-Requested-By': 'centaur-vdb' };
+      applyVectorIdentityHeaders(headers, identity, endpoint);
+      const upstream = await fetchVector(endpoint, `/api/documents/${encodeURIComponent(docId)}`, {
         method: 'DELETE',
-        headers: { 'X-Requested-By': 'centaur-vdb' },
+        headers,
       });
-      const text = await upstream.text();
-      res.writeHead(upstream.status, {
-        'content-type': upstream.headers.get('content-type') || 'application/json',
-      });
-      res.end(text);
+      const responseBody = await readResponseBufferLimited(upstream, VECTOR_JSON_MAX_RESPONSE_BYTES);
+      sendApiBuffer(res, upstream.status, responseBody);
       return;
     }
     if (action !== 'list') {
-      sendJson(400, { error: 'INVALID_ACTION' });
+      sendJsonResponse(res, 400, { error: 'INVALID_ACTION' });
       return;
     }
-    const limit = typeof body.limit === 'number' && body.limit > 0 ? Math.min(body.limit, 500) : 300;
-    const offset = typeof body.offset === 'number' && body.offset >= 0 ? body.offset : 0;
-    const upstream = await fetch(`${endpoint}/api/documents?limit=${limit}&offset=${offset}`);
-    const text = await upstream.text();
-    res.writeHead(upstream.status, { 'content-type': 'application/json' });
-    res.end(text);
-  } catch {
-    sendJson(502, { error: 'VECTOR_DB_UNREACHABLE' });
+    const rawLimit = body.limit;
+    const rawOffset = body.offset;
+    const limit =
+      typeof rawLimit === 'number' && Number.isFinite(rawLimit)
+        ? Math.min(Math.max(Math.trunc(rawLimit), 1), 500)
+        : 300;
+    const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(Math.trunc(rawOffset), 0) : 0;
+    const headers: Record<string, string> = {};
+    applyVectorIdentityHeaders(headers, identity, endpoint);
+    const upstream = await fetchVector(endpoint, `/api/documents?limit=${limit}&offset=${offset}`, { headers });
+    const responseBody = await readResponseBufferLimited(upstream, VECTOR_JSON_MAX_RESPONSE_BYTES);
+    sendApiBuffer(res, upstream.status, responseBody);
+  } catch (error) {
+    sendVectorProxyError(res, error);
   }
 }
 
 /** Proxy a knowledge-base image thumbnail to the local vector DB's /api/image. */
-async function handleVectorImage(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleVectorImage(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
+): Promise<void> {
   try {
     const url = new URL(req.url || '', 'http://localhost');
-    const endpoint = (url.searchParams.get('endpoint') || '').trim().replace(/\/+$/, '');
+    const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
     const imagePath = url.searchParams.get('path') || '';
-    if (!/^https?:\/\//i.test(endpoint) || !imagePath) {
+    if (!endpoint || !imagePath) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'INVALID_REQUEST' }));
       return;
     }
-    const upstream = await fetch(`${endpoint}/api/image?path=${encodeURIComponent(imagePath)}`);
+    const headers: Record<string, string> = {};
+    applyVectorIdentityHeaders(headers, identity, endpoint);
+    const upstream = await fetchVector(endpoint, `/api/image?path=${encodeURIComponent(imagePath)}`, { headers });
     if (!upstream.ok || !upstream.body) {
+      await upstream.body?.cancel().catch(() => {});
       res.writeHead(upstream.status || 502).end();
       return;
     }
-    res.writeHead(200, { 'content-type': upstream.headers.get('content-type') || 'application/octet-stream' });
-    const buf = Buffer.from(await upstream.arrayBuffer());
+    const buf = await readResponseBufferLimited(upstream, VECTOR_IMAGE_MAX_RESPONSE_BYTES);
+    const upstreamContentType = upstream.headers.get('content-type') || 'application/octet-stream';
+    res.writeHead(200, {
+      'content-type': safeInlineContentType(upstreamContentType),
+      ...safeFileResponseHeaders(true),
+    });
     res.end(buf);
-  } catch {
-    res.writeHead(502, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: 'VECTOR_DB_UNREACHABLE' }));
+  } catch (error) {
+    sendVectorProxyError(res, error);
   }
 }
 
@@ -1694,6 +2476,10 @@ async function handleVectorImage(req: IncomingMessage, res: ServerResponse): Pro
 // haven't seen a newline after 4 KB the client is sending something weird —
 // hand it to the internal HTTP server and let it return 400.
 const PEEK_LIMIT_BYTES = 4096;
+/** Bound unauthenticated sockets that have not even completed a request line. */
+const INITIAL_PEEK_TIMEOUT_MS = 10_000;
+/** Last-resort FD/memory bound for a LAN client opening many idle sockets. */
+const MAX_FRONTEND_CONNECTIONS = 512;
 
 /**
  * Splice `client` to a TCP endpoint on `targetPort`. Any bytes already read
@@ -1750,6 +2536,27 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
   const port = opts.port ?? DEFAULT_PORT;
   const allowRemote = opts.allowRemote === true;
   const host = allowRemote ? '0.0.0.0' : '127.0.0.1';
+  const vectorEndpoint = normalizeVectorEndpoint(
+    opts.vectorEndpoint ??
+      process.env.AIONUI_VECTOR_DB_ENDPOINT ??
+      process.env.CENTAURAI_VECTOR_DB_ENDPOINT ??
+      DEFAULT_VECTOR_ENDPOINT
+  );
+  if (!vectorEndpoint) {
+    throw new Error('vectorEndpoint must be an http(s) origin without credentials, path, query or fragment');
+  }
+  const allowInsecureVectorEndpoint =
+    opts.allowInsecureVectorEndpoint ??
+    /^(?:1|true|yes)$/i.test(process.env.AIONUI_ALLOW_INSECURE_VECTOR_ENDPOINT ?? '');
+  if (
+    new URL(vectorEndpoint).protocol !== 'https:' &&
+    !isLoopbackVectorEndpoint(vectorEndpoint) &&
+    !allowInsecureVectorEndpoint
+  ) {
+    throw new Error(
+      'non-loopback vectorEndpoint must use https (set AIONUI_ALLOW_INSECURE_VECTOR_ENDPOINT=1 to opt in)'
+    );
+  }
 
   // When the WebUI is exposed beyond loopback, the reverse proxy is the trust
   // boundary: the backend runs in --local mode and does not authenticate
@@ -1757,6 +2564,9 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
   // Loopback-only deployments keep the existing (backend-trusted) behavior.
   const requireAuth = allowRemote;
   const gate = createAuthGate();
+  const conversationTenantBoundary = requireAuth
+    ? await createConversationTenantBoundary({ backendPort: opts.backendPort, dataDir: opts.dataDir })
+    : null;
 
   // The image workbench SPA dist lives under the served static dir by default
   // (the desktop build copies it to out/renderer/centaur-image-workbench).
@@ -1795,11 +2605,41 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         res.writeHead(400).end();
         return;
       }
-      const requestPath = requestPathFromUrl(req.url);
+      if (isHazardousApiPath(req.url)) {
+        sendJsonResponse(res, 400, { success: false, error: 'INVALID_PATH' });
+        return;
+      }
+      const requestPath = canonicalSecurityPath(req.url) ?? requestPathFromUrl(req.url);
 
       // Auth gate (LAN-exposed only). Handles /login + /logout and rejects
       // unauthenticated /api/* before any backend-bound or local API handler.
       if (requireAuth && enforceGate(req, res, gate, opts.backendPort)) return;
+
+      // The backend runs in local/trusted-process mode. Never let an
+      // authenticated LAN browser inherit Electron-main or CLI privileges via
+      // the generic proxy, and only expose the small browser auth allowlist.
+      if (
+        requireAuth &&
+        (isPrivateLanBackendRoute(req.url, req.method) ||
+          (canonicalSecurityPath(req.url)?.startsWith('/api/auth/') && !isAllowedLanAuthRoute(req.url)) ||
+          (req.method !== 'GET' && requestPath === '/api/settings/client'))
+      ) {
+        sendJsonResponse(res, 403, { success: false, error: 'FORBIDDEN' });
+        return;
+      }
+
+      // The backend runs in local mode, so its conversation/message routes do
+      // not know which authenticated LAN seat made a request. Terminate those
+      // routes here: WebHost stamps immutable ownership on create/clone and
+      // authorizes every id-based child route before proxying it.
+      if (requireAuth && conversationTenantBoundary && isConversationTenantHttpRequest(req.url)) {
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        if (await conversationTenantBoundary.handleHttpRequest(req, res, identity)) return;
+      }
 
       // /workbench/* (browser workbench) lives outside /api/, so the
       // gate above skips it — gate it explicitly when LAN-exposed.
@@ -1826,12 +2666,22 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // Always applied in WebUI mode — the butler is desktop-only regardless of
       // LAN exposure. Desktop talks to the backend directly, bypassing this.
       if (req.method === 'GET' && (req.url === '/api/assistants' || req.url.startsWith('/api/assistants?'))) {
-        proxyAssistantsFiltered(req, res, opts.backendPort);
+        proxyAssistantsFiltered(req, res, opts.backendPort, requireAuth);
+        return;
+      }
+
+      if (req.method === 'GET' && (req.url === '/api/agents' || req.url.startsWith('/api/agents?'))) {
+        proxyAgentsSanitized(req, res, opts.backendPort, requireAuth);
         return;
       }
 
       if (req.method === 'GET' && (req.url === '/api/settings/client' || req.url.startsWith('/api/settings/client?'))) {
-        proxySettingsSanitized(req, res, opts.backendPort);
+        const requestedKey = requestedClientSettingKey(req);
+        if (requireAuth && requestedKey && !LAN_SAFE_SETTING_KEYS.has(requestedKey)) {
+          sendJsonResponse(res, 403, { success: false, error: 'FORBIDDEN' });
+          return;
+        }
+        proxySettingsSanitized(req, res, opts.backendPort, vectorEndpoint);
         return;
       }
 
@@ -1888,35 +2738,35 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         }
 
         if (req.url.startsWith('/api/account/profile')) {
-          await handleAccountProfile(req, res, identity);
+          await handleAccountProfile(req, res, identity, vectorEndpoint);
           return;
         }
         if (req.url.startsWith('/api/account/memory')) {
-          await handleAccountMemoryClear(req, res, identity);
+          await handleAccountMemoryClear(req, res, identity, vectorEndpoint);
           return;
         }
         if (req.url.startsWith('/api/account/change-password')) {
-          await handleAccountPassword(req, res, identity, opts.backendPort);
+          await handleAccountPassword(req, res, identity, opts.backendPort, gate);
           return;
         }
         if (req.url.startsWith('/api/memory/admin/users')) {
-          await handleAdminMemoryUsers(req, res, identity, opts.backendPort);
+          await handleAdminMemoryUsers(req, res, identity, opts.backendPort, vectorEndpoint);
           return;
         }
         if (req.url.startsWith('/api/memory/users/')) {
-          await handleAdminMemoryUserRoute(req, res, identity, { dataDir: opts.dataDir });
+          await handleAdminMemoryUserRoute(req, res, identity, { dataDir: opts.dataDir }, vectorEndpoint);
           return;
         }
         if (req.url.startsWith('/api/memory/files')) {
-          await handleScopedMemoryFile(req, res, identity);
+          await handleScopedMemoryFile(req, res, identity, vectorEndpoint);
           return;
         }
         if (req.url.startsWith('/api/memory/journal')) {
-          await handleScopedJournal(req, res, identity);
+          await handleScopedJournal(req, res, identity, vectorEndpoint);
           return;
         }
         if (req.url.startsWith('/api/memory/search') && req.method === 'POST') {
-          await handleScopedMemorySearch(req, res, identity);
+          await handleScopedMemorySearch(req, res, identity, vectorEndpoint);
           return;
         }
         res.writeHead(404, { 'content-type': 'application/json' });
@@ -1957,17 +2807,27 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // /api/shared-drive/* — enterprise LAN shared library, served LOCALLY
       // (NOT proxied to aioncore). Must come before the generic /api/* proxy.
       if (req.url.startsWith('/api/shared-drive/')) {
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        const actor = {
+          userId: identity.userId,
+          username: identity.username,
+          isAdmin: identity.userId === ADMIN_USER_ID,
+        };
         if (req.url.startsWith('/api/shared-drive/list')) await handleSharedList(req, res, opts.sharedDriveDir);
         else if (req.url.startsWith('/api/shared-drive/categories'))
           await handleSharedCategories(res, opts.sharedDriveDir);
         else if (req.url.startsWith('/api/shared-drive/upload') && req.method === 'POST')
-          await handleSharedUpload(req, res, opts.sharedDriveDir);
+          await handleSharedUpload(req, res, opts.sharedDriveDir, actor);
         else if (req.url.startsWith('/api/shared-drive/download'))
           await handleSharedDownload(req, res, opts.sharedDriveDir);
         else if (req.url.startsWith('/api/shared-drive/preview'))
           await handleSharedPreview(req, res, opts.sharedDriveDir);
         else if (req.url.startsWith('/api/shared-drive/remove') && req.method === 'DELETE')
-          await handleSharedRemove(req, res, opts.sharedDriveDir);
+          await handleSharedRemove(req, res, opts.sharedDriveDir, actor);
         else {
           res.writeHead(404, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'NOT_FOUND' }));
@@ -1979,17 +2839,23 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // (NOT proxied to aioncore). This backs the AI生成 view and personal
       // generated-asset lifecycle.
       if (req.url.startsWith('/api/content-assets/')) {
-        if (req.url.startsWith('/api/content-assets/list')) await handleContentAssetsList(req, res, opts.contentAssetsDir);
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        if (req.url.startsWith('/api/content-assets/list'))
+          await handleContentAssetsList(req, res, opts.contentAssetsDir, identity.userId);
         else if (req.url.startsWith('/api/content-assets/upload') && req.method === 'POST')
-          await handleContentAssetUpload(req, res, opts.contentAssetsDir);
+          await handleContentAssetUpload(req, res, opts.contentAssetsDir, identity.userId);
         else if (req.url.startsWith('/api/content-assets/archive') && req.method === 'POST')
-          await handleContentAssetArchive(req, res, opts.contentAssetsDir);
+          await handleContentAssetArchive(req, res, opts.contentAssetsDir, identity.userId);
         else if (req.url.startsWith('/api/content-assets/publish-to-nas') && req.method === 'POST')
-          await handleContentAssetPublishToNas(req, res, opts.contentAssetsDir, opts.nasRootDir);
+          await handleContentAssetPublishToNas(req, res, opts.contentAssetsDir, opts.nasRootDir, identity.userId);
         else if (req.url.startsWith('/api/content-assets/download'))
-          await handleContentAssetDownload(req, res, opts.contentAssetsDir);
+          await handleContentAssetDownload(req, res, opts.contentAssetsDir, identity.userId);
         else if (req.url.startsWith('/api/content-assets/preview'))
-          await handleContentAssetPreview(req, res, opts.contentAssetsDir);
+          await handleContentAssetPreview(req, res, opts.contentAssetsDir, identity.userId);
         else {
           res.writeHead(404, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'NOT_FOUND' }));
@@ -2000,6 +2866,23 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // /api/nas/* — enterprise LAN network drive (read-only), served LOCALLY
       // (NOT proxied to aioncore). Must come before the generic /api/* proxy.
       if (req.url.startsWith('/api/nas/')) {
+        const nasMutation =
+          (req.method === 'POST' &&
+            (req.url.startsWith('/api/nas/upload') ||
+              req.url.startsWith('/api/nas/mkdir') ||
+              req.url.startsWith('/api/nas/move'))) ||
+          (req.method === 'DELETE' && req.url.startsWith('/api/nas/remove'));
+        if (nasMutation) {
+          const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+          if (!identity) {
+            sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+            return;
+          }
+          if (identity.userId !== ADMIN_USER_ID) {
+            sendJsonResponse(res, 403, { success: false, error: 'FORBIDDEN' });
+            return;
+          }
+        }
         if (req.url.startsWith('/api/nas/list')) await handleNasList(req, res, opts.nasRootDir);
         else if (req.url.startsWith('/api/nas/download')) await handleNasDownload(req, res, opts.nasRootDir);
         else if (req.url.startsWith('/api/nas/preview')) await handleNasPreview(req, res, opts.nasRootDir);
@@ -2024,12 +2907,12 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // generic /api/* proxy below.
       if (req.url.startsWith('/api/vector-search') && req.method === 'POST') {
         const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
-        if (!identity && requireAuth) {
+        if (!identity) {
           res.writeHead(401, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ success: false, error: 'UNAUTHENTICATED' }));
           return;
         }
-        await handleVectorSearch(req, res, identity || undefined);
+        await handleVectorSearch(req, res, identity, vectorEndpoint);
         return;
       }
 
@@ -2037,21 +2920,36 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // vector DB. PPTX is extracted server-side before upload so LAN browsers
       // can add PowerPoint decks without needing direct loopback access.
       if (req.url.startsWith('/api/vector-upload') && req.method === 'POST') {
-        await handleVectorUpload(req, res);
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        await handleVectorUpload(req, res, identity, vectorEndpoint);
         return;
       }
 
       // /api/vector-documents — read-only knowledge-base document list, proxied
       // to the vector DB the same way as vector-search above.
       if (req.url.startsWith('/api/vector-documents') && req.method === 'POST') {
-        await handleVectorDocuments(req, res);
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        await handleVectorDocuments(req, res, identity, vectorEndpoint);
         return;
       }
 
       // /api/vector-image — knowledge-base image thumbnail, proxied to the vector
       // DB's /api/image. Endpoint + path come as query params.
       if (req.url.startsWith('/api/vector-image') && req.method === 'GET') {
-        await handleVectorImage(req, res);
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        await handleVectorImage(req, res, identity, vectorEndpoint);
         return;
       }
 
@@ -2081,7 +2979,10 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         return;
       }
 
-      // /api/* — reverse proxy to backend (includes /api/auth/*).
+      // /api/* — reverse proxy to backend. Loopback desktop mode retains the
+      // compatibility fallback. LAN mode is fail-closed: only APIs terminated
+      // by an explicit handler above, plus the two bootstrap auth reads, may
+      // reach the local/trusted backend.
       // POST /login and POST /logout are aionui-auth's top-level auth endpoints.
       // Browser GETs for /login and /logout are SPA routes and must fall through
       // to index.html; otherwise LAN users can land on a backend 405 page.
@@ -2090,6 +2991,14 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         req.url.startsWith('/api?') ||
         (req.method === 'POST' && (requestPath === '/login' || requestPath === '/logout'))
       ) {
+        if (
+          requireAuth &&
+          (req.url.startsWith('/api/') || req.url.startsWith('/api?')) &&
+          !isAllowedLanGenericBackendRoute(req.url, req.method)
+        ) {
+          sendJsonResponse(res, 403, { success: false, error: 'FORBIDDEN' });
+          return;
+        }
         forwardToBackend(req, res, opts.backendPort);
         return;
       }
@@ -2137,6 +3046,14 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       }
     }
   });
+  // The public listener splices into this loopback server. Explicit bounds are
+  // still required: Node's generous defaults otherwise make slow-header/body
+  // connections a cheap unauthenticated resource-exhaustion primitive.
+  http_server.headersTimeout = 15_000;
+  http_server.requestTimeout = 10 * 60_000;
+  http_server.keepAliveTimeout = 5_000;
+  http_server.maxHeadersCount = 100;
+  http_server.maxRequestsPerSocket = 100;
 
   // Internal HTTP server — 127.0.0.1 ephemeral port, never visible to the user.
   await new Promise<void>((resolve, reject) => {
@@ -2161,25 +3078,58 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
     const cleanup = (): void => {
       if (settled) return;
       settled = true;
+      client.setTimeout(0);
       client.removeListener('data', onData);
       client.removeListener('error', onEarlyError);
       client.removeListener('end', onEarlyEnd);
+      client.removeListener('timeout', onEarlyTimeout);
     };
     const onData = (chunk: Buffer): void => {
       peeked = Buffer.concat([peeked, chunk]);
       const decision = peekWsRoute(peeked);
       if (decision === null && peeked.length < PEEK_LIMIT_BYTES) return;
-      // A /ws upgrade splices raw TCP straight to the backend, bypassing the
-      // HTTP gate — so authorize it here too, once the full request head is in
-      // (the Cookie header follows the request line).
+      // A /ws upgrade bypasses the internal HTTP server. In LAN mode terminate
+      // frames at a tenant-aware gateway; raw TCP splicing would broadcast all
+      // users' conversation events from the local-mode backend.
       if (decision === true && requireAuth) {
         const headEnd = peeked.indexOf('\r\n\r\n');
         if (headEnd < 0 && peeked.length < PEEK_LIMIT_BYTES) return;
-        if (!gate.isAuthorized(rawHeader(peeked, 'cookie')) && !gate.isAuthorizedToken(rawGateToken(peeked))) {
+        const cookieHeader = rawHeader(peeked, 'cookie');
+        const gateToken = rawGateToken(peeked);
+        const cookieIdentity = gate.getAuthorizedIdentity(cookieHeader);
+        const tokenIdentity = gate.getAuthorizedTokenIdentity(gateToken);
+        if (cookieIdentity && tokenIdentity && cookieIdentity.userId !== tokenIdentity.userId) {
           cleanup();
           client.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
           return;
         }
+        const identity = cookieIdentity ?? tokenIdentity;
+        if (!identity || !conversationTenantBoundary) {
+          cleanup();
+          client.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+          return;
+        }
+        cleanup();
+        proxyTenantWebSocket(client, {
+          backendPort: opts.backendPort,
+          initialBytes: peeked,
+          identity,
+          boundary: conversationTenantBoundary,
+          allowCrossOriginWithBearer: Boolean(gateToken && tokenIdentity),
+          isStillAuthorized: () => {
+            const currentCookieIdentity = gate.getAuthorizedIdentity(cookieHeader);
+            const currentTokenIdentity = gate.getAuthorizedTokenIdentity(gateToken);
+            if (
+              currentCookieIdentity &&
+              currentTokenIdentity &&
+              currentCookieIdentity.userId !== currentTokenIdentity.userId
+            ) {
+              return false;
+            }
+            return (currentCookieIdentity ?? currentTokenIdentity)?.userId === identity.userId;
+          },
+        });
+        return;
       }
       cleanup();
       const target = decision === true ? opts.backendPort : internalPort;
@@ -2194,10 +3144,17 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       cleanup();
       client.destroy();
     };
+    const onEarlyTimeout = (): void => {
+      cleanup();
+      client.destroy();
+    };
+    client.setTimeout(INITIAL_PEEK_TIMEOUT_MS);
     client.on('data', onData);
     client.on('error', onEarlyError);
     client.on('end', onEarlyEnd);
+    client.on('timeout', onEarlyTimeout);
   });
+  tcp_server.maxConnections = MAX_FRONTEND_CONNECTIONS;
 
   await new Promise<void>((resolve, reject) => {
     tcp_server.once('error', reject);
@@ -2228,6 +3185,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       }),
     inspectEntry: entryGuard.inspect,
     repairEntry: entryGuard.repair,
+    revokeUserSessions: (userId) => gate.revokeUserSessions(userId),
   };
 }
 

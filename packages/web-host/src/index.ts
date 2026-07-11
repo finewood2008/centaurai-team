@@ -100,6 +100,8 @@ export async function startWebHost(opts: WebHostOptions): Promise<WebHostHandle>
       sharedDriveDir: opts.sharedDriveDir,
       contentAssetsDir: opts.contentAssetsDir,
       nasRootDir: opts.nasRootDir,
+      vectorEndpoint: opts.vectorEndpoint,
+      allowInsecureVectorEndpoint: opts.allowInsecureVectorEndpoint,
       imageWorkbenchDir: opts.imageWorkbenchDir,
       imageWorkbenchConfig: opts.imageWorkbenchConfig,
       imageWorkbenchConfigResolver: opts.imageWorkbenchConfigResolver,
@@ -123,6 +125,7 @@ export async function startWebHost(opts: WebHostOptions): Promise<WebHostHandle>
     lanIP: staticHandle.lanIP,
     inspectEntry: staticHandle.inspectEntry,
     repairEntry: staticHandle.repairEntry,
+    revokeUserSessions: staticHandle.revokeUserSessions,
     async stop() {
       await staticHandle.stop();
       await backendHandle.stop();

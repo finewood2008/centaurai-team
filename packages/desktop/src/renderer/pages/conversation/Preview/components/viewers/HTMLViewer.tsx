@@ -6,8 +6,9 @@
 
 import { Message } from '@arco-design/web-react';
 import MonacoEditor from '@monaco-editor/react';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { buildSandboxedHtmlDocument, SANDBOXED_HTML_IFRAME_SANDBOX } from '@/renderer/utils/security/sandboxedHtml';
 
 interface HTMLPreviewProps {
   content: string;
@@ -57,53 +58,9 @@ const HTMLPreview: React.FC<HTMLPreviewProps> = ({ content, file_path, hideToolb
     return () => observer.disconnect();
   }, []);
 
-  // 初始化 iframe 内容
-  useEffect(() => {
-    if (!iframeRef.current) return;
-
-    const iframe = iframeRef.current;
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-
-    if (!iframeDoc) return;
-
-    // 写入 HTML 内容 / Write HTML content
-    iframeDoc.open();
-
-    // 注入 <base> 标签以支持相对路径 / Inject <base> tag to support relative paths
-    let finalHtml = htmlCode;
-    if (file_path) {
-      // 获取文件所在目录 / Get directory of the file
-      const fileDir = file_path.substring(0, file_path.lastIndexOf('/') + 1);
-      // 构造 file:// 协议的 base URL / Construct file:// protocol base URL
-      const base_url = `file://${fileDir}`;
-
-      // 检查是否已有 base 标签 / Check if base tag exists
-      if (!finalHtml.match(/<base\s+href=/i)) {
-        if (finalHtml.match(/<head>/i)) {
-          finalHtml = finalHtml.replace(/<head>/i, `<head><base href="${base_url}">`);
-        } else if (finalHtml.match(/<html>/i)) {
-          finalHtml = finalHtml.replace(/<html>/i, `<html><head><base href="${base_url}"></head>`);
-        } else {
-          finalHtml = `<head><base href="${base_url}"></head>${finalHtml}`;
-        }
-      }
-    }
-
-    iframeDoc.write(finalHtml);
-    iframeDoc.close();
-
-    // 注入元素选择器脚本
-    if (inspectorMode) {
-      injectInspectorScript(iframeDoc);
-    }
-  }, [htmlCode, inspectorMode]);
-
-  /**
-   * 注入元素选择器脚本到 iframe
-   */
-  const injectInspectorScript = (iframeDoc: Document) => {
-    const script = iframeDoc.createElement('script');
-    script.textContent = `
+  // Runs inside the opaque sandbox only. It communicates through postMessage;
+  // the privileged parent never reaches into the preview DOM.
+  const inspectorBootstrapScript = `
       (function() {
         let hoveredElement = null;
         let overlay = null;
@@ -223,14 +180,17 @@ const HTMLPreview: React.FC<HTMLPreviewProps> = ({ content, file_path, hideToolb
         });
       })();
     `;
-    iframeDoc.body.appendChild(script);
-  };
+  const previewDocument = useMemo(
+    () => buildSandboxedHtmlDocument(htmlCode, inspectorMode ? inspectorBootstrapScript : undefined),
+    [htmlCode, inspectorMode]
+  );
 
   /**
    * 监听 iframe 消息
    */
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow || !event.data || typeof event.data !== 'object') return;
       if (event.data.type === 'element-selected') {
         const elementInfo: SelectedElement = event.data.data;
         setSelectedElement(elementInfo);
@@ -402,8 +362,9 @@ const HTMLPreview: React.FC<HTMLPreviewProps> = ({ content, file_path, hideToolb
         <div className={`${editMode ? 'flex-1' : 'w-full'} overflow-auto bg-white`}>
           <iframe
             ref={iframeRef}
+            srcDoc={previewDocument}
             className='w-full h-full border-0'
-            sandbox='allow-scripts allow-same-origin'
+            sandbox={SANDBOXED_HTML_IFRAME_SANDBOX}
             title='HTML Preview'
           />
         </div>

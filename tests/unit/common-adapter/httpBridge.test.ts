@@ -26,6 +26,8 @@ import {
   wsMappedEmitter,
   stubEmitter,
   httpRequest,
+  fetchWithWebuiAuth,
+  setWebuiGateToken,
 } from '@/common/adapter/httpBridge';
 
 describe('httpBridge', () => {
@@ -132,6 +134,65 @@ describe('httpBridge', () => {
       expect(fetchSpy.mock.calls[0][1]?.method).toBe('GET');
       expect(fetchSpy.mock.calls[0][1]?.credentials).toBe('include');
       expect(fetchSpy.mock.calls[0][1]?.body).toBeUndefined();
+    });
+  });
+
+  describe('fetchWithWebuiAuth', () => {
+    it('adds distributed gate authentication and credentials to raw WebHost requests', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal('window', {
+        __clientMode: true,
+        __backendHost: '192.168.1.25',
+        __backendPort: 25808,
+        localStorage: {
+          getItem: vi.fn(() => 'gate-token'),
+          setItem: vi.fn(),
+          removeItem: vi.fn(),
+        },
+      });
+      vi.stubGlobal('document', {});
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await fetchWithWebuiAuth('http://192.168.1.25:25808/api/vector-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const init = fetchSpy.mock.calls[0][1] as RequestInit;
+      expect(init.credentials).toBe('include');
+      expect(new Headers(init.headers).get('X-WebUI-Gate-Token')).toBe('gate-token');
+      expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
+    });
+
+    it('never persists the gate bearer in browser WebUI script-readable storage', () => {
+      const setItem = vi.fn();
+      const removeItem = vi.fn();
+      vi.stubGlobal('window', {
+        localStorage: { getItem: vi.fn(), setItem, removeItem },
+      });
+      vi.stubGlobal('document', {});
+
+      setWebuiGateToken('must-remain-httponly');
+
+      expect(setItem).not.toHaveBeenCalled();
+      expect(removeItem).toHaveBeenCalledWith('centaurai.webuiGateToken');
+    });
+
+    it('persists the gate bearer only for the distributed native client', () => {
+      const setItem = vi.fn();
+      const removeItem = vi.fn();
+      vi.stubGlobal('window', {
+        __clientMode: true,
+        __backendHost: '192.168.1.25',
+        __backendPort: 25808,
+        localStorage: { getItem: vi.fn(), setItem, removeItem },
+      });
+      vi.stubGlobal('document', {});
+
+      setWebuiGateToken('native-gate-token');
+
+      expect(setItem).toHaveBeenCalledWith('centaurai.webuiGateToken', 'native-gate-token');
+      expect(removeItem).not.toHaveBeenCalled();
     });
   });
 

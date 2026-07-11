@@ -135,6 +135,7 @@ export function initApplicationBridge(): void {
     knowledgeIndexJobs.set(jobId, { phase: 'walking', total: 0, done: 0, failed: 0, skipped: 0, pruned: 0 });
     void indexNasFolder(root, '', {
       endpoint: normalizeVectorDbEndpoint(endpoint),
+      manifestDir: path.join(app.getPath('userData'), 'nas-index-manifests'),
       includeVideo,
       onProgress: (progress) => {
         const cancelled = knowledgeIndexJobs.get(jobId)?.cancelled;

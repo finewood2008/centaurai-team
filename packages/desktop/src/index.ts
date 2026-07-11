@@ -13,10 +13,11 @@ import { captureBackendStartupFailure, initSentry, scheduleStartupLogReport, set
 initSentry();
 
 import './process/utils/configureConsoleLog';
-import { app, BrowserWindow, ipcMain, nativeImage, powerMonitor, protocol, session } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeImage, powerMonitor, protocol, session, shell } from 'electron';
 import fixPath from 'fix-path';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'node:url';
 import { initMainAdapterWithWindow } from './common/adapter/main';
 import { ipcBridge } from './common';
 import { initializeProcess } from './process';
@@ -26,7 +27,7 @@ import { classifyBackendStartupFailure } from './process/startup/backendStartupF
 import { resolvePreferredBackendPort } from './process/startup/backendPort';
 import { installQuitCleanup } from './process/startup/quitCleanup';
 import { ProcessConfig } from './process/utils/initStorage';
-import { DESKTOP_PET_ENABLED } from './common/config/constants';
+import { DESKTOP_PET_ENABLED, LOCAL_VECTOR_DB_PROXY_BASE } from './common/config/constants';
 import type { BackendStartupFailureInfo } from './common/types/platform/electron';
 import { registerWindowMaximizeListeners } from '@process/bridge';
 import { BackendLifecycleManager } from '@aionui/web-host';
@@ -60,6 +61,7 @@ import {
 import {
   loadUserWebUIConfig,
   resolveImageWorkbenchConfig,
+  resolveVectorEndpoint,
   resolveRemoteAccess,
   resolveWebUIPort,
   restoreDesktopWebUIFromPreferences,
@@ -74,6 +76,17 @@ import {
   setIsQuitting,
 } from './process/utils/tray';
 import { readCloseToTraySetting } from './process/utils/closeToTraySetting';
+import {
+  isAllowedGuestUrl,
+  isAllowedImageWorkbenchBackendRequest,
+  isExternalHttpUrl,
+  isTrustedRendererCorsOrigin,
+  isTrustedImageWorkbenchDocumentUrl,
+  isTrustedMainRendererUrl,
+  normalizeDistributedServerTarget,
+} from './process/security/mainWindowSecurity';
+import { createLocalVectorProtocolHandler } from './process/security/localVectorProtocol';
+import { proxyComfyRequest, proxyImageApiRequest } from './process/security/imageWorkbenchProxy';
 // @ts-expect-error - electron-squirrel-startup doesn't have types
 import electronSquirrelStartup from 'electron-squirrel-startup';
 
@@ -201,6 +214,7 @@ const clientMarkerExists = (): boolean => {
 const isClientMode = process.env.AIONUI_CLIENT === '1' || hasSwitch('client') || clientMarkerExists();
 let clientBackendHost = '';
 let clientBackendPort = 0;
+let clientBackendOrigin = '';
 
 // Flag to distinguish intentional quit from unexpected exit in WebUI mode
 let isExplicitQuit = false;
@@ -233,11 +247,24 @@ const IMAGE_WORKBENCH_COMFYUI_PROXY_PREFIX = '/__comfyui';
 const IMAGE_WORKBENCH_BACKEND_PROXY_PREFIX = '/__backend';
 const DEFAULT_IMAGE_API_BASE_URL = 'https://api.tokenclub.pro';
 const COMFYUI_LOCAL_BASE_URL = 'http://127.0.0.1:8188';
-const MANAGED_IMAGE_WORKBENCH_AUTH_RE = /^Bearer\s+centaur-managed$/i;
+const LOCAL_VECTOR_PROTOCOL = new URL(LOCAL_VECTOR_DB_PROXY_BASE).protocol.replace(/:$/, '');
+const PRIVILEGED_WORKBENCH_PARTITIONS = [
+  'persist:centaur-image-workbench',
+  'persist:centaur-comfyui-workbench',
+] as const;
 
 protocol.registerSchemesAsPrivileged([
   {
     scheme: IMAGE_WORKBENCH_PROTOCOL,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+  {
+    scheme: LOCAL_VECTOR_PROTOCOL,
     privileges: {
       standard: true,
       secure: true,
@@ -287,50 +314,66 @@ function getStaticContentType(filePath: string): string {
 }
 
 function registerImageWorkbenchProtocol(): void {
-  const handler = async (request: Request): Promise<Response> => {
-    const root = getImageWorkbenchRoot();
-    const url = new URL(request.url);
+  const createHandler =
+    (partition: (typeof PRIVILEGED_WORKBENCH_PARTITIONS)[number]) =>
+    async (request: Request): Promise<Response> => {
+      const root = getImageWorkbenchRoot();
+      const url = new URL(request.url);
+      const isComfyPartition = partition === 'persist:centaur-comfyui-workbench';
 
-    if (url.hostname === 'app' && url.pathname.startsWith(IMAGE_WORKBENCH_COMFYUI_PROXY_PREFIX)) {
-      return proxyComfyImageWorkbenchRequest(request, url);
-    }
+      if (url.hostname === 'app' && url.pathname.startsWith(IMAGE_WORKBENCH_COMFYUI_PROXY_PREFIX)) {
+        return isComfyPartition
+          ? proxyComfyImageWorkbenchRequest(request, url)
+          : Response.json({ error: 'ComfyUI capability is unavailable in this partition' }, { status: 403 });
+      }
 
-    if (url.hostname === 'app' && url.pathname.startsWith(IMAGE_WORKBENCH_BACKEND_PROXY_PREFIX)) {
-      return proxyBackendImageWorkbenchRequest(request, url);
-    }
+      if (url.hostname === 'app' && url.pathname.startsWith(IMAGE_WORKBENCH_BACKEND_PROXY_PREFIX)) {
+        if (isComfyPartition) {
+          return Response.json({ error: 'Backend capability is unavailable in this partition' }, { status: 403 });
+        }
+        // The bundled workbench only probes this exact setting write. It is
+        // server-managed, so acknowledge without forwarding it. Never turn the
+        // custom protocol into a generic bridge to the local trusted backend.
+        if (!isAllowedImageWorkbenchBackendRequest(request.method, url.pathname)) {
+          return Response.json({ error: 'Unsupported backend proxy path' }, { status: 403 });
+        }
+        if (request.method === 'OPTIONS') {
+          return new Response(null, { status: 204, headers: createCorsHeaders() });
+        }
+        return Response.json({ success: true }, { status: 200, headers: createCorsHeaders() });
+      }
 
-    if (url.hostname === 'app' && url.pathname.startsWith(IMAGE_WORKBENCH_API_PROXY_PREFIX)) {
-      return proxyImageApiWorkbenchRequest(request, url);
-    }
+      if (url.hostname === 'app' && url.pathname.startsWith(IMAGE_WORKBENCH_API_PROXY_PREFIX)) {
+        return isComfyPartition
+          ? Response.json({ error: 'Image API capability is unavailable in this partition' }, { status: 403 })
+          : proxyImageApiWorkbenchRequest(request, url);
+      }
 
-    const requestedPath = decodeURIComponent(url.pathname.replace(/^\/+/, '')) || 'index.html';
-    const filePath = path.resolve(root, requestedPath);
+      const requestedPath = decodeURIComponent(url.pathname.replace(/^\/+/, '')) || 'index.html';
+      const filePath = path.resolve(root, requestedPath);
 
-    if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
-      return new Response('Forbidden', { status: 403 });
-    }
+      if (filePath !== root && !filePath.startsWith(`${root}${path.sep}`)) {
+        return new Response('Forbidden', { status: 403 });
+      }
 
+      try {
+        const data = await fs.promises.readFile(filePath);
+        return new Response(data, {
+          headers: {
+            'Content-Type': getStaticContentType(filePath),
+          },
+        });
+      } catch {
+        return new Response('Not Found', { status: 404 });
+      }
+    };
+
+  // Deliberately do not install the handler on defaultSession: ordinary URL
+  // preview webviews live there and must not gain image API/backend proxy
+  // capabilities merely by knowing the custom scheme URL.
+  for (const partition of PRIVILEGED_WORKBENCH_PARTITIONS) {
     try {
-      const data = await fs.promises.readFile(filePath);
-      return new Response(data, {
-        headers: {
-          'Content-Type': getStaticContentType(filePath),
-        },
-      });
-    } catch {
-      return new Response('Not Found', { status: 404 });
-    }
-  };
-
-  try {
-    protocol.handle(IMAGE_WORKBENCH_PROTOCOL, handler);
-  } catch (error) {
-    console.warn('[AionUi] Failed to register image workbench protocol on default session:', error);
-  }
-
-  for (const partition of ['persist:centaur-image-workbench', 'persist:centaur-comfyui-workbench']) {
-    try {
-      session.fromPartition(partition).protocol.handle(IMAGE_WORKBENCH_PROTOCOL, handler);
+      session.fromPartition(partition).protocol.handle(IMAGE_WORKBENCH_PROTOCOL, createHandler(partition));
     } catch (error) {
       console.warn(`[AionUi] Failed to register image workbench protocol on ${partition}:`, error);
     }
@@ -345,187 +388,29 @@ function createCorsHeaders(): Record<string, string> {
   };
 }
 
-async function proxyImageApiWorkbenchRequest(request: Request, url: URL): Promise<Response> {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: createCorsHeaders(),
-    });
-  }
-
-  const upstreamPath = url.pathname.slice(IMAGE_WORKBENCH_API_PROXY_PREFIX.length) || '/';
-  const imageConfig = await resolveImageWorkbenchConfig();
-  const upstreamBaseUrl = imageConfig?.baseUrl?.trim() || DEFAULT_IMAGE_API_BASE_URL;
-  const upstreamUrl = buildImageWorkbenchUpstreamUrl(upstreamBaseUrl, upstreamPath, url.search);
-  const headers = new Headers();
-  const contentType = request.headers.get('content-type');
-  const accept = request.headers.get('accept');
-  const configuredKey = imageConfig?.apiKey?.trim();
-  if (configuredKey) {
-    headers.set('authorization', `Bearer ${configuredKey}`);
-  } else {
-    const authorization = request.headers.get('authorization');
-    if (authorization && !MANAGED_IMAGE_WORKBENCH_AUTH_RE.test(authorization.trim())) {
-      headers.set('authorization', authorization);
-    }
-  }
-  if (contentType) headers.set('content-type', contentType);
-  if (accept) headers.set('accept', accept);
-
+function registerLocalVectorProtocol(): void {
   try {
-    console.info('[AionUi] Image workbench API proxy request:', {
-      method: request.method,
-      path: upstreamPath,
-      configured: Boolean(configuredKey),
-    });
-    const upstreamResponse = await fetch(upstreamUrl, {
-      method: request.method,
-      headers,
-      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer(),
-    });
-    console.info('[AionUi] Image workbench API proxy response:', {
-      method: request.method,
-      path: upstreamPath,
-      status: upstreamResponse.status,
-    });
-    const responseHeaders = new Headers(upstreamResponse.headers);
-    for (const [key, value] of Object.entries(createCorsHeaders())) {
-      responseHeaders.set(key, value);
-    }
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers: responseHeaders,
-    });
+    protocol.handle(LOCAL_VECTOR_PROTOCOL, createLocalVectorProtocolHandler(resolveVectorEndpoint));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[AionUi] Image workbench API proxy failed:', message);
-    return Response.json(
-      { error: { message: `图像接口代理请求失败：${message}` } },
-      { status: 502, headers: createCorsHeaders() }
-    );
+    console.warn('[AionUi] Failed to register local vector protocol:', error);
   }
 }
 
-function buildImageWorkbenchUpstreamUrl(base: string, upstreamPath: string, search: string): string {
-  const upstream = new URL(base);
-  const basePath = upstream.pathname.replace(/\/+$/, '');
-  const baseEndsWithV1 = basePath.toLowerCase().endsWith('/v1');
-  const restPath =
-    baseEndsWithV1 && (upstreamPath === '/v1' || upstreamPath.startsWith('/v1/'))
-      ? upstreamPath.slice(3) || '/'
-      : upstreamPath;
-  upstream.pathname = `${basePath}${restPath}`.replace(/\/{2,}/g, '/') || '/';
-  upstream.search = search;
-  return upstream.toString();
+async function proxyImageApiWorkbenchRequest(request: Request, url: URL): Promise<Response> {
+  const imageConfig = await resolveImageWorkbenchConfig();
+  const upstreamBaseUrl = imageConfig?.baseUrl?.trim() || DEFAULT_IMAGE_API_BASE_URL;
+  return proxyImageApiRequest(request, url, {
+    prefix: IMAGE_WORKBENCH_API_PROXY_PREFIX,
+    baseUrl: upstreamBaseUrl,
+    apiKey: imageConfig?.apiKey,
+  });
 }
 
 async function proxyComfyImageWorkbenchRequest(request: Request, url: URL): Promise<Response> {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: createCorsHeaders() });
-  }
-
-  const upstreamPath = url.pathname.slice(IMAGE_WORKBENCH_COMFYUI_PROXY_PREFIX.length) || '/';
-  const upstreamUrl = `${COMFYUI_LOCAL_BASE_URL}${upstreamPath}${url.search}`;
-
-  try {
-    const upstreamResponse = await fetch(upstreamUrl, {
-      method: request.method,
-      headers: request.headers,
-      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer(),
-    });
-    const responseHeaders = new Headers(upstreamResponse.headers);
-    for (const [key, value] of Object.entries(createCorsHeaders())) {
-      responseHeaders.set(key, value);
-    }
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers: responseHeaders,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[AionUi] ComfyUI proxy failed:', message);
-    return Response.json(
-      { error: `ComfyUI 未启动或无法连接：${message}` },
-      { status: 502, headers: createCorsHeaders() }
-    );
-  }
-}
-
-async function proxyBackendImageWorkbenchRequest(request: Request, url: URL): Promise<Response> {
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: createCorsHeaders() });
-  }
-
-  const upstreamPath = url.pathname.slice(IMAGE_WORKBENCH_BACKEND_PROXY_PREFIX.length) || '/';
-  if (!upstreamPath.startsWith('/api/')) {
-    return Response.json({ error: 'Unsupported backend proxy path' }, { status: 400, headers: createCorsHeaders() });
-  }
-  const upstreamUrl = `http://127.0.0.1:${backendManager.port}${upstreamPath}${url.search}`;
-
-  const headers = new Headers();
-  const contentType = request.headers.get('content-type');
-  const accept = request.headers.get('accept');
-  if (contentType) headers.set('content-type', contentType);
-  if (accept) headers.set('accept', accept);
-
-  try {
-    const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer();
-    const filteredBody = filterImageWorkbenchBackendBody(request.method, upstreamPath, contentType, body);
-    if (filteredBody.intercepted) {
-      return Response.json({ success: true }, { status: 200, headers: createCorsHeaders() });
-    }
-
-    const upstreamResponse = await fetch(upstreamUrl, {
-      method: request.method,
-      headers,
-      body: filteredBody.body,
-    });
-    const responseHeaders = new Headers(upstreamResponse.headers);
-    for (const [key, value] of Object.entries(createCorsHeaders())) {
-      responseHeaders.set(key, value);
-    }
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      statusText: upstreamResponse.statusText,
-      headers: responseHeaders,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error('[AionUi] Image workbench backend proxy failed:', message);
-    return Response.json({ error: `后端代理请求失败：${message}` }, { status: 502, headers: createCorsHeaders() });
-  }
-}
-
-function filterImageWorkbenchBackendBody(
-  method: string,
-  upstreamPath: string,
-  contentType: string | null,
-  body: ArrayBuffer | undefined
-): { body: BodyInit | undefined; intercepted: boolean } {
-  const methodMayWrite = method !== 'GET' && method !== 'HEAD';
-  if (!methodMayWrite || !body || upstreamPath !== '/api/settings/client') {
-    return { body, intercepted: false };
-  }
-  if (!contentType?.toLowerCase().includes('application/json')) {
-    return { body, intercepted: false };
-  }
-
-  try {
-    const payload = JSON.parse(Buffer.from(body).toString('utf-8')) as unknown;
-    if (!payload || typeof payload !== 'object' || !('webui.imageWorkbenchConfig' in payload)) {
-      return { body, intercepted: false };
-    }
-    const next = { ...(payload as Record<string, unknown>) };
-    delete next['webui.imageWorkbenchConfig'];
-    if (Object.keys(next).length === 0) {
-      return { body: undefined, intercepted: true };
-    }
-    return { body: JSON.stringify(next), intercepted: false };
-  } catch {
-    return { body, intercepted: false };
-  }
+  return proxyComfyRequest(request, url, {
+    prefix: IMAGE_WORKBENCH_COMFYUI_PROXY_PREFIX,
+    baseUrl: COMFYUI_LOCAL_BASE_URL,
+  });
 }
 
 let backendStartupFailed = false;
@@ -533,6 +418,7 @@ let backendStartupFailureInfo: BackendStartupFailureInfo | null = null;
 let rendererInitialLanguage: string | null = null;
 let backendMigrationsScheduled = false;
 let ensureAdminUserPromise: Promise<void> | null = null;
+let trustedMainRendererEntryUrl: string | null = null;
 
 ipcMain.on('get-backend-port', (event) => {
   // In client mode, ignore the (harmless) local backend and use the selected
@@ -550,9 +436,21 @@ ipcMain.on('get-client-mode', (event) => {
 
 // Distributed client: connect to the chosen remote server, then reload so the
 // preload re-exposes the new backend host/port to the renderer.
-ipcMain.handle('client:connect', (_event, payload: { host: string; port: number }) => {
-  clientBackendHost = payload?.host || '';
-  clientBackendPort = Number(payload?.port) || 0;
+ipcMain.handle('client:connect', (event, payload: { host: string; port: number }) => {
+  if (
+    !isClientMode ||
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    event.sender !== mainWindow.webContents ||
+    event.senderFrame !== mainWindow.webContents.mainFrame
+  ) {
+    throw new Error('Unauthorized distributed-client connection request');
+  }
+  const target = normalizeDistributedServerTarget(payload?.host, payload?.port);
+  if (!target) throw new Error('Invalid distributed server address');
+  clientBackendHost = target.host;
+  clientBackendPort = target.port;
+  clientBackendOrigin = target.origin;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
   return { host: clientBackendHost, port: clientBackendPort };
 });
@@ -650,6 +548,164 @@ function markBackendReady(backendPort: number, source: string): void {
   scheduleBackendMigrations();
 }
 
+function openExternalHttpUrl(url: string): void {
+  if (!isExternalHttpUrl(url)) return;
+  void shell.openExternal(url).catch((error) => {
+    console.warn('[AionUi] Failed to open external URL:', error);
+  });
+}
+
+/** Lock the privileged renderer to the application entry point. */
+function installMainWindowSecurity(win: BrowserWindow, trustedRendererEntryUrl: string): void {
+  const guardMainFrameNavigation = (event: Electron.Event, targetUrl: string) => {
+    if (isTrustedMainRendererUrl(targetUrl, trustedRendererEntryUrl)) return;
+    event.preventDefault();
+    openExternalHttpUrl(targetUrl);
+  };
+
+  win.webContents.on('will-navigate', guardMainFrameNavigation);
+  win.webContents.on('will-redirect', guardMainFrameNavigation);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalHttpUrl(url);
+    return { action: 'deny' };
+  });
+
+  win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+    const requestedPartition = webPreferences.partition || params.partition || '';
+    if (
+      PRIVILEGED_WORKBENCH_PARTITIONS.includes(
+        requestedPartition as (typeof PRIVILEGED_WORKBENCH_PARTITIONS)[number]
+      ) &&
+      !isTrustedImageWorkbenchDocumentUrl(params.src)
+    ) {
+      event.preventDefault();
+      return;
+    }
+    if (!isAllowedGuestUrl(params.src)) {
+      event.preventDefault();
+      return;
+    }
+
+    // Never allow a guest page to opt into a preload or Node-enabled frame.
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.nodeIntegrationInSubFrames = false;
+    webPreferences.nodeIntegrationInWorker = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.webSecurity = true;
+    webPreferences.allowRunningInsecureContent = false;
+    webPreferences.partition = webPreferences.partition || params.partition || 'centaur-untrusted-webviews';
+  });
+
+  win.webContents.on('did-attach-webview', (_event, guest) => {
+    const privileged = PRIVILEGED_WORKBENCH_PARTITIONS.some(
+      (partition) => guest.session === session.fromPartition(partition)
+    );
+    if (!privileged) return;
+
+    const guardWorkbenchNavigation = (event: Electron.Event, targetUrl: string) => {
+      if (isTrustedImageWorkbenchDocumentUrl(targetUrl)) return;
+      event.preventDefault();
+      openExternalHttpUrl(targetUrl);
+    };
+    guest.on('will-navigate', guardWorkbenchNavigation);
+    guest.on('will-redirect', guardWorkbenchNavigation);
+    guest.setWindowOpenHandler(({ url }) => {
+      openExternalHttpUrl(url);
+      return { action: 'deny' };
+    });
+  });
+}
+
+let distributedClientCorsBridgeInstalled = false;
+
+/**
+ * Keep Chromium web security enabled while allowing the packaged renderer to
+ * call the one WebHost explicitly selected by a distributed-client user.
+ *
+ * Electron's file:// renderer is cross-origin to that HTTP server, so normal
+ * fetch preflights need response CORS headers. The old `webSecurity: false`
+ * disabled the browser boundary for every origin. This bridge is deliberately
+ * narrower: exact server origin, trusted BrowserWindow, main frame, and trusted
+ * renderer Origin only. Subframes/webviews and all other network destinations
+ * receive the untouched response.
+ */
+function installDistributedClientCorsBridge(): void {
+  if (distributedClientCorsBridgeInstalled) return;
+  distributedClientCorsBridgeInstalled = true;
+  const pendingOrigins = new Map<number, string>();
+  const filter = { urls: ['http://*/*', 'https://*/*'] };
+
+  const isTrustedRequest = (details: {
+    url: string;
+    webContentsId?: number;
+    frame?: Electron.WebFrameMain | null;
+  }): boolean => {
+    if (!isClientMode || !clientBackendOrigin || !trustedMainRendererEntryUrl) return false;
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return false;
+    if (details.webContentsId !== mainWindow.webContents.id || details.frame !== mainWindow.webContents.mainFrame) {
+      return false;
+    }
+    try {
+      return new URL(details.url).origin === clientBackendOrigin;
+    } catch {
+      return false;
+    }
+  };
+
+  session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    if (isTrustedRequest(details) && trustedMainRendererEntryUrl) {
+      const originEntry = Object.entries(details.requestHeaders).find(([name]) => name.toLowerCase() === 'origin');
+      const requestOrigin = originEntry?.[1];
+      if (isTrustedRendererCorsOrigin(requestOrigin, trustedMainRendererEntryUrl)) {
+        pendingOrigins.set(details.id, requestOrigin as string);
+        // Bound entries whose request fails before response headers arrive.
+        if (pendingOrigins.size > 1_024) pendingOrigins.delete(pendingOrigins.keys().next().value as number);
+      }
+    }
+    callback({ requestHeaders: details.requestHeaders });
+  });
+
+  session.defaultSession.webRequest.onHeadersReceived(filter, (details, callback) => {
+    const requestOrigin = pendingOrigins.get(details.id);
+    pendingOrigins.delete(details.id);
+    if (!requestOrigin || !isTrustedRequest(details)) {
+      callback({});
+      return;
+    }
+
+    const responseHeaders: Record<string, string[]> = {};
+    for (const [name, value] of Object.entries(details.responseHeaders ?? {})) {
+      if (/^access-control-/i.test(name)) continue;
+      responseHeaders[name] = Array.isArray(value) ? value : [String(value)];
+    }
+    responseHeaders['Access-Control-Allow-Origin'] = [requestOrigin];
+    responseHeaders['Access-Control-Allow-Credentials'] = ['true'];
+    responseHeaders['Access-Control-Allow-Methods'] = ['GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS'];
+    responseHeaders['Access-Control-Allow-Headers'] = [
+      'Accept, Authorization, Content-Type, Range, X-Requested-By, X-WebUI-Gate-Token',
+    ];
+    responseHeaders['Access-Control-Expose-Headers'] = [
+      'Accept-Ranges, Content-Disposition, Content-Length, Content-Range, X-WebUI-Gate-Token',
+    ];
+    responseHeaders['Access-Control-Allow-Private-Network'] = ['true'];
+    responseHeaders['Access-Control-Max-Age'] = ['600'];
+    responseHeaders['Vary'] = ['Origin'];
+
+    if (details.method === 'OPTIONS') {
+      delete responseHeaders['content-length'];
+      delete responseHeaders['Content-Length'];
+      delete responseHeaders['transfer-encoding'];
+      delete responseHeaders['Transfer-Encoding'];
+    }
+    callback({
+      responseHeaders,
+      statusLine: details.method === 'OPTIONS' ? 'HTTP/1.1 204 No Content' : undefined,
+    });
+  });
+}
+
 const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): void => {
   console.log('[AionUi] Creating main window...');
   const { x: windowX, y: windowY, width: windowWidth, height: windowHeight } = resolveInitialBounds();
@@ -698,10 +754,21 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       webviewTag: true, // 启用 webview 标签用于 HTML 预览 / Enable webview tag for HTML preview
-      webSecurity: false, // 允许渲染进程跨域直连本地向量库(127.0.0.1:8619)
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      // Keep Chromium's origin boundary intact. The co-located vector DB is
+      // reached through the strict centaur-vector:// main-process proxy.
+      webSecurity: true,
     },
   });
   console.log(`[AionUi] Main window created (id=${mainWindow.id})`);
+
+  const rendererUrl = process.env['ELECTRON_RENDERER_URL'];
+  const fallbackFile = path.join(__dirname, '../renderer/index.html');
+  const trustedRendererEntryUrl = !app.isPackaged && rendererUrl ? rendererUrl : pathToFileURL(fallbackFile).toString();
+  trustedMainRendererEntryUrl = trustedRendererEntryUrl;
+  installMainWindowSecurity(mainWindow, trustedRendererEntryUrl);
 
   scheduleStartupLogReport(mainWindow);
 
@@ -769,9 +836,6 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
   }
 
   // Load the renderer: dev server URL in development, built HTML file in production
-  const rendererUrl = process.env['ELECTRON_RENDERER_URL'];
-  const fallbackFile = path.join(__dirname, '../renderer/index.html');
-
   if (!app.isPackaged && rendererUrl) {
     console.log(`[AionUi] Loading renderer URL: ${rendererUrl}`);
     mainWindow.loadURL(rendererUrl).catch((error) => {
@@ -818,6 +882,7 @@ const createWindow = ({ showOnReady = true }: { showOnReady?: boolean } = {}): v
 
   mainWindow.on('closed', () => {
     console.log('[AionUi] Main window closed');
+    trustedMainRendererEntryUrl = null;
   });
 
   // DevTools is no longer auto-opened at startup.
@@ -848,65 +913,33 @@ const handleAppReady = async (): Promise<void> => {
   const mark = (label: string) => console.log(`[AionUi:ready] ${label} +${Math.round(performance.now() - t0)}ms`);
   mark('start');
   registerImageWorkbenchProtocol();
+  registerLocalVectorProtocol();
 
   // Grant microphone / audio capture so voice input works natively (this is the
   // whole point of the distributed client — a LAN browser over HTTP can't).
   try {
-    session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-      callback(permission === 'media');
+    const isTrustedMainFrame = (wc: Electron.WebContents | null, isMainFrame: boolean | undefined): boolean => {
+      if (!wc || isMainFrame !== true || !trustedMainRendererEntryUrl) return false;
+      if (!mainWindow || mainWindow.isDestroyed() || wc !== mainWindow.webContents || wc.isDestroyed()) return false;
+      return isTrustedMainRendererUrl(wc.getURL(), trustedMainRendererEntryUrl);
+    };
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+      callback(permission === 'media' && isTrustedMainFrame(wc, details.isMainFrame));
     });
-    session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media');
+    session.defaultSession.setPermissionCheckHandler(
+      (wc, permission, _requestingOrigin, details) =>
+        permission === 'media' && isTrustedMainFrame(wc, details.isMainFrame)
+    );
   } catch (e) {
     console.warn('[AionUi] Failed to set media permission handler:', e);
   }
 
-  // Scoped CORS bypass for the embedded image workbench (半人马 AI 图形工作台).
-  // Image-generation providers such as Google Gemini (generativelanguage.googleapis.com)
-  // do not send CORS headers, which blocks direct browser calls. We inject permissive CORS
-  // headers ONLY on the dedicated workbench partition session — which only ever loads our
-  // trusted bundled SPA — so users can call any image-model API directly with a pasted key.
-  // The app's default session is untouched, so the blast radius is limited to that sandbox.
-  try {
-    const workbenchSession = session.fromPartition('persist:centaur-image-workbench');
-    workbenchSession.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
-      const responseHeaders: Record<string, string[]> = {};
-      for (const [key, value] of Object.entries(details.responseHeaders || {})) {
-        if (/^access-control-allow-/i.test(key)) continue;
-        responseHeaders[key] = Array.isArray(value) ? value : [String(value)];
-      }
-      responseHeaders['Access-Control-Allow-Origin'] = ['*'];
-      responseHeaders['Access-Control-Allow-Methods'] = ['GET, POST, PUT, PATCH, DELETE, OPTIONS'];
-      responseHeaders['Access-Control-Allow-Headers'] = ['*'];
-      callback({
-        responseHeaders,
-        statusLine: details.method === 'OPTIONS' ? 'HTTP/1.1 204 No Content' : undefined,
-      });
-    });
-  } catch (e) {
-    console.warn('[AionUi] Failed to set image-workbench CORS shim:', e);
-  }
+  installDistributedClientCorsBridge();
 
-  // Same CORS bypass for the ComfyUI workbench partition — allows the embedded
-  // ComfyUI web UI (loaded from http://127.0.0.1:8188) to make API calls to itself.
-  try {
-    const comfyuiSession = session.fromPartition('persist:centaur-comfyui-workbench');
-    comfyuiSession.webRequest.onHeadersReceived({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
-      const responseHeaders: Record<string, string[]> = {};
-      for (const [key, value] of Object.entries(details.responseHeaders || {})) {
-        if (/^access-control-allow-/i.test(key)) continue;
-        responseHeaders[key] = Array.isArray(value) ? value : [String(value)];
-      }
-      responseHeaders['Access-Control-Allow-Origin'] = ['*'];
-      responseHeaders['Access-Control-Allow-Methods'] = ['GET, POST, PUT, PATCH, DELETE, OPTIONS'];
-      responseHeaders['Access-Control-Allow-Headers'] = ['*'];
-      callback({
-        responseHeaders,
-        statusLine: details.method === 'OPTIONS' ? 'HTTP/1.1 204 No Content' : undefined,
-      });
-    });
-  } catch (e) {
-    console.warn('[AionUi] Failed to set ComfyUI-workbench CORS shim:', e);
-  }
+  // Do not install a partition-wide CORS bypass here. The dedicated custom
+  // protocol handlers above are the only network capabilities granted to the
+  // image workbenches. A wildcard http(s) shim would let a workbench XSS read
+  // loopback/private-network services and bypass those route allowlists.
 
   if (!app.isPackaged) {
     try {
@@ -1095,6 +1128,7 @@ const handleAppReady = async (): Promise<void> => {
         staticDir: path.join(__dirname, '../renderer'),
         port: resolvedPort,
         allowRemote,
+        vectorEndpoint: await resolveVectorEndpoint(),
         dataDir: getDataPath(),
         logDir: sysDirWebUI.logDir,
         // Expose the same AIONUI_{CACHE,WORK,LOG}_DIR env the desktop IPC path

@@ -304,7 +304,9 @@ export function extractGeneratedArtifactPathsFromToolPayload(payload: unknown): 
       ...extractGeneratedArtifactPaths(payload.output),
       ...extractGeneratedArtifactPaths(payload.result_display),
       ...extractPathFields(payload.result_display),
-      ...(name && isWritingToolName(name) ? [...extractPathFields(payload.args), ...extractPathFields(payload.input)] : []),
+      ...(name && isWritingToolName(name)
+        ? [...extractPathFields(payload.args), ...extractPathFields(payload.input)]
+        : []),
     ]);
   }
 
@@ -334,7 +336,8 @@ export async function registerGeneratedArtifacts({
 
   const registered: string[] = [];
   let workspacePath = typeof workspace === 'string' && workspace.trim() ? workspace.trim() : '';
-  const sourceWorkspacePath = typeof sourceWorkspace === 'string' && sourceWorkspace.trim() ? sourceWorkspace.trim() : '';
+  const sourceWorkspacePath =
+    typeof sourceWorkspace === 'string' && sourceWorkspace.trim() ? sourceWorkspace.trim() : '';
   let conversationWorkspaceInfo: ConversationWorkspaceInfo | null = null;
 
   if (conversationId && (!workspacePath || isUnsafeTemporaryWorkspacePath(workspacePath))) {
@@ -443,6 +446,11 @@ export async function loadStandaloneGeneratedArtifactFiles(): Promise<FileEntry[
             size: metadata.size || 0,
             mtime: toEpochSeconds(metadata.lastModified || item.addedAt),
             conversation: item.conversation || '工具箱',
+            draftProvenance: 'registered-generated-artifact',
+            // The standalone registry proves this is generated content, but it
+            // is renderer storage and does not provide a backend-managed root
+            // boundary strong enough to authorize permanent deletion.
+            canDiscardDraft: false,
           } satisfies FileEntry,
         };
       } catch {
@@ -452,7 +460,7 @@ export async function loadStandaloneGeneratedArtifactFiles(): Promise<FileEntry[
     })
   );
 
-  const live = resolved.filter((entry): entry is { item: StoredGeneratedArtifact; file: FileEntry } => entry !== null);
+  const live = resolved.filter((entry) => entry !== null);
   if (live.length !== stored.length) writeStoredArtifacts(live.map((entry) => entry.item));
 
   return live.map((entry) => entry.file).toSorted((a, b) => b.mtime - a.mtime);

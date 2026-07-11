@@ -7,8 +7,9 @@
  */
 import { ipcBridge } from '@/common';
 import { getCurrentFrontendUserId } from '@/common/utils/frontendUserScope';
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { fetchWithWebuiAuth, getBaseUrl, isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
 import { isElectronDesktop } from '@/renderer/utils/platform';
+import { isUnsafeTemporaryWorkspacePath } from '@/renderer/utils/workspace/workspace';
 import { classifyHubFile } from './hubState';
 import type { ContentAsset, ContentAssetStatusFlag, FileEntry } from '../../types';
 
@@ -28,7 +29,38 @@ function now(): number {
 }
 
 function normalizePath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/+$/, '');
+}
+
+function isAbsoluteFilesystemPath(path: string): boolean {
+  return path.startsWith('/') || /^[A-Za-z]:\//.test(path);
+}
+
+function hasUnsafePathSegment(path: string): boolean {
+  return (
+    path.includes('\0') ||
+    normalizePath(path)
+      .split('/')
+      .some((segment) => segment === '..')
+  );
+}
+
+function comparablePath(path: string): string {
+  const normalized = normalizePath(path.trim());
+  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+function pathsEqual(left: string, right: string): boolean {
+  return comparablePath(left) === comparablePath(right);
+}
+
+/** Strict containment for a file below (never equal to) a managed root. */
+function isPathInsideRoot(path: string, root: string): boolean {
+  if (!path.trim() || !root.trim() || hasUnsafePathSegment(path) || hasUnsafePathSegment(root)) return false;
+  const normalizedPath = comparablePath(path);
+  const normalizedRoot = comparablePath(root);
+  if (!isAbsoluteFilesystemPath(normalizedPath) || !isAbsoluteFilesystemPath(normalizedRoot)) return false;
+  return normalizedPath !== normalizedRoot && normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
 function stableHash(value: string): string {
@@ -160,6 +192,7 @@ export function filterArchivedContentAssets(assets: readonly ContentAsset[]): Co
 }
 
 export function draftAssetFromFile(file: FileEntry, ownerUserId = getCurrentFrontendUserId()): ContentAsset {
+  if (!isDraftFileEligibleForReview(file)) throw new Error('UNTRUSTED_DRAFT_SOURCE');
   const at = file.mtime > 0 ? file.mtime * 1000 : now();
   return {
     id: draftAssetIdForPath(file.path),
@@ -179,11 +212,78 @@ export function draftAssetFromFile(file: FileEntry, ownerUserId = getCurrentFron
   };
 }
 
+/** Draft visibility requires positive provenance. A bare FileEntry obtained by
+ * scanning an arbitrary user-selected folder is never a draft candidate. */
+export function isDraftFileEligibleForReview(file: FileEntry): boolean {
+  if (file.draftProvenance === 'registered-generated-artifact') {
+    // Standalone explicit artifacts remain useful for save/publish, but their
+    // renderer registry is not strong enough to authorize deletion.
+    return file.canDiscardDraft === false && !!file.path.trim();
+  }
+  if (file.draftProvenance !== 'managed-temporary-workspace') return false;
+  if (!file.sourceConversationId || !file.workspaceRoot || file.canDiscardDraft !== true) return false;
+  if (isUnsafeTemporaryWorkspacePath(file.workspaceRoot)) return false;
+  return isPathInsideRoot(file.path, file.workspaceRoot);
+}
+
+export function canDiscardDraftFile(file: FileEntry): boolean {
+  // WebUI and distributed clients must never turn this UX action into a
+  // server-filesystem delete. They can still save/publish drafts and archive
+  // durable ContentAsset records through their owner-scoped APIs.
+  return (
+    isElectronDesktop() &&
+    !isRemoteClientBridgeMode() &&
+    file.draftProvenance === 'managed-temporary-workspace' &&
+    isDraftFileEligibleForReview(file)
+  );
+}
+
 export function draftFilesForReview(files: readonly FileEntry[], assets: readonly ContentAsset[]): FileEntry[] {
   const savedSourcePaths = new Set(
     assets.filter((asset) => hasFlag(asset, 'saved')).map((asset) => normalizePath(asset.sourceWorkspacePath))
   );
-  return files.filter((file) => !savedSourcePaths.has(normalizePath(file.path)));
+  return files.filter((file) => isDraftFileEligibleForReview(file) && !savedSourcePaths.has(normalizePath(file.path)));
+}
+
+/**
+ * Permanently remove a draft only after re-reading the owning conversation and
+ * file metadata from the backend. This prevents stale UI state (or a crafted
+ * FileEntry) from turning a custom workspace path into a deletion request.
+ */
+export async function discardDraftFile(file: FileEntry): Promise<void> {
+  if (!canDiscardDraftFile(file)) throw new Error('DRAFT_DISCARD_NOT_ALLOWED');
+
+  const conversation = await ipcBridge.conversation.get.invoke({ id: file.sourceConversationId! });
+  const extra = conversation?.extra as
+    | { workspace?: string; custom_workspace?: boolean; is_temporary_workspace?: boolean }
+    | undefined;
+  const authoritativeRoot = extra?.workspace?.trim() || '';
+  if (
+    !authoritativeRoot ||
+    extra?.is_temporary_workspace !== true ||
+    extra.custom_workspace === true ||
+    isUnsafeTemporaryWorkspacePath(authoritativeRoot) ||
+    !pathsEqual(authoritativeRoot, file.workspaceRoot!) ||
+    !isPathInsideRoot(file.path, authoritativeRoot)
+  ) {
+    throw new Error('DRAFT_WORKSPACE_CHANGED');
+  }
+
+  const metadata = await ipcBridge.fs.getFileMetadata.invoke({
+    path: file.path,
+    workspace: authoritativeRoot,
+  });
+  const verifiedPath = metadata?.path?.trim() || '';
+  if (
+    !verifiedPath ||
+    metadata.isDirectory === true ||
+    !pathsEqual(verifiedPath, file.path) ||
+    !isPathInsideRoot(verifiedPath, authoritativeRoot)
+  ) {
+    throw new Error('DRAFT_FILE_CHANGED');
+  }
+
+  await ipcBridge.fs.removeEntry.invoke({ path: verifiedPath });
 }
 
 export function createSavedContentAsset(
@@ -264,7 +364,7 @@ function contentAssetUrl(pathAndQuery: string): Promise<string> {
 
 async function postJson<T>(pathAndQuery: string, body?: unknown): Promise<T> {
   const url = await contentAssetUrl(pathAndQuery);
-  const resp = await fetch(url, {
+  const resp = await fetchWithWebuiAuth(url, {
     method: 'POST',
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -277,7 +377,7 @@ async function postJson<T>(pathAndQuery: string, body?: unknown): Promise<T> {
 
 async function getJson<T>(pathAndQuery: string): Promise<T> {
   const url = await contentAssetUrl(pathAndQuery);
-  const resp = await fetch(url);
+  const resp = await fetchWithWebuiAuth(url);
   if (!resp.ok) throw new Error(`content-assets failed: ${resp.status}`);
   const json = (await resp.json()) as { success?: boolean; data?: T };
   if (json.success === false) throw new Error('CONTENT_ASSETS_FAILED');
@@ -305,7 +405,7 @@ async function uploadAssetBytes(file: FileEntry, ownerUserId: string): Promise<C
   if (file.sourceConversationId) params.set('conversation_id', file.sourceConversationId);
   if (file.conversation) params.set('category', file.conversation);
   const url = await contentAssetUrl(`/api/content-assets/upload?${params.toString()}`);
-  const resp = await fetch(url, {
+  const resp = await fetchWithWebuiAuth(url, {
     method: 'POST',
     headers: { 'content-type': 'application/octet-stream' },
     body: new Blob([base64ToBytes(base64)]),
@@ -394,10 +494,7 @@ export async function migrateLegacyContentAssets(): Promise<void> {
   }
   const existing = await listContentAssets(ownerUserId).catch((): ContentAsset[] => []);
   const existingSources = new Set(
-    existing.flatMap((asset): string[] => [
-      normalizePath(asset.sourceWorkspacePath),
-      normalizePath(asset.storagePath),
-    ])
+    existing.flatMap((asset): string[] => [normalizePath(asset.sourceWorkspacePath), normalizePath(asset.storagePath)])
   );
   for (const asset of legacy) {
     if (

@@ -5,16 +5,23 @@ import { promises as fs } from 'fs';
 
 import { seedBundledButler } from '@/process/utils/seedBundledButler';
 
-const { importAssistantMock, importSkillMock, readRuleMock, writeRuleMock } = vi.hoisted(() => ({
-  importAssistantMock: vi.fn(),
-  importSkillMock: vi.fn(),
-  readRuleMock: vi.fn(),
-  writeRuleMock: vi.fn(),
-}));
+const { importAssistantMock, listAssistantsMock, updateAssistantMock, importSkillMock, readRuleMock, writeRuleMock } =
+  vi.hoisted(() => ({
+    importAssistantMock: vi.fn(),
+    listAssistantsMock: vi.fn(),
+    updateAssistantMock: vi.fn(),
+    importSkillMock: vi.fn(),
+    readRuleMock: vi.fn(),
+    writeRuleMock: vi.fn(),
+  }));
 
 vi.mock('@/common', () => ({
   ipcBridge: {
-    assistants: { import: { invoke: importAssistantMock } },
+    assistants: {
+      import: { invoke: importAssistantMock },
+      list: { invoke: listAssistantsMock },
+      update: { invoke: updateAssistantMock },
+    },
     fs: {
       importSkill: { invoke: importSkillMock },
       readAssistantRule: { invoke: readRuleMock },
@@ -69,6 +76,8 @@ async function makeFixture(): Promise<string> {
 describe('seedBundledButler', () => {
   beforeEach(() => {
     importAssistantMock.mockReset().mockResolvedValue({ imported: 1, skipped: 0, failed: 0, errors: [] });
+    listAssistantsMock.mockReset().mockResolvedValue([]);
+    updateAssistantMock.mockReset().mockResolvedValue(undefined);
     importSkillMock.mockReset().mockImplementation(async ({ skill_path }: { skill_path: string }) => ({
       skill_name: path.basename(skill_path),
     }));
@@ -89,12 +98,12 @@ describe('seedBundledButler', () => {
     expect(payload.assistants).toHaveLength(1);
     expect(payload.assistants[0].id).toBe(BUTLER_ID);
     expect(writeRuleMock).toHaveBeenCalledTimes(2);
-    expect(config.store.get('migration.bundledButlerSeeded')).toBe(1);
+    expect(config.store.get('migration.bundledButlerSeeded')).toBe(2);
   });
 
   it('is a no-op when already seeded at the current version', async () => {
     await makeFixture();
-    const config = makeConfig(new Map([['migration.bundledButlerSeeded', 1]]));
+    const config = makeConfig(new Map([['migration.bundledButlerSeeded', 2]]));
 
     const ok = await seedBundledButler(config as never);
 
@@ -112,7 +121,7 @@ describe('seedBundledButler', () => {
 
     expect(ok).toBe(true);
     expect(importAssistantMock).toHaveBeenCalledTimes(1);
-    expect(config.store.get('migration.bundledButlerSeeded')).toBe(1);
+    expect(config.store.get('migration.bundledButlerSeeded')).toBe(2);
   });
 
   it('defers (no flag) when a wanted skill cannot be made available', async () => {

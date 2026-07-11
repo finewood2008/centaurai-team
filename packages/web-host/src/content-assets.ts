@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { safeFileResponseHeaders, safeInlineContentType } from './safe-preview.js';
 import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { nasMkdir, nasUploadFromPath } from './nas-drive.js';
@@ -58,7 +59,19 @@ export type ContentAssetPublishInput = {
   conversationLabel?: string;
 };
 
+/**
+ * Deliberately small projection used by the cross-user NAS "AI generated"
+ * view. Private blob paths, workspace paths, conversation ids and owner ids
+ * must never be exposed by that view.
+ */
+type PublishedContentAsset = Pick<
+  ContentAsset,
+  'id' | 'title' | 'kind' | 'visibility' | 'statusFlags' | 'updatedAt' | 'nasStoragePath'
+>;
+
 const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
+const MAX_PUBLISH_BODY_BYTES = 64 * 1024;
+const MAX_NAS_SEGMENT_BYTES = 180;
 const MANIFEST_FILE = 'manifest.json';
 const UNSAFE_NAME_CHARS = /[/\\:*?"<>|]/g;
 const UNSAFE_SEGMENT_CHARS = /[/\\:*?"<>|]+/g;
@@ -112,9 +125,21 @@ function sanitizeName(name: string): string {
   return base || 'asset';
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = '';
+  let size = 0;
+  for (const character of value) {
+    const nextSize = size + Buffer.byteLength(character);
+    if (nextSize > maxBytes) break;
+    result += character;
+    size = nextSize;
+  }
+  return result;
+}
+
 function safeSegment(value: string | undefined, fallback: string): string {
   const cleaned = (value || fallback).replace(UNSAFE_SEGMENT_CHARS, '_').replace(/^\.+/, '').trim();
-  return cleaned || fallback;
+  return truncateUtf8(cleaned || fallback, MAX_NAS_SEGMENT_BYTES) || fallback;
 }
 
 function safeKind(value: unknown, name: string): ContentAssetKind {
@@ -137,15 +162,7 @@ function normalizeAsset(value: unknown): ContentAsset | null {
   if (!id || !title || !ownerUserId || !storagePath) return null;
   const statusFlags: ContentAssetStatusFlag[] = Array.isArray(raw.statusFlags)
     ? raw.statusFlags.filter((flag): flag is ContentAssetStatusFlag =>
-        [
-          'draft',
-          'saved',
-          'shared',
-          'stored_in_nas',
-          'indexed',
-          'archived',
-          'missing',
-        ].includes(String(flag))
+        ['draft', 'saved', 'shared', 'stored_in_nas', 'indexed', 'archived', 'missing'].includes(String(flag))
       )
     : ['saved'];
   return {
@@ -250,6 +267,29 @@ export async function contentAssetsList(dir: string | undefined, ownerUserId?: s
   return filtered.toSorted((a, b) => b.updatedAt - a.updatedAt);
 }
 
+async function publishedContentAssetsList(dir: string | undefined): Promise<PublishedContentAsset[]> {
+  if (!dir) return [];
+  const assets = await readManifest(dir);
+  return assets
+    .filter(
+      (asset) =>
+        (asset.visibility === 'team' || asset.visibility === 'public') &&
+        asset.statusFlags.includes('stored_in_nas') &&
+        !asset.statusFlags.includes('archived') &&
+        Boolean(asset.nasStoragePath)
+    )
+    .toSorted((a, b) => b.updatedAt - a.updatedAt)
+    .map((asset) => ({
+      id: asset.id,
+      title: asset.title,
+      kind: asset.kind,
+      visibility: asset.visibility,
+      statusFlags: asset.statusFlags,
+      updatedAt: asset.updatedAt,
+      nasStoragePath: asset.nasStoragePath,
+    }));
+}
+
 export async function contentAssetSaveFromPath(dir: string, input: ContentAssetSaveInput): Promise<ContentAsset> {
   const name = sanitizeName(input.name);
   const id = crypto.randomUUID();
@@ -299,7 +339,10 @@ export async function contentAssetPublishToNas(
     const asset = assets.find((item) => item.id === id && (!ownerUserId || item.ownerUserId === ownerUserId));
     if (!asset) return null;
     const user = safeSegment(input.userLabel || asset.ownerUserId, 'user');
-    const conversation = safeSegment(input.conversationLabel || asset.category || asset.sourceConversationId, '未命名会话');
+    const conversation = safeSegment(
+      input.conversationLabel || asset.category || asset.sourceConversationId,
+      '未命名会话'
+    );
     let parentRel = '';
     for (const segment of ['AI生成', user, conversation]) {
       const created = await nasMkdir(nasRootDir, parentRel, segment);
@@ -317,15 +360,16 @@ export async function contentAssetPublishToNas(
   });
 }
 
-async function findAsset(dir: string | undefined, id: string): Promise<ContentAsset | null> {
+async function findAsset(dir: string | undefined, id: string, ownerUserId: string): Promise<ContentAsset | null> {
   if (!dir) return null;
-  return (await readManifest(dir)).find((asset) => asset.id === id) ?? null;
+  return (await readManifest(dir)).find((asset) => asset.id === id && asset.ownerUserId === ownerUserId) ?? null;
 }
 
 async function streamAsset(
   req: IncomingMessage,
   res: ServerResponse,
   dir: string | undefined,
+  ownerUserId: string,
   disposition: 'attachment' | 'inline'
 ): Promise<void> {
   if (!dir) {
@@ -334,7 +378,7 @@ async function streamAsset(
   }
   const url = new URL(req.url || '/', 'http://localhost');
   const id = url.searchParams.get('id') || '';
-  const asset = id ? await findAsset(dir, id) : null;
+  const asset = id ? await findAsset(dir, id, ownerUserId) : null;
   if (!asset) {
     sendJson(res, 404, { success: false, error: 'NOT_FOUND' });
     return;
@@ -348,10 +392,11 @@ async function streamAsset(
     return;
   }
   res.writeHead(200, {
-    'content-type': disposition === 'inline' ? mimeOf(asset.title) : 'application/octet-stream',
+    'content-type': disposition === 'inline' ? safeInlineContentType(mimeOf(asset.title)) : 'application/octet-stream',
     'content-length': String(stat.size),
     'content-disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(asset.title)}`,
     'cache-control': 'no-store',
+    ...safeFileResponseHeaders(disposition === 'inline'),
   });
   const stream = fs.createReadStream(asset.storagePath);
   stream.on('error', () => {
@@ -364,26 +409,42 @@ async function streamAsset(
 export async function handleContentAssetsList(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  ownerUserId: string
 ): Promise<void> {
   const url = new URL(req.url || '/', 'http://localhost');
-  sendJson(res, 200, { success: true, data: await contentAssetsList(dir, url.searchParams.get('owner') || undefined) });
+  const requestedOwner = url.searchParams.get('owner')?.trim();
+  if (requestedOwner && requestedOwner !== ownerUserId) {
+    sendJson(res, 403, { success: false, error: 'FORBIDDEN' });
+    return;
+  }
+
+  // Existing NAS clients omit owner. Preserve that use case without turning
+  // omission into an "all private assets" capability: only return already
+  // published NAS records, and only the fields the NAS list actually needs.
+  const data = requestedOwner ? await contentAssetsList(dir, ownerUserId) : await publishedContentAssetsList(dir);
+  sendJson(res, 200, { success: true, data });
 }
 
 export async function handleContentAssetUpload(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  ownerUserId: string
 ): Promise<void> {
   if (!dir) {
     sendJson(res, 503, { success: false, error: 'CONTENT_ASSETS_DISABLED' });
     return;
   }
   const url = new URL(req.url || '/', 'http://localhost');
-  const ownerUserId = url.searchParams.get('owner') || '';
+  const requestedOwner = url.searchParams.get('owner')?.trim() || '';
   const rawName = url.searchParams.get('name') || '';
-  if (!ownerUserId || !rawName) {
+  if (!requestedOwner || !rawName) {
     sendJson(res, 400, { success: false, error: 'MISSING_METADATA' });
+    return;
+  }
+  if (requestedOwner !== ownerUserId) {
+    sendJson(res, 403, { success: false, error: 'FORBIDDEN' });
     return;
   }
   const name = sanitizeName(rawName);
@@ -454,14 +515,24 @@ export async function handleContentAssetUpload(
 export async function handleContentAssetArchive(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  ownerUserId: string
 ): Promise<void> {
   if (!dir) {
     sendJson(res, 404, { success: false, error: 'NOT_FOUND' });
     return;
   }
   const url = new URL(req.url || '/', 'http://localhost');
-  const asset = await contentAssetArchive(dir, url.searchParams.get('id') || '', url.searchParams.get('owner') || undefined);
+  const requestedOwner = url.searchParams.get('owner')?.trim() || '';
+  if (!requestedOwner) {
+    sendJson(res, 400, { success: false, error: 'MISSING_METADATA' });
+    return;
+  }
+  if (requestedOwner !== ownerUserId) {
+    sendJson(res, 403, { success: false, error: 'FORBIDDEN' });
+    return;
+  }
+  const asset = await contentAssetArchive(dir, url.searchParams.get('id') || '', ownerUserId);
   if (!asset) {
     sendJson(res, 404, { success: false, error: 'NOT_FOUND' });
     return;
@@ -473,31 +544,52 @@ export async function handleContentAssetPublishToNas(
   req: IncomingMessage,
   res: ServerResponse,
   dir: string | undefined,
-  nasRootDir: string | undefined
+  nasRootDir: string | undefined,
+  ownerUserId: string
 ): Promise<void> {
   if (!dir || !nasRootDir) {
     sendJson(res, 503, { success: false, error: 'NAS_DISABLED' });
     return;
   }
   const url = new URL(req.url || '/', 'http://localhost');
+  const requestedOwner = url.searchParams.get('owner')?.trim() || '';
+  if (!requestedOwner) {
+    sendJson(res, 400, { success: false, error: 'MISSING_METADATA' });
+    return;
+  }
+  if (requestedOwner !== ownerUserId) {
+    sendJson(res, 403, { success: false, error: 'FORBIDDEN' });
+    return;
+  }
   let body: Record<string, unknown> = {};
   try {
     const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk as Buffer);
+    let size = 0;
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > MAX_PUBLISH_BODY_BYTES) {
+        sendJson(res, 413, { success: false, error: 'BODY_TOO_LARGE' });
+        return;
+      }
+      chunks.push(chunk as Buffer);
+    }
     const raw = Buffer.concat(chunks).toString('utf-8');
     body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   } catch {
-    body = {};
+    sendJson(res, 400, { success: false, error: 'INVALID_JSON' });
+    return;
   }
   const asset = await contentAssetPublishToNas(
     dir,
     nasRootDir,
     url.searchParams.get('id') || '',
     {
-      userLabel: typeof body.userLabel === 'string' ? body.userLabel : undefined,
+      // The authenticated seat, not a caller-controlled label, owns the NAS
+      // folder. conversationLabel remains cosmetic and is sanitized below.
+      userLabel: ownerUserId,
       conversationLabel: typeof body.conversationLabel === 'string' ? body.conversationLabel : undefined,
     },
-    url.searchParams.get('owner') || undefined
+    ownerUserId
   );
   if (!asset) {
     sendJson(res, 404, { success: false, error: 'NOT_FOUND' });
@@ -509,15 +601,17 @@ export async function handleContentAssetPublishToNas(
 export function handleContentAssetDownload(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  ownerUserId: string
 ): Promise<void> {
-  return streamAsset(req, res, dir, 'attachment');
+  return streamAsset(req, res, dir, ownerUserId, 'attachment');
 }
 
 export function handleContentAssetPreview(
   req: IncomingMessage,
   res: ServerResponse,
-  dir: string | undefined
+  dir: string | undefined,
+  ownerUserId: string
 ): Promise<void> {
-  return streamAsset(req, res, dir, 'inline');
+  return streamAsset(req, res, dir, ownerUserId, 'inline');
 }

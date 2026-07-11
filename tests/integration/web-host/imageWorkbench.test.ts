@@ -43,7 +43,7 @@ function startStubBackend(): Promise<Stub> {
   const server = http.createServer((req, res) => {
     if (req.url === '/login' && req.method === 'POST') {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ success: true }));
+      res.end(JSON.stringify({ success: true, user: { id: 'user-1', username: 'user-1' } }));
       return;
     }
     res.writeHead(200, { 'content-type': 'application/json' });

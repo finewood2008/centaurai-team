@@ -8,7 +8,7 @@ import { Button, Modal, Spin } from '@arco-design/web-react';
 import { IconFile, IconFolder, IconUp } from '@arco-design/web-react/icon';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { fetchWithWebuiAuth, getBaseUrl } from '@/common/adapter/httpBridge';
 
 interface DirectoryItem {
   name: string;
@@ -49,7 +49,7 @@ const DirectorySelectionModal: React.FC<DirectorySelectionModalProps> = ({
       setError(null);
       try {
         const showFiles = isFileMode ? 'true' : 'false';
-        const response = await fetch(
+        const response = await fetchWithWebuiAuth(
           `${getBaseUrl()}/api/fs/browse?path=${encodeURIComponent(dirPath)}&showFiles=${showFiles}`,
           {
             method: 'GET',

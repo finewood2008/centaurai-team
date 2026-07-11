@@ -22,25 +22,18 @@ const vectorEndpoint = (): string => normalizeVectorDbEndpoint(configService.get
 const userMemoryPath = (userId: string, file: 'USER.md' | 'MEMORY.md'): string =>
   `users/${encodeURIComponent(userId).replace(/%/g, '_')}/${file}`;
 
-const encodeMemoryPath = (relPath: string): string => relPath.split('/').map(encodeURIComponent).join('/');
-
 async function readMemoryFile(relPath: string): Promise<string> {
-  const response = await fetch(`${vectorEndpoint()}/api/memory/files/${encodeMemoryPath(relPath)}`, {
-    cache: 'no-store',
-  });
-  if (response.status === 404) return '';
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const data = (await response.json()) as { content?: string };
+  const data = await ipcBridge.webui.memoryRead.invoke({ endpoint: vectorEndpoint(), relPath });
   return data.content ?? '';
 }
 
 async function writeMemoryFile(relPath: string, content: string): Promise<void> {
-  const response = await fetch(`${vectorEndpoint()}/api/memory/files/${encodeMemoryPath(relPath)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'centaur-vdb' },
-    body: JSON.stringify({ content, source_agent: 'centaurai-admin-users' }),
+  await ipcBridge.webui.memoryWrite.invoke({
+    endpoint: vectorEndpoint(),
+    relPath,
+    content,
+    sourceAgent: 'centaurai-admin-users',
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
 
 const formatDate = (ts: number | null) => {

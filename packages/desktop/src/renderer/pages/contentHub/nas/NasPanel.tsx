@@ -36,7 +36,7 @@ import BatchActionBar from '../components/manage/BatchActionBar';
 import HubFileList from '../components/manage/HubFileList';
 import HubRecordCards from '../components/manage/HubRecordCards';
 import HubToolbar from '../components/manage/HubToolbar';
-import HubUrlPreviewModal, { type HubUrlPreview } from '../components/manage/HubUrlPreviewModal';
+import HubUrlPreviewModal, { isActiveHubPreview, type HubUrlPreview } from '../components/manage/HubUrlPreviewModal';
 import { listContentAssets } from '../components/manage/contentAssets';
 import {
   classifyHubFile,
@@ -65,7 +65,19 @@ function formatDate(ms: number): string {
 const NasPanel: React.FC<NasPanelProps> = ({ controls }) => {
   const { t } = useTranslation();
   const appNavigate = useNavigate();
-  const { path, entries, loading, disabled, unavailable, navigate: navigateNas, refresh, mkdir, upload, remove, rename } = useNas();
+  const {
+    path,
+    entries,
+    loading,
+    disabled,
+    unavailable,
+    navigate: navigateNas,
+    refresh,
+    mkdir,
+    upload,
+    remove,
+    rename,
+  } = useNas();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
@@ -239,16 +251,21 @@ const NasPanel: React.FC<NasPanelProps> = ({ controls }) => {
     if (entry.isDir) navigateNas(entry.relPath);
     else {
       try {
-        const local = await getNasLocalFileInfo(entry.relPath);
-        if (local) {
-          await previewLocalFile({
-            name: local.name,
-            path: local.path,
-            size: local.size,
-            mtime: Math.floor(entry.modifiedAt / 1000),
-            conversation: t('contentHub.tabs.nas'),
-          } satisfies FileEntry);
-          return;
+        // Never route uploaded active content into the desktop HTML preview,
+        // whose interactive mode intentionally permits scripts. The URL modal
+        // fetches HTML/SVG/XML as bounded inert text instead.
+        if (!isActiveHubPreview({ title: entry.name, url: '' })) {
+          const local = await getNasLocalFileInfo(entry.relPath);
+          if (local) {
+            await previewLocalFile({
+              name: local.name,
+              path: local.path,
+              size: local.size,
+              mtime: Math.floor(entry.modifiedAt / 1000),
+              conversation: t('contentHub.tabs.nas'),
+            } satisfies FileEntry);
+            return;
+          }
         }
         setUrlPreview({ title: entry.name, url: await nasPreviewUrl(entry.relPath) });
       } catch {

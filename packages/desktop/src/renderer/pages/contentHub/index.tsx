@@ -11,7 +11,6 @@ import { Button, Message, Modal } from '@arco-design/web-react';
 import { Copy, Delete, Download, FolderOpen, InboxOut, Save, Share } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
-import { ipcBridge } from '@/common';
 import MineSubTabs from './components/MineSubTabs';
 import FileGrid from './components/view/FileGrid';
 import ConversationGroup from './components/ConversationGroup';
@@ -37,7 +36,13 @@ import { useHubPreview } from './useHubPreview';
 import { useHubFileActions } from './useHubFileActions';
 import { useHubViewPrefs } from './useHubViewPrefs';
 import { isAdminFrontendUser } from '@/common/utils/frontendUserScope';
-import { markAssetArchived, saveAssetToNas, saveDraftToContent } from './components/manage/contentAssets';
+import {
+  canDiscardDraftFile,
+  discardDraftFile,
+  markAssetArchived,
+  saveAssetToNas,
+  saveDraftToContent,
+} from './components/manage/contentAssets';
 import type {
   ContentAsset,
   FileEntry,
@@ -217,11 +222,11 @@ const ContentHubPage: React.FC = () => {
     }
   };
 
-  const removeDraftFile = async (file: FileEntry) => {
-    await ipcBridge.fs.removeEntry.invoke({ path: file.path });
-  };
-
   const discardDraft = (file: FileEntry) => {
+    if (!canDiscardDraftFile(file)) {
+      Message.error(t('contentHub.draft.deleteFailed'));
+      return;
+    }
     Modal.confirm({
       title: t('contentHub.draft.deleteTitle'),
       content: t('contentHub.draft.deleteConfirm', { name: file.name }),
@@ -229,7 +234,7 @@ const ContentHubPage: React.FC = () => {
       cancelText: t('contentHub.nas.cancel'),
       onOk: async () => {
         try {
-          await removeDraftFile(file);
+          await discardDraftFile(file);
           Message.success(t('contentHub.draft.deleted'));
           await hub.reload();
         } catch {
@@ -242,13 +247,17 @@ const ContentHubPage: React.FC = () => {
   const discardDraftFiles = (files: readonly FileEntry[]) => {
     if (files.length === 0) return;
     const drafts = [...files];
+    if (drafts.some((file) => !canDiscardDraftFile(file))) {
+      Message.error(t('contentHub.draft.deleteFailed'));
+      return;
+    }
     Modal.confirm({
       title: t('contentHub.draft.batchDeleteTitle'),
       content: t('contentHub.draft.batchDeleteConfirm', { count: drafts.length }),
       okText: t('contentHub.actions.discardDraft'),
       cancelText: t('contentHub.nas.cancel'),
       onOk: async () => {
-        const failed = await countFailures(drafts, removeDraftFile);
+        const failed = await countFailures(drafts, discardDraftFile);
         if (failed > 0) {
           Message.error(t('contentHub.draft.deleteFailed'));
         } else {
@@ -312,6 +321,7 @@ const ContentHubPage: React.FC = () => {
             key: 'discard',
             label: t('contentHub.actions.discardDraft'),
             icon: <Delete theme='outline' size={14} />,
+            disabled: selectedMineFiles.some((file) => !canDiscardDraftFile(file)),
             onClick: () => discardDraftFiles(selectedMineFiles),
           },
         ]
@@ -435,13 +445,15 @@ const ContentHubPage: React.FC = () => {
         title={t('contentHub.actions.publishToNas')}
         onClick={() => void publishDraftFiles([target.file])}
       />
-      <Button
-        type='text'
-        size='mini'
-        icon={<Delete theme='outline' size={14} />}
-        title={t('contentHub.actions.discardDraft')}
-        onClick={() => discardDraft(target.file)}
-      />
+      {canDiscardDraftFile(target.file) && (
+        <Button
+          type='text'
+          size='mini'
+          icon={<Delete theme='outline' size={14} />}
+          title={t('contentHub.actions.discardDraft')}
+          onClick={() => discardDraft(target.file)}
+        />
+      )}
       <Button
         type='text'
         size='mini'
@@ -686,7 +698,7 @@ const ContentHubPage: React.FC = () => {
           else if (asset) void publishAsset(asset);
         }}
         onArchive={(asset) => void archiveAsset(asset)}
-        onDiscardDraft={discardDraft}
+        onDiscardDraft={menu?.file && canDiscardDraftFile(menu.file) ? discardDraft : undefined}
         onCopyPath={(f) => void actions.copyPath(f)}
         onDownload={(f) => void actions.download(f)}
         onReveal={(f) => void actions.reveal(f)}
