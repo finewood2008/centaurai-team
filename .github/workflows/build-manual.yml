@@ -63,18 +63,18 @@ jobs:
           PLATFORM="${{ inputs.platform }}"
 
           # Edition variant: pick the edition builder-config, tag artifacts, and bake
-          # AIONUI_EDITION into the command (via cross-env, portable across runners).
+          # CENTAURAI_EDITION into the command (via cross-env, portable across runners).
           CFG=""
           SUF=""
           ENVP=""
           if [ "${{ inputs.edition }}" = "decision" ]; then
             CFG=" --builder-config packages/desktop/electron-builder.decision.yml"
             SUF="-decision"
-            ENVP="bunx cross-env AIONUI_EDITION=decision "
+            ENVP="bunx cross-env CENTAURAI_EDITION=decision "
           elif [ "${{ inputs.edition }}" = "team" ]; then
             CFG=" --builder-config packages/desktop/electron-builder.team.yml"
             SUF="-team"
-            ENVP="bunx cross-env AIONUI_EDITION=team "
+            ENVP="bunx cross-env CENTAURAI_EDITION=team "
           fi
 
           # Client variant overrides edition: lightweight no-backend client build.

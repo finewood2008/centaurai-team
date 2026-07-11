@@ -57,12 +57,28 @@ async function startBackend(initial: Conversation[]): Promise<BackendFixture> {
         success: true,
         data: [
           {
+            id: 'safe-aionrs',
+            name: 'CentaurAI Core',
+            agent_type: 'aionrs',
+            enabled: true,
+            installed: true,
+            status: 'online',
+          },
+          {
             id: 'trusted-codex',
             name: 'Codex CLI',
             backend: 'codex',
             agent_type: 'acp',
             enabled: true,
             available: true,
+            installed: true,
+            status: 'online',
+            available_modes: {
+              available_modes: [
+                { id: 'read-only', name: 'Read-only' },
+                { id: 'agent-full-access', name: 'Agent (full access)' },
+              ],
+            },
             handshake: {
               available_models: { available_models: [{ id: 'gpt-safe', label: 'GPT Safe' }] },
             },
@@ -89,7 +105,24 @@ async function startBackend(initial: Conversation[]): Promise<BackendFixture> {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/assistants') {
-      send(res, 200, { success: true, data: [{ id: 'safe-assistant' }, { id: 'centaurai-butler' }] });
+      send(res, 200, {
+        success: true,
+        data: [
+          {
+            id: 'safe-aionrs-assistant',
+            enabled: true,
+            agent_id: 'safe-aionrs',
+            agent: { type: 'aionrs', source: 'internal' },
+          },
+          {
+            id: 'safe-assistant',
+            enabled: true,
+            agent_id: 'trusted-codex',
+            agent: { type: 'acp', source: 'builtin' },
+          },
+          { id: 'centaurai-butler', enabled: true, agent_id: 'trusted-codex', agent: { type: 'acp' } },
+        ],
+      });
       return;
     }
     if (req.method === 'GET' && url.pathname === '/api/conversations') {
@@ -267,6 +300,7 @@ describe('conversation tenant boundary', () => {
           workspace: '/home/user',
           custom_workspace: true,
           default_files: ['/etc/passwd'],
+          preset_assistant_id: 'safe-aionrs-assistant',
         },
       }),
     });
@@ -280,6 +314,7 @@ describe('conversation tenant boundary', () => {
       custom_workspace: false,
       is_temporary_workspace: true,
       default_files: [],
+      preset_assistant_id: 'safe-aionrs-assistant',
     });
     expect(forwarded.extra.cli_path).toBeUndefined();
     const sidecar = JSON.parse(await fs.readFile(path.join(dataDir, 'webui-conversation-owners.json'), 'utf-8')) as {
@@ -622,7 +657,7 @@ describe('conversation tenant boundary', () => {
     }
   });
 
-  it('rejects untrusted conversation runtimes and privileged create fields', async () => {
+  it('allows catalog-backed ACP runtimes while rejecting untrusted runtime identities', async () => {
     backend = await startBackend([]);
     const boundary = await createConversationTenantBoundary({ backendPort: backend.port, dataDir });
     const server = await startBoundaryServer(boundary);
@@ -648,9 +683,71 @@ describe('conversation tenant boundary', () => {
       expect(response.status, JSON.stringify(payload)).toBe(400);
     }
     expect(backend.conversations.size).toBe(0);
+
+    const trusted = await fetch(`${server.url}/api/conversations`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        id: 'trusted-acp',
+        type: 'acp',
+        model: { api_key: 'ATTACKER_KEY' },
+        extra: {
+          agent_id: 'trusted-codex',
+          backend: 'codex',
+          cli_path: '/tmp/evil',
+          workspace: '/etc',
+          session_mode: 'agent-full-access',
+          selected_mcp_server_ids: ['host-admin'],
+        },
+      }),
+    });
+    expect(trusted.status).toBe(201);
+    expect(backend.lastBody).toMatchObject({
+      id: 'trusted-acp',
+      type: 'acp',
+      extra: {
+        [CONVERSATION_OWNER_EXTRA_KEY]: 'alice',
+        agent_id: 'trusted-codex',
+        backend: 'codex',
+        session_mode: 'agent-full-access',
+        workspace: '',
+      },
+    });
+    expect(backend.lastBody).not.toHaveProperty('model');
+    expect((backend.lastBody as { extra: Record<string, unknown> }).extra).not.toHaveProperty('cli_path');
+    expect((backend.lastBody as { extra: Record<string, unknown> }).extra).not.toHaveProperty(
+      'selected_mcp_server_ids'
+    );
+
+    const preset = await fetch(`${server.url}/api/conversations`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        id: 'trusted-preset',
+        type: 'acp',
+        extra: {
+          preset_assistant_id: 'safe-assistant',
+          preset_context: 'attacker prompt',
+          cli_path: '/tmp/evil',
+        },
+      }),
+    });
+    expect(preset.status).toBe(201);
+    expect(backend.lastBody).toMatchObject({
+      id: 'trusted-preset',
+      type: 'acp',
+      extra: {
+        [CONVERSATION_OWNER_EXTRA_KEY]: 'alice',
+        agent_id: 'trusted-codex',
+        backend: 'codex',
+        preset_assistant_id: 'safe-assistant',
+      },
+    });
+    expect((backend.lastBody as { extra: Record<string, unknown> }).extra).not.toHaveProperty('preset_context');
+    expect(backend.conversations.size).toBe(2);
   });
 
-  it('hides and blocks legacy host-executing runtimes from ordinary LAN seats', async () => {
+  it('allows owned catalog-backed ACP runtimes and still hides them across LAN seats', async () => {
     backend = await startBackend([
       {
         id: 'legacy-full-access',
@@ -659,7 +756,7 @@ describe('conversation tenant boundary', () => {
           [CONVERSATION_OWNER_EXTRA_KEY]: 'alice',
           backend: 'codex',
           agent_id: 'trusted-codex',
-          session_mode: 'full-access',
+          session_mode: 'agent-full-access',
         },
       },
     ]);
@@ -668,14 +765,30 @@ describe('conversation tenant boundary', () => {
     closeBoundary = server.close;
     const headers = { 'content-type': 'application/json', 'x-test-user': 'alice' };
 
-    const blockedMessage = await fetch(`${server.url}/api/conversations/legacy-full-access/messages`, {
+    const allowedMessage = await fetch(`${server.url}/api/conversations/legacy-full-access/messages`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ content: 'read host secrets' }),
     });
-    expect(blockedMessage.status).toBe(404);
-    const hiddenDetail = await fetch(`${server.url}/api/conversations/legacy-full-access`, {
+    expect(allowedMessage.status).toBe(200);
+    const invalidMode = await fetch(`${server.url}/api/conversations/legacy-full-access/config-options/mode`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ value: '../../host-admin' }),
+    });
+    expect(invalidMode.status).toBe(400);
+    const allowedMode = await fetch(`${server.url}/api/conversations/legacy-full-access/config-options/mode`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ value: 'agent-full-access' }),
+    });
+    expect(allowedMode.status).toBe(200);
+    const ownerDetail = await fetch(`${server.url}/api/conversations/legacy-full-access`, {
       headers: { 'x-test-user': 'alice' },
+    });
+    expect(ownerDetail.status).toBe(200);
+    const hiddenDetail = await fetch(`${server.url}/api/conversations/legacy-full-access`, {
+      headers: { 'x-test-user': 'bob' },
     });
     expect(hiddenDetail.status).toBe(404);
     const adminDetail = await fetch(`${server.url}/api/conversations/legacy-full-access`, {

@@ -2,7 +2,7 @@
 # Differs from electron-builder.yml ONLY by branding (appId / productName /
 # executableName / linux launcher name). Same full payload as the base (keeps the
 # bundled aioncore backend — the decision box is a standalone single-user machine).
-# Feature differences vs Team are compiled in via AIONUI_EDITION=decision (Vite
+# Feature differences vs Team are compiled in via CENTAURAI_EDITION=decision (Vite
 # `define` → common/config/constants.ts), NOT via this packaging config.
 # Keep in sync with electron-builder.yml for any shared files/target changes.
 appId: com.centaurai.decision
@@ -13,6 +13,7 @@ copyright: Copyright © 2026 半人马人工智能（深圳）有限公司
 protocols:
   - name: CentaurAI Protocol
     schemes:
+      - centaurai
       - aionui
 
 asar:
@@ -204,7 +205,7 @@ linux:
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;
-      MimeType: x-scheme-handler/aionui;
+      MimeType: x-scheme-handler/centaurai;x-scheme-handler/aionui;
 
 npmRebuild: false
 buildDependenciesFromSource: false

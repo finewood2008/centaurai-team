@@ -1017,6 +1017,18 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
     client.on('end', onEarlyEnd);
   });
 
+  // server.close() stops accepting new connections, but its callback does not
+  // run until every existing TCP client has closed. Browsers keep WebUI HTTP
+  // and WebSocket connections alive for minutes, so waiting for graceful
+  // client shutdown used to leave Settings -> WebUI permanently stuck on
+  // "Starting..." when the service was toggled off and back on. Track the
+  // public sockets so stop() can actively drain them before the next bind.
+  const frontendSockets = new Set<Socket>();
+  tcp_server.on('connection', (socket: Socket) => {
+    frontendSockets.add(socket);
+    socket.once('close', () => frontendSockets.delete(socket));
+  });
+
   await new Promise<void>((resolve, reject) => {
     tcp_server.once('error', reject);
     tcp_server.listen(port, host, () => {
@@ -1038,9 +1050,28 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
     lanIP,
     stop: () =>
       new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(forceTimer);
+          resolve();
+        };
+        const forceTimer = setTimeout(() => {
+          // Last-resort guard for unusual half-open sockets. Both servers have
+          // already stopped accepting connections, so resolving here is safe
+          // and prevents lifecycle operations from hanging forever.
+          http_server.closeAllConnections?.();
+          for (const socket of frontendSockets) socket.destroy();
+          finish();
+        }, 2_000);
+        forceTimer.unref();
+
         tcp_server.close(() => {
-          http_server.close(() => resolve());
+          http_server.close(finish);
+          http_server.closeAllConnections?.();
         });
+        for (const socket of frontendSockets) socket.destroy();
       }),
     inspectEntry: entryGuard.inspect,
     repairEntry: entryGuard.repair,

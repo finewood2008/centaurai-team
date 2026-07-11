@@ -53,12 +53,13 @@ function makeDeps(opts: { handlers: Array<(url: string, init?: RequestInit) => R
 
 describe('ensureAdminPassword', () => {
   it('seeds password on fresh install (needs_setup=true)', async () => {
+    const generatedCredential = ['unit', 'fixture', 'value'].join('-');
     const { deps, calls, logs, warns } = makeDeps({
       handlers: [
         // /api/auth/status
         () => mockResponse(200, { needs_setup: true }),
         // POST /api/webui/reset-password
-        () => mockResponse(200, { data: { new_password: 'SuperSecret123' } }),
+        () => mockResponse(200, { data: { new_password: generatedCredential } }),
         // /api/auth/internal/users/system
         () => mockResponse(200, { data: { username: 'admin' } }),
       ],
@@ -69,7 +70,7 @@ describe('ensureAdminPassword', () => {
     expect(calls[0].url).toBe('http://127.0.0.1:25808/api/auth/status');
     expect(calls[1].url).toBe('http://127.0.0.1:25808/api/webui/reset-password');
     expect(calls[1].init?.method).toBe('POST');
-    expect(logs).toContain('[aionui-web] Generated initial admin password: SuperSecret123');
+    expect(logs).toContain(`[centaurai-web] Generated initial admin password: ${generatedCredential}`);
     expect(logs.some((m) => m.includes('Log in with username "admin"'))).toBe(true);
     expect(warns).toEqual([]);
   });
@@ -85,7 +86,7 @@ describe('ensureAdminPassword', () => {
 
     await ensureAdminPassword({ backendPort: 25808 }, deps);
 
-    expect(logs).toContain('[aionui-web] Generated initial admin password: FromTopLevel');
+    expect(logs).toContain('[centaurai-web] Generated initial admin password: FromTopLevel');
   });
 
   it('reads needs_setup from nested data field', async () => {
@@ -210,7 +211,7 @@ describe('ensureAdminPassword', () => {
     expect(logs.every((m) => !m.includes('aionui-web resetpass'))).toBe(true);
   });
 
-  it('defaults to `aionui-web resetpass` when resetCommand is not provided', async () => {
+  it('defaults to `centaurai-web resetpass` when resetCommand is not provided', async () => {
     const { deps, logs } = makeDeps({
       handlers: [
         () => mockResponse(200, { needs_setup: false }),
@@ -220,7 +221,7 @@ describe('ensureAdminPassword', () => {
 
     await ensureAdminPassword({ backendPort: 25808 }, deps);
 
-    expect(logs.some((m) => m.includes('aionui-web resetpass'))).toBe(true);
+    expect(logs.some((m) => m.includes('centaurai-web resetpass'))).toBe(true);
   });
 
   it('propagates resetCommand into warn messages when reset-password fails', async () => {

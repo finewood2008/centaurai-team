@@ -49,8 +49,10 @@ import {
 } from './process/utils/windowBounds';
 import {
   clearPendingDeepLinkUrl,
+  findDeepLinkUrl,
   getPendingDeepLinkUrl,
   handleDeepLinkUrl,
+  LEGACY_PROTOCOL_SCHEME,
   PROTOCOL_SCHEME,
 } from './process/utils/deepLink';
 import {
@@ -97,7 +99,7 @@ import electronSquirrelStartup from 'electron-squirrel-startup';
 const isE2ETestMode = process.env.AIONUI_E2E_TEST === '1';
 const skipSingleInstanceLock =
   isE2ETestMode || process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1';
-const deepLinkFromArgv = process.argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
+const deepLinkFromArgv = findDeepLinkUrl(process.argv);
 const gotTheLock = skipSingleInstanceLock ? true : app.requestSingleInstanceLock({ deepLinkUrl: deepLinkFromArgv });
 if (!gotTheLock) {
   console.warn('[CentaurAI] Another instance is already running; current process will exit.');
@@ -105,9 +107,7 @@ if (!gotTheLock) {
 } else {
   app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
     // Prefer additionalData (reliable on all platforms), fallback to argv scan
-    const deepLinkUrl =
-      (additionalData as { deepLinkUrl?: string })?.deepLinkUrl ||
-      argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`));
+    const deepLinkUrl = (additionalData as { deepLinkUrl?: string })?.deepLinkUrl || findDeepLinkUrl(argv);
     if (deepLinkUrl) {
       handleDeepLinkUrl(deepLinkUrl);
     }
@@ -1261,15 +1261,17 @@ const handleAppReady = async (): Promise<void> => {
 };
 
 // ============ Protocol Registration ============
-// Register aionui:// as the default protocol client
-if (process.defaultApp) {
-  // Dev mode: need to pass execPath explicitly
-  app.setAsDefaultProtocolClient(PROTOCOL_SCHEME, process.execPath, [path.resolve(process.argv[1])]);
-} else {
-  app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
+// Register centaurai:// and keep aionui:// as a compatibility alias.
+for (const scheme of [PROTOCOL_SCHEME, LEGACY_PROTOCOL_SCHEME]) {
+  if (process.defaultApp) {
+    // Dev mode: need to pass execPath explicitly
+    app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+  } else {
+    app.setAsDefaultProtocolClient(scheme);
+  }
 }
 
-// macOS: handle aionui:// URLs via the open-url event
+// macOS: handle CentaurAI URLs via the open-url event
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleDeepLinkUrl(url);

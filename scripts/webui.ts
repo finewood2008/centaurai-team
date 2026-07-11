@@ -93,17 +93,17 @@ const getFlag = (name: string): string | undefined => {
 };
 
 /**
- * Resolve the directory where aioncore persists its SQLite DB.
+ * Resolve the directory where CentaurAI Core persists its SQLite DB.
  *
  * `bun run webui` runs **independently of the Electron desktop app** — it must
- * work on hosts that never installed AionUi.app, and its default work dir must
+ * work on hosts that never installed CentaurAI.app, and its default work dir must
  * NOT collide with Electron's.
  *
  *   --data-dir <path>       CLI override (highest priority)
- *   $AIONUI_DATA_DIR        env override (same effect)
- *   otherwise               ~/.aionui-web         (production)
- *                           ~/.aionui-web-dev     (dev, default)
- *                           ~/.aionui-web-dev-2   (dev + AIONUI_MULTI_INSTANCE=1)
+ *   $CENTAURAI_DATA_DIR     env override (legacy: $AIONUI_DATA_DIR)
+ *   otherwise               ~/.centaurai-web         (production)
+ *                           ~/.centaurai-web-dev     (dev, default)
+ *                           ~/.centaurai-web-dev-2   (dev + multi-instance)
  *
  * Why a dedicated `-web` name, not the same `~/.aionui[-dev]` that Electron
  * uses: on macOS, Electron's getDataPath() (packages/desktop/src/process/utils/
@@ -115,7 +115,7 @@ const getFlag = (name: string): string | undefined => {
  * installed, its `ensureCliSafeSymlink` refuses to overwrite a real dir and
  * falls back to returning the space-containing path — and then every ACP
  * agent inside the desktop app starts failing on CLI commands. Using
- * `.aionui-web` keeps standalone webui's data dir off of the path Electron's
+ * `.centaurai-web` keeps standalone webui's data dir off of the path Electron's
  * symlink needs.
  *
  * If the user wants the two to share data they opt-in explicitly via
@@ -136,7 +136,9 @@ function resolveBackendDataDir(): string {
       : process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1'
         ? '-dev-2'
         : '-dev';
-  const dir = path.join(os.homedir(), `.aionui-web${suffix}`);
+  const canonicalDir = path.join(os.homedir(), `.centaurai-web${suffix}`);
+  const legacyDir = path.join(os.homedir(), `.aionui-web${suffix}`);
+  const dir = !fs.existsSync(canonicalDir) && fs.existsSync(legacyDir) ? legacyDir : canonicalDir;
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -168,7 +170,9 @@ function resolveStaticDir(): string {
   if (override) return override;
   const candidate = path.join(repoRoot, 'out', 'renderer');
   if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate;
-  throw new Error(`Renderer assets not found at ${candidate}. Run "bun run package" first, or set AIONUI_STATIC_DIR.`);
+  throw new Error(
+    `Renderer assets not found at ${candidate}. Run "bun run package" first, or set CENTAURAI_STATIC_DIR.`
+  );
 }
 
 /**
