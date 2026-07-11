@@ -32,6 +32,7 @@ import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
 import { useSettingsViewMode } from '../../settingsViewContext';
 import DevSettings from './DevSettings';
+import AgentCapacityPanel from './AgentCapacityPanel';
 import DirInputItem from './DirInputItem';
 import PreferenceRow from './PreferenceRow';
 
@@ -719,6 +720,8 @@ const SystemModalContent: React.FC = () => {
               )}
             </Form>
           </div>
+
+          <AgentCapacityPanel />
 
           {/* Developer settings: DevTools + CDP (only visible in dev mode) */}
           <DevSettings />
