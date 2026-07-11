@@ -32,7 +32,7 @@ import type {
   UpdateAssistantRequest,
 } from '../types/agent/assistantTypes';
 import type { PreviewHistoryTarget, PreviewSnapshotInfo } from '../types/office/preview';
-import type { AcpModelInfo } from '../types/platform/acpTypes';
+import type { AcpModelInfo, AcpSessionConfigOption } from '../types/platform/acpTypes';
 import type {
   CreateProviderRequest,
   FetchModelsAnonymousRequest,
@@ -112,6 +112,86 @@ import {
   withCurrentConversationOwner,
   writeLocalChannelBindings,
 } from '../utils/frontendUserScope';
+
+type EnsureConversationRuntimeResponse = {
+  recovered: boolean;
+  config_options: AcpSessionConfigOption[];
+  runtime: {
+    has_task?: boolean;
+  };
+};
+
+type SetConversationConfigOptionResponse = {
+  confirmation: 'observed' | 'command_ack';
+  config_options?: AcpSessionConfigOption[] | null;
+};
+
+type AgentRunSummary = {
+  conversation_id: string;
+  turn_id: string;
+  status: 'queued' | 'dispatching' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+};
+
+type ProviderLike<Data, Params> = {
+  provider: (handler: (params: Params) => Promise<Data>) => void;
+  invoke: (params: Params) => Promise<Data>;
+};
+
+function withParamResponseMap<Raw, Mapped, Params>(
+  inner: ProviderLike<Raw, Params>,
+  map: (data: Raw, params: Params) => Mapped
+): ProviderLike<Mapped, Params> {
+  return {
+    provider: () => {},
+    invoke: async (params) => map(await inner.invoke(params), params),
+  };
+}
+
+function findConfigOption(
+  configOptions: AcpSessionConfigOption[] | null | undefined,
+  optionId: 'mode' | 'model'
+): AcpSessionConfigOption | undefined {
+  return configOptions?.find((option) => option.id === optionId || option.category === optionId);
+}
+
+function toLegacyMode(
+  configOptions: AcpSessionConfigOption[] | null | undefined,
+  fallbackMode = 'default',
+  initialized = true
+): { mode: string; initialized: boolean } {
+  const option = findConfigOption(configOptions, 'mode');
+  return {
+    mode: option?.current_value || option?.selected_value || fallbackMode,
+    initialized,
+  };
+}
+
+function toLegacyModelInfo(
+  configOptions: AcpSessionConfigOption[] | null | undefined,
+  fallbackModelId?: string
+): { model_info: AcpModelInfo | null } {
+  const option = findConfigOption(configOptions, 'model');
+  const currentModelId = option?.current_value || option?.selected_value || fallbackModelId || null;
+  if (!option && !currentModelId) {
+    return { model_info: null };
+  }
+
+  const availableModels =
+    option?.options?.map((model) => ({
+      id: model.value,
+      label: model.name || model.label || model.value,
+    })) ?? [];
+  const currentModelLabel =
+    (currentModelId && availableModels.find((model) => model.id === currentModelId)?.label) || currentModelId;
+
+  return {
+    model_info: {
+      current_model_id: currentModelId,
+      current_model_label: currentModelLabel,
+      available_models: availableModels,
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Shell — routed to POST /api/shell/*
@@ -218,8 +298,40 @@ export const conversation = {
     }
   ),
   reset: httpPost<void, IResetConversationParams>((p) => `/api/conversations/${p.id}/reset`),
-  warmup: httpPost<void, { conversation_id: string }>((p) => `/api/conversations/${p.conversation_id}/warmup`),
-  stop: httpPost<void, { conversation_id: string }>((p) => `/api/conversations/${p.conversation_id}/cancel`),
+  warmup: withResponseMap(
+    httpPost<EnsureConversationRuntimeResponse, { conversation_id: string }>(
+      (p) => `/api/conversations/${p.conversation_id}/runtime/ensure`,
+      () => undefined
+    ),
+    (): void => undefined
+  ),
+  // Core requires the exact turn_id so a stale UI cannot cancel a newer turn.
+  // Legacy callers only carry conversation_id, so recover the current user's
+  // active run first (the same endpoint used to restore queue state on reload).
+  stop: {
+    provider: () => {},
+    invoke: async ({ conversation_id }: { conversation_id: string }): Promise<void> => {
+      const runs = await httpRequest<AgentRunSummary[]>('GET', '/api/agent-runs');
+      const priority: Record<AgentRunSummary['status'], number> = {
+        running: 0,
+        dispatching: 1,
+        queued: 2,
+        completed: 3,
+        failed: 3,
+        cancelled: 3,
+        timed_out: 3,
+      };
+      const run = runs
+        .filter(
+          (item) =>
+            item.conversation_id === conversation_id &&
+            (item.status === 'running' || item.status === 'dispatching' || item.status === 'queued')
+        )
+        .sort((left, right) => priority[left.status] - priority[right.status])[0];
+      if (!run) return;
+      await httpRequest<void>('POST', `/api/conversations/${conversation_id}/cancel`, { turn_id: run.turn_id });
+    },
+  },
   activeCount: httpGet<{ count: number }>('/api/conversations/active-count'),
   sendMessage: httpPost<ISendMessageResult, ISendMessageParams>(
     (p) => `/api/conversations/${p.conversation_id}/messages`,
@@ -513,9 +625,11 @@ export const autoUpdate = {
 // ---------------------------------------------------------------------------
 
 export const starOffice = {
-  detectUrl: httpPost<{ url: string | null }, { preferredUrl?: string; force?: boolean; timeoutMs?: number }>(
-    '/api/star-office/detect',
-    (p) => ({ preferred_url: p.preferredUrl, force: p.force, timeout_ms: p.timeoutMs })
+  // Core deliberately does not probe arbitrary local URLs. Keep the renderer
+  // contract safe and let users enter the monitor URL explicitly instead.
+  detectUrl: stubProvider<{ url: string | null }, { preferredUrl?: string; force?: boolean; timeoutMs?: number }>(
+    'starOffice.detectUrl',
+    { url: null }
   ),
 };
 
@@ -553,6 +667,18 @@ export const imageGen = {
 // ---------------------------------------------------------------------------
 // File System — routed to /api/fs/* and /api/skills/*
 // ---------------------------------------------------------------------------
+
+type AvailableSkill = {
+  name: string;
+  description: string;
+  location: string;
+  relative_location?: string;
+  is_auto_inject: boolean;
+  is_custom: boolean;
+  source: 'builtin' | 'custom' | 'cron' | 'extension';
+};
+
+const availableSkillsProvider = httpGet<AvailableSkill[], void>('/api/skills');
 
 export const fs = {
   getFilesByDir: withResponseMap(
@@ -608,19 +734,15 @@ export const fs = {
   deleteAssistantSkill: httpDelete<boolean, { assistant_id: string }>(
     (p) => `/api/skills/assistant-skill/${p.assistant_id}`
   ),
-  listAvailableSkills: httpGet<
-    Array<{
-      name: string;
-      description: string;
-      location: string;
-      relative_location?: string;
-      is_custom: boolean;
-      source: 'builtin' | 'custom' | 'extension';
-    }>,
-    void
-  >('/api/skills'),
-  listBuiltinAutoSkills: httpGet<Array<{ name: string; description: string; location: string }>, void>(
-    '/api/skills/builtin-auto'
+  listAvailableSkills: availableSkillsProvider,
+  listBuiltinAutoSkills: withResponseMap(httpGet<AvailableSkill[], void>('/api/skills'), (skills) =>
+    skills
+      .filter((skill) => skill.is_auto_inject)
+      .map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        location: skill.relative_location || skill.location,
+      }))
   ),
   materializeSkillsForAgent: httpPost<
     { skills: Array<{ name: string; source_path: string }> },
@@ -642,7 +764,7 @@ export const fs = {
     void
   >('/api/skills/detect-external'),
   importSkillWithSymlink: httpPost<{ skill_name: string; skill_names?: string[] }, { skill_path: string }>(
-    '/api/skills/import-symlink'
+    '/api/skills/import'
   ),
   deleteSkill: httpDelete<void, { skill_name: string }>((p) => `/api/skills/${p.skill_name}`),
   getSkillPaths: httpGet<{ user_skills_dir: string; builtin_skills_dir: string }, void>('/api/skills/paths'),
@@ -750,9 +872,7 @@ export type ContentAssetSaveFromPathInput = {
 export const contentAssetsLocal = {
   list: bridge.buildProvider<ContentAssetDTO[], { ownerUserId?: string }>('content-assets.list'),
   saveFromPath: bridge.buildProvider<ContentAssetDTO, ContentAssetSaveFromPathInput>('content-assets.save-from-path'),
-  archive: bridge.buildProvider<ContentAssetDTO | null, { id: string; ownerUserId?: string }>(
-    'content-assets.archive'
-  ),
+  archive: bridge.buildProvider<ContentAssetDTO | null, { id: string; ownerUserId?: string }>('content-assets.archive'),
   publishToNas: bridge.buildProvider<
     ContentAssetDTO | null,
     { id: string; ownerUserId?: string; userLabel?: string; conversationLabel?: string }
@@ -911,17 +1031,6 @@ export const googleAuth = {
 };
 
 // ---------------------------------------------------------------------------
-// Google subscription status (Google OAuth provider path, used by aionrs)
-// ---------------------------------------------------------------------------
-
-export const google = {
-  subscriptionStatus: httpGet<
-    { isSubscriber: boolean; tier?: string; lastChecked: number; message?: string },
-    { proxy?: string }
-  >('/api/google/subscription-status'),
-};
-
-// ---------------------------------------------------------------------------
 // Bedrock connection test
 // ---------------------------------------------------------------------------
 
@@ -1051,26 +1160,33 @@ export const acpConversation = {
   checkProviderHealth: httpPost<ProviderHealthCheckResponse, ProviderHealthCheckRequest>(
     '/api/agents/provider-health-check'
   ),
-  setMode: httpPut<{ mode: string; initialized: boolean }, { conversation_id: string; mode: string }>(
-    (p) => `/api/conversations/${p.conversation_id}/mode`,
-    (p) => ({ mode: p.mode })
+  setMode: withParamResponseMap(
+    httpPut<SetConversationConfigOptionResponse, { conversation_id: string; mode: string }>(
+      (p) => `/api/conversations/${p.conversation_id}/config-options/mode`,
+      (p) => ({ value: p.mode })
+    ),
+    (response, params) => toLegacyMode(response.config_options, params.mode)
   ),
-  // 404 is the expected pre-warmup response from `/api/conversations/:id/mode`
-  // and `/api/conversations/:id/model` — the agent has not attached yet, so
-  // we have nothing to read. AcpModeSelector / AcpModelSelector both fall back
-  // to handshake metadata in that case. Silence the bridge log so this
-  // ordinary state doesn't pollute Sentry breadcrumbs (ELECTRON-1BT).
-  getMode: httpGet<{ mode: string; initialized: boolean }, { conversation_id: string }>(
-    (p) => `/api/conversations/${p.conversation_id}/mode`,
-    { silentStatuses: [404] }
+  getMode: withResponseMap(
+    httpPost<EnsureConversationRuntimeResponse, { conversation_id: string }>(
+      (p) => `/api/conversations/${p.conversation_id}/runtime/ensure`,
+      () => undefined
+    ),
+    (response) => toLegacyMode(response.config_options, 'default', response.runtime.has_task ?? true)
   ),
-  getModel: httpGet<{ model_info: AcpModelInfo | null }, { conversation_id: string }>(
-    (p) => `/api/conversations/${p.conversation_id}/model`,
-    { silentStatuses: [404] }
+  getModel: withResponseMap(
+    httpPost<EnsureConversationRuntimeResponse, { conversation_id: string }>(
+      (p) => `/api/conversations/${p.conversation_id}/runtime/ensure`,
+      () => undefined
+    ),
+    (response) => toLegacyModelInfo(response.config_options)
   ),
-  setModel: httpPut<{ model_info: AcpModelInfo | null }, { conversation_id: string; model_id: string }>(
-    (p) => `/api/conversations/${p.conversation_id}/model`,
-    (p) => ({ model_id: p.model_id })
+  setModel: withParamResponseMap(
+    httpPut<SetConversationConfigOptionResponse, { conversation_id: string; model_id: string }>(
+      (p) => `/api/conversations/${p.conversation_id}/config-options/model`,
+      (p) => ({ value: p.model_id })
+    ),
+    (response, params) => toLegacyModelInfo(response.config_options, params.model_id)
   ),
 };
 
@@ -1149,32 +1265,6 @@ export const mcpService = {
 export const openclawConversation = {
   sendMessage: conversation.sendMessage,
   responseStream: conversation.responseStream,
-  getRuntime: httpGet<
-    {
-      conversation_id: string;
-      runtime: {
-        workspace?: string;
-        backend?: string;
-        agent_name?: string;
-        cli_path?: string;
-        model?: string;
-        session_key?: string | null;
-        is_connected?: boolean;
-        has_active_session?: boolean;
-        identity_hash?: string | null;
-      };
-      expected?: {
-        expected_workspace?: string;
-        expected_backend?: string;
-        expected_agent_name?: string;
-        expected_cli_path?: string;
-        expected_model?: string;
-        expected_identity_hash?: string | null;
-        switched_at?: number;
-      };
-    },
-    { conversation_id: string }
-  >((p) => `/api/conversations/${p.conversation_id}/openclaw/runtime`),
 };
 
 // ---------------------------------------------------------------------------
@@ -2449,8 +2539,9 @@ export const team = {
     (p) => `/api/teams/${p.team_id}/messages`,
     (p) => ({ content: p.input, files: p.files })
   ),
-  cancelRun: httpDelete<void, { team_id: string; team_run_id: string }>(
-    (p) => `/api/teams/${p.team_id}/runs/${p.team_run_id}/cancel`
+  cancelRun: httpPost<void, { team_id: string; team_run_id: string }>(
+    (p) => `/api/teams/${p.team_id}/runs/${p.team_run_id}/cancel`,
+    () => undefined
   ),
   agentStatusChanged: wsEmitter<ITeamAgentStatusEvent>('team.agent.status'),
   agentSpawned: wsEmitter<ITeamAgentSpawnedEvent>('team.agent.spawned'),

@@ -18,7 +18,7 @@ interface SkillInfo {
    */
   relative_location?: string;
   is_custom: boolean;
-  source?: 'builtin' | 'custom' | 'extension';
+  source?: 'builtin' | 'custom' | 'cron' | 'extension';
 }
 
 // Normalize skill name for data-testid usage

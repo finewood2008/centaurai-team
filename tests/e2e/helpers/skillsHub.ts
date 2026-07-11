@@ -23,13 +23,15 @@ export { invokeBridge };
 // Types
 // ============================================================================
 
-export type SkillSource = 'builtin' | 'custom' | 'extension' | 'auto';
+export type SkillSource = 'builtin' | 'custom' | 'cron' | 'extension' | 'auto';
 
 export interface Skill {
   name: string;
   description?: string;
   source: SkillSource;
   location?: string;
+  relative_location?: string;
+  is_auto_inject?: boolean;
 }
 
 export interface ExternalSource {
@@ -133,11 +135,20 @@ export async function getExternalSources(page: Page): Promise<ExternalSource[]> 
 }
 
 /**
- * Get auto-injected builtin skills (GET /api/skills/builtin-auto).
+ * Get auto-injected builtin skills from the unified GET /api/skills catalog.
  */
 export async function getAutoSkills(page: Page): Promise<Skill[]> {
-  const skills = await httpGet<Skill[]>(page, '/api/skills/builtin-auto');
-  return skills ?? [];
+  const skills = await httpGet<Skill[]>(page, '/api/skills');
+  return (skills ?? [])
+    .filter((skill) => skill.is_auto_inject)
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      source: skill.source,
+      location: skill.relative_location || skill.location,
+      relative_location: skill.relative_location,
+      is_auto_inject: true,
+    }));
 }
 
 /**
@@ -191,11 +202,11 @@ export async function createTempExternalSourceDir(): Promise<{ path: string; cle
 }
 
 /**
- * Import a skill via HTTP bridge (POST /api/skills/import-symlink) for test setup.
+ * Import a skill via HTTP bridge (POST /api/skills/import) for test setup.
  */
 export async function importSkillViaBridge(page: Page, skillPath: string): Promise<{ success: boolean; msg?: string }> {
   try {
-    await httpPost(page, '/api/skills/import-symlink', { skillPath });
+    await httpPost(page, '/api/skills/import', { skill_path: skillPath });
     return { success: true };
   } catch (err) {
     return { success: false, msg: err instanceof Error ? err.message : String(err) };

@@ -1,7 +1,7 @@
 import type { Assistant } from '@/common/types/agent/assistantTypes';
 
 // Skill info type
-export type SkillSource = 'builtin' | 'custom' | 'extension';
+export type SkillSource = 'builtin' | 'custom' | 'cron' | 'extension';
 
 export type SkillInfo = {
   name: string;

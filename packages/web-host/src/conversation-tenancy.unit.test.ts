@@ -179,11 +179,23 @@ async function startBackend(initial: Conversation[]): Promise<BackendFixture> {
       }
       return;
     }
-    if (req.method === 'PUT' && suffix === '/mode') {
-      const input = (await readBody(req)) as { mode?: string };
+    if (req.method === 'POST' && suffix === '/runtime/ensure') {
+      fixture.lastBody = await readBody(req);
+      send(res, 200, {
+        success: true,
+        data: { recovered: false, config_options: [], runtime: { has_task: true } },
+      });
+      return;
+    }
+    if (req.method === 'POST' && suffix === '/cancel') {
+      fixture.lastBody = await readBody(req);
+      send(res, 200, { success: true, data: { runtime: { state: 'cancelling' } } });
+      return;
+    }
+    if (req.method === 'PUT' && /^\/config-options\/(?:mode|model)$/.test(suffix)) {
+      const input = (await readBody(req)) as { value?: string };
       fixture.lastBody = input;
-      current.extra.session_mode = input.mode;
-      send(res, 200, { success: true, data: { mode: input.mode, initialized: true } });
+      send(res, 200, { success: true, data: { confirmation: 'observed', config_options: [] } });
       return;
     }
     if (req.method === 'DELETE' && suffix === '') {
@@ -452,7 +464,12 @@ describe('conversation tenant boundary', () => {
 
   it('allowlists child routes, strips trust headers and requires bounded JSON', async () => {
     backend = await startBackend([
-      { id: 'alice-1', type: 'aionrs', extra: { [CONVERSATION_OWNER_EXTRA_KEY]: 'alice' } },
+      {
+        id: 'alice-1',
+        type: 'aionrs',
+        model: { provider_id: 'trusted-provider', model: 'safe-model' },
+        extra: { [CONVERSATION_OWNER_EXTRA_KEY]: 'alice' },
+      },
     ]);
     const boundary = await createConversationTenantBoundary({ backendPort: backend.port, dataDir });
     const server = await startBoundaryServer(boundary);
@@ -501,6 +518,36 @@ describe('conversation tenant boundary', () => {
     for (const name of ['cookie', 'x-webui-gate-token', 'x-centaur-user-id', 'origin', 'referer']) {
       expect(backend.lastHeaders?.[name]).toBeUndefined();
     }
+
+    const ensured = await fetch(`${server.url}/api/conversations/alice-1/runtime/ensure`, {
+      method: 'POST',
+      headers: { 'x-test-user': 'alice' },
+    });
+    expect(ensured.status).toBe(200);
+    expect(backend.lastBody).toEqual({});
+
+    const configured = await fetch(`${server.url}/api/conversations/alice-1/config-options/mode`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'alice' },
+      body: JSON.stringify({ value: 'accept_edits', ignored_host_path: '/etc' }),
+    });
+    expect(configured.status).toBe(200);
+    expect(backend.lastBody).toEqual({ value: 'accept_edits' });
+
+    const cancelled = await fetch(`${server.url}/api/conversations/alice-1/cancel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'alice' },
+      body: JSON.stringify({ turn_id: 'turn-1', ignored_conversation_id: 'bob-1' }),
+    });
+    expect(cancelled.status).toBe(200);
+    expect(backend.lastBody).toEqual({ turn_id: 'turn-1' });
+
+    const legacyWarmup = await fetch(`${server.url}/api/conversations/alice-1/warmup`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-test-user': 'alice' },
+      body: '{}',
+    });
+    expect(legacyWarmup.status).toBe(404);
 
     backend.nonJsonReset = true;
     const nonJson = await fetch(`${server.url}/api/conversations/alice-1/reset`, {

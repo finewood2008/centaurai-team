@@ -524,7 +524,8 @@ function isJsonRequest(req: IncomingMessage, body: Buffer): boolean {
 
 function isAllowedConversationChildRoute(method: string, suffix: string): boolean {
   if (method === 'DELETE' && suffix === '') return true;
-  if (method === 'POST' && ['/reset', '/warmup', '/cancel', '/side-question'].includes(suffix)) return true;
+  if (method === 'POST' && ['/reset', '/runtime/ensure', '/cancel', '/side-question'].includes(suffix)) return true;
+  if (method === 'PUT' && /^\/config-options\/(?:mode|model)$/.test(suffix)) return true;
   if (
     method === 'GET' &&
     ['/messages', '/slash-commands', '/confirmations', '/artifacts', '/workspace'].includes(suffix)
@@ -533,7 +534,7 @@ function isAllowedConversationChildRoute(method: string, suffix: string): boolea
   }
   // `/openclaw/runtime` is intentionally absent: its DTO includes session_key,
   // cli_path, workspace and identity hashes and is not used by the WebUI.
-  if (method === 'GET' && ['/mode', '/model', '/approvals/check'].includes(suffix)) return true;
+  if (method === 'GET' && suffix === '/approvals/check') return true;
   if (method === 'GET' && /^\/messages\/[^/]+$/.test(suffix)) return true;
   if (method === 'POST' && /^\/confirmations\/[^/]+\/confirm$/.test(suffix)) return true;
   if (method === 'PATCH' && /^\/artifacts\/[^/]+$/.test(suffix)) return true;
@@ -546,8 +547,16 @@ function boundedText(value: unknown, max: number): string | null {
 }
 
 function sanitizeChildMutationBody(method: string, suffix: string, value: unknown): JsonRecord | null {
-  if (method === 'POST' && (suffix === '/warmup' || suffix === '/cancel' || suffix === '/reset')) return {};
+  if (method === 'POST' && (suffix === '/runtime/ensure' || suffix === '/reset')) return {};
   if (!isRecord(value)) return null;
+  if (method === 'POST' && suffix === '/cancel') {
+    const turnId = boundedText(value.turn_id, 256);
+    return turnId ? { turn_id: turnId } : null;
+  }
+  if (method === 'PUT' && /^\/config-options\/(?:mode|model)$/.test(suffix)) {
+    const optionValue = boundedText(value.value, 4_096);
+    return optionValue ? { value: optionValue } : null;
+  }
   if (method === 'POST' && suffix === '/side-question') {
     const question = boundedText(value.question, 16_000);
     return question ? { question } : null;
@@ -1149,8 +1158,10 @@ export async function createConversationTenantBoundary(
 
     const needsTrustedRuntime =
       (req.method === 'POST' &&
-        (suffix === '/warmup' || suffix === '/side-question' || /^\/confirmations\/[^/]+\/confirm$/.test(suffix))) ||
-      (req.method === 'PUT' && suffix === '/model');
+        (suffix === '/runtime/ensure' ||
+          suffix === '/side-question' ||
+          /^\/confirmations\/[^/]+\/confirm$/.test(suffix))) ||
+      (req.method === 'PUT' && /^\/config-options\/(?:mode|model)$/.test(suffix));
     if (needsTrustedRuntime && !(await hasTrustedRuntime(current))) {
       sendJson(res, 403, { success: false, error: 'UNSAFE_RUNTIME' });
       return;
