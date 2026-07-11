@@ -55,7 +55,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
   }
 
   if (request === './resolveCentauraiCoreVersion.js' || request.endsWith('/resolveCentauraiCoreVersion.js')) {
-    return { resolveCentauraiCoreVersion: () => 'v0.1.46' };
+    return { resolveCentauraiCoreVersion: () => 'v0.1.47' };
   }
 
   return originalLoad.call(this, request, parent, isMain);

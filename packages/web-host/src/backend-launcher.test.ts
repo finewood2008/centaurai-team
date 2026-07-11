@@ -43,7 +43,7 @@ function healthyCoreResponse(overrides: Record<string, unknown> = {}): Response 
     JSON.stringify({
       status: 'ok',
       service: 'centaurai-core',
-      version: '0.1.46',
+      version: '0.1.47',
       commit: 'a'.repeat(40),
       ...overrides,
     }),
@@ -370,7 +370,7 @@ describe('BackendLifecycleManager.start (success path)', () => {
         expect.objectContaining({
           path: '/abs/path/centaurai-core',
           service: 'centaurai-core',
-          version: '0.1.46',
+          version: '0.1.47',
           commit: 'a'.repeat(40),
           fallbackUsed: false,
           port: 55555,

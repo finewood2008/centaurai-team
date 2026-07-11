@@ -43,7 +43,7 @@ function fixtureDeps({ sourceBinaryName = 'centaurai-core', checksum = 'valid', 
   return {
     downloadFile(url, outputPath) {
       if (url.endsWith('centaurai-core-checksums.txt')) {
-        const archiveName = 'centaurai-core-v0.1.46-x86_64-unknown-linux-gnu.tar.gz';
+        const archiveName = 'centaurai-core-v0.1.47-x86_64-unknown-linux-gnu.tar.gz';
         const archivePath = path.join(path.dirname(outputPath), archiveName);
         const digest =
           checksum === 'valid'
@@ -61,7 +61,7 @@ function fixtureDeps({ sourceBinaryName = 'centaurai-core', checksum = 'valid', 
       return 'a'.repeat(40);
     },
     execFileSync() {
-      return 'centaurai-core 0.1.46\n';
+      return 'centaurai-core 0.1.47\n';
     },
     prepareManagedResources(_binaryPath, stageDir) {
       const bundleOut = path.join(stageDir, 'managed-resources');
@@ -79,19 +79,19 @@ describe('prepareCentauraiCore', () => {
       projectRoot,
       platform: 'linux',
       arch: 'x64',
-      version: 'v0.1.46',
+      version: 'v0.1.47',
       deps: fixtureDeps(),
     });
 
     expect(result.manifest).toMatchObject({
       repository: 'finewood2008/centaurai-core',
-      tag: 'v0.1.46',
+      tag: 'v0.1.47',
       commit: 'a'.repeat(40),
       binaryName: 'centaurai-core',
       sourceBinaryName: 'centaurai-core',
       fallbackUsed: false,
       artifactUrl:
-        'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.46/centaurai-core-v0.1.46-x86_64-unknown-linux-gnu.tar.gz',
+        'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-x86_64-unknown-linux-gnu.tar.gz',
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     expect(fs.existsSync(path.join(result.dir, 'centaurai-core'))).toBe(true);
@@ -105,7 +105,7 @@ describe('prepareCentauraiCore', () => {
         projectRoot,
         platform: 'linux',
         arch: 'x64',
-        version: 'v0.1.46',
+        version: 'v0.1.47',
         deps: fixtureDeps({ checksum: 'invalid' }),
       })
     ).toThrow('Checksum mismatch');
@@ -119,7 +119,7 @@ describe('prepareCentauraiCore', () => {
         projectRoot,
         platform: 'linux',
         arch: 'x64',
-        version: 'v0.1.46',
+        version: 'v0.1.47',
         deps: fixtureDeps({ managedResources: false }),
       })
     ).toThrow('Managed resources are incomplete');
@@ -131,7 +131,7 @@ describe('prepareCentauraiCore', () => {
       projectRoot,
       platform: 'linux',
       arch: 'x64',
-      version: 'v0.1.46',
+      version: 'v0.1.47',
       deps: fixtureDeps({ sourceBinaryName: 'aioncore' }),
     });
     expect(result.manifest).toMatchObject({ sourceBinaryName: 'aioncore', binaryName: 'centaurai-core', fallbackUsed: true });
@@ -153,7 +153,7 @@ describe('downloader helpers', () => {
   });
 
   it('requires exactly one matching checksum entry', () => {
-    const asset = 'centaurai-core-v0.1.46-x86_64-unknown-linux-gnu.tar.gz';
+    const asset = 'centaurai-core-v0.1.47-x86_64-unknown-linux-gnu.tar.gz';
     expect(parseChecksumFile(`${'a'.repeat(64)}  ${asset}\n`, asset)).toBe('a'.repeat(64));
     expect(() => parseChecksumFile(`${'a'.repeat(64)}  another.tar.gz\n`, asset)).toThrow('exactly one entry');
   });

@@ -78,7 +78,7 @@ if [ ! -x "$BACKEND_BINARY" ]; then
   exit 1
 fi
 BACKEND_VERSION=$("$BACKEND_BINARY" --version)
-if ! echo "$BACKEND_VERSION" | grep -q '0\.1\.46'; then
+if ! echo "$BACKEND_VERSION" | grep -q '0\.1\.47'; then
   echo "❌ Unexpected CentaurAI Core version: $BACKEND_VERSION"
   exit 1
 fi
@@ -90,7 +90,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     manifest = json.load(handle)
 assert manifest["service"] == "centaurai-core", manifest
 assert manifest["repository"] == "finewood2008/centaurai-core", manifest
-assert manifest["tag"] == "v0.1.46", manifest
+assert manifest["tag"] == "v0.1.47", manifest
 assert re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]), manifest
 assert re.fullmatch(r"[0-9a-f]{64}", manifest["sha256"]), manifest
 assert manifest["binaryName"] == "centaurai-core", manifest

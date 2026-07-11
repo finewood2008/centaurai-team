@@ -1,4 +1,4 @@
-# CentaurAI Core v0.1.46 Migration Runbook
+# CentaurAI Core v0.1.47 Migration Runbook
 
 This runbook switches TEAM from upstream AionCore to
 `finewood2008/centaurai-core` without opening the only production database with
@@ -6,7 +6,7 @@ an unverified binary.
 
 ## Required Inputs
 
-- Canonical `centaurai-core` v0.1.46 binary.
+- Canonical `centaurai-core` v0.1.47 binary.
 - Its exact release commit and SHA-256.
 - A stopped, production-shaped data directory.
 - The previous core binary for rollback rehearsal.
@@ -21,11 +21,11 @@ with a current daily-use data directory. Never reuse an output directory.
 python3 ../centaurai-core/scripts/migration/audit_data_migration.py \
   --source-data-dir /path/to/staged-data \
   --core-bin ../centaurai-core/target/release/centaurai-core \
-  --expected-version 0.1.46 \
+  --expected-version 0.1.47 \
   --expected-commit "$(git -C ../centaurai-core rev-parse HEAD)" \
   --legacy-core-bin /path/to/aioncore-v0.1.24 \
   --legacy-expected-version 0.1.24 \
-  --output-dir /secure/audit/v0.1.46-current
+  --output-dir /secure/audit/v0.1.47-current
 ```
 
 Stop the source core before running the command. The tool uses SQLite's backup
@@ -35,7 +35,7 @@ if another process is writing the data directory.
 The output contains three isolated directories:
 
 - `rollback-data`: immutable upgrade-before snapshot. No core is started here.
-- `upgrade-data`: the only copy opened by v0.1.46.
+- `upgrade-data`: the only copy opened by v0.1.47.
 - `rollback-drill-data`: a fresh clone of `rollback-data`, opened only by the
   explicitly supplied legacy core.
 
@@ -49,7 +49,7 @@ content, provider configuration, workspace paths, or raw object identifiers.
 
 Accept a data sample only when all of these are true:
 
-1. `/health` reports `service: centaurai-core`, version `0.1.46`, and the
+1. `/health` reports `service: centaurai-core`, version `0.1.47`, and the
    expected non-unknown commit.
 2. Settings, providers, conversations, assistants, teams, MCP, and skills APIs
    all return successful JSON responses.
@@ -71,7 +71,7 @@ production secrets and must not be committed or uploaded.
 
 If startup, migration, or critical feature validation fails:
 
-1. Stop the v0.1.46 process and confirm no core holds the data directory.
+1. Stop the v0.1.47 process and confirm no core holds the data directory.
 2. Quarantine the upgraded directory. Never start a legacy core against it.
 3. Restore the complete `rollback-data` snapshot to a fresh production path.
    Do not restore only the SQLite file; rules, skills, workspaces, and runtime
@@ -83,6 +83,6 @@ If startup, migration, or critical feature validation fails:
    `AIONUI_BACKEND_ALLOW_LEGACY=1`).
 6. Verify legacy health and the same read-only API set before reopening TEAM.
 
-Once v0.1.46 has migrated the production database, rollback always means
+Once v0.1.47 has migrated the production database, rollback always means
 restoring the upgrade-before snapshot. It never means running the old binary on
 the upgraded database.

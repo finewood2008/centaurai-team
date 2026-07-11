@@ -13,11 +13,11 @@ describe('collectBackendInstallDiagnostics', () => {
           mtimeMs: 3000,
           size: 88,
           content: JSON.stringify({
-            tag: 'v0.1.46',
+            tag: 'v0.1.47',
             repository: 'finewood2008/centaurai-core',
             commit: 'a'.repeat(40),
             artifactUrl:
-              'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.46/centaurai-core-v0.1.46-x86_64-pc-windows-msvc.zip',
+              'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-x86_64-pc-windows-msvc.zip',
             sha256: 'b'.repeat(64),
             binaryName: 'centaurai-core.exe',
             fallbackUsed: false,
@@ -60,10 +60,10 @@ describe('collectBackendInstallDiagnostics', () => {
       manifestExists: true,
       manifestFiles: ['centaurai-core.exe', 'managed-resources/'],
       manifestRepository: 'finewood2008/centaurai-core',
-      manifestTag: 'v0.1.46',
+      manifestTag: 'v0.1.47',
       manifestCommit: 'a'.repeat(40),
       manifestArtifactUrl:
-        'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.46/centaurai-core-v0.1.46-x86_64-pc-windows-msvc.zip',
+        'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-x86_64-pc-windows-msvc.zip',
       manifestSha256: 'b'.repeat(64),
       manifestBinaryName: 'centaurai-core.exe',
       manifestFallbackUsed: false,

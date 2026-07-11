@@ -60,9 +60,9 @@ python3 scripts/aion_diag.py discover
   "data_dir": "/Users/you/.aionui",
   "version": "2.1.18",
   "service": "centaurai-core",
-  "core_version": "0.1.46",
+  "core_version": "0.1.47",
   "core_commit": "558d5e0e...",
-  "artifact": {"repository": "finewood2008/centaurai-core", "tag": "v0.1.46"},
+  "artifact": {"repository": "finewood2008/centaurai-core", "tag": "v0.1.47"},
   "fallback_used": false,
   "db_path": "/Users/you/.aionui/aionui-backend.db"
 }
