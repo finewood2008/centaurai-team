@@ -11,8 +11,8 @@ describe('classifyBackendStartupFailure', () => {
     error.details = {
       stage: 'early_exit',
       stderrTail:
-        "/opt/AionUi/resources/bundled-aioncore/linux-x64/aioncore.bin: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.34' not found\n" +
-        "/opt/AionUi/resources/bundled-aioncore/linux-x64/aioncore.bin: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.32' not found",
+        "/opt/CentaurAI/resources/bundled-centaurai-core/linux-x64/centaurai-core: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.34' not found\n" +
+        "/opt/CentaurAI/resources/bundled-centaurai-core/linux-x64/centaurai-core: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.32' not found",
     };
 
     expect(classifyBackendStartupFailure(error)).toEqual({
@@ -62,7 +62,7 @@ describe('classifyBackendStartupFailure', () => {
       stage: 'resolve_binary',
       isPackaged: true,
       runtimeKey: 'win32-x64',
-      binaryName: 'aioncore.exe',
+      binaryName: 'centaurai-core.exe',
       bundledDirExists: false,
       runtimeDirExists: false,
       resourcesDirEntries: [
@@ -84,7 +84,7 @@ describe('classifyBackendStartupFailure', () => {
       missingHubDir: true,
       missingPetStatesDir: true,
       missingPwaDir: true,
-      missingResources: ['bundled-aioncore/', 'bundled-aioncore/win32-x64/'],
+      missingResources: ['bundled-centaurai-core/', 'bundled-centaurai-core/win32-x64/'],
       missingRuntimeDir: true,
     });
   });
@@ -97,7 +97,7 @@ describe('classifyBackendStartupFailure', () => {
       stage: 'resolve_binary',
       isPackaged: true,
       runtimeKey: 'win32-x64',
-      binaryName: 'aioncore.exe',
+      binaryName: 'centaurai-core.exe',
       bundledDirExists: true,
       runtimeDirExists: true,
       resourcesDirEntries: [
@@ -105,7 +105,7 @@ describe('classifyBackendStartupFailure', () => {
         'app.asar',
         'app.asar.unpacked/',
         'app.png',
-        'bundled-aioncore/',
+        'bundled-centaurai-core/',
         'elevate.exe',
         'hub/',
         'manifest.webmanifest',
@@ -124,7 +124,10 @@ describe('classifyBackendStartupFailure', () => {
       missingHubDir: false,
       missingPetStatesDir: false,
       missingPwaDir: false,
-      missingResources: ['bundled-aioncore/win32-x64/managed-resources/', 'bundled-aioncore/win32-x64/aioncore.exe'],
+      missingResources: [
+        'bundled-centaurai-core/win32-x64/managed-resources/',
+        'bundled-centaurai-core/win32-x64/centaurai-core.exe',
+      ],
       missingRuntimeDir: false,
     });
   });

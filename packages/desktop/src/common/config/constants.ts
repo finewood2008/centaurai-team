@@ -54,7 +54,7 @@ export const DEFAULT_IMAGE_EXTENSION = '.png';
 /** WebUI default port: 25808 for production, 25809 for development, 25810 for multi-instance dev */
 export const WEBUI_DEFAULT_PORT = (() => {
   if (process.env.NODE_ENV === 'production') return 25808;
-  if (process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
+  if (process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
   return 25809;
 })();
 
@@ -82,7 +82,9 @@ function normalizeEdition(value: string | undefined): Edition {
   return value === 'decision' || value === 'team' ? value : 'full';
 }
 
-const ENV_EDITION: Edition = normalizeEdition(typeof process !== 'undefined' ? process.env.AIONUI_EDITION : undefined);
+const ENV_EDITION: Edition = normalizeEdition(
+  typeof process !== 'undefined' ? process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION : undefined
+);
 
 export const EDITION: Edition = typeof __EDITION__ !== 'undefined' ? normalizeEdition(__EDITION__) : ENV_EDITION;
 export const IS_DECISION = EDITION === 'decision';
@@ -100,6 +102,19 @@ export const MULTI_USER_ENABLED = EDITION !== 'decision';
 export const OFFICE_ASSISTANTS_ENABLED = EDITION !== 'decision';
 /** Desktop pet: disabled for the CentaurAI product shell. */
 export const DESKTOP_PET_ENABLED: boolean = false;
+
+export const PERSONAL_VECTOR_DB_ENDPOINT = 'http://127.0.0.1:8618';
+export const TEAM_VECTOR_DB_ENDPOINT = 'http://127.0.0.1:8619';
+/** CORS-safe Electron-main proxy for the co-located vector database. */
+export const LOCAL_VECTOR_DB_PROXY_BASE = 'centaur-vector://local';
+export const DEFAULT_VECTOR_DB_ENDPOINT = IS_TEAM ? TEAM_VECTOR_DB_ENDPOINT : PERSONAL_VECTOR_DB_ENDPOINT;
+
+export function normalizeVectorDbEndpoint(endpoint?: string | null): string {
+  const value = (endpoint ?? '').trim().replace(/\/+$/, '');
+  if (!value) return DEFAULT_VECTOR_DB_ENDPOINT;
+  if (IS_TEAM && value === PERSONAL_VECTOR_DB_ENDPOINT) return TEAM_VECTOR_DB_ENDPOINT;
+  return value;
+}
 
 // ===== AI Provider 相关常量 =====
 

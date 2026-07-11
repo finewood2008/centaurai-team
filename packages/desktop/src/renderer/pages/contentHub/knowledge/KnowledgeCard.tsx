@@ -1,13 +1,13 @@
 /**
  * KnowledgeCard — one read-only document from the vector DB, in either the
  * uniform grid or the masonry waterfall layout. Images load a real thumbnail;
- * a chunk-count badge hints how much of the file is indexed. Click opens the
- * source file (desktop only — the path is local to the DB host).
+ * a chunk-count badge hints how much of the file is indexed.
  */
 import React, { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatSize, formatTime } from '@/renderer/pages/guid/components/RecentFiles';
 import FileThumb from '../components/view/FileThumb';
+import { useSingleDoubleClick } from '../components/view/clickIntent';
 import { GRID_SIZE, WATERFALL_EMOJI } from '../components/view/viewConfig';
 import { loadKnowledgeImage, type KnowledgeDoc } from './knowledgeApi';
 import type { HubCardSize, HubViewMode } from '../types';
@@ -17,10 +17,12 @@ type KnowledgeCardProps = {
   view: HubViewMode;
   size: HubCardSize;
   onOpen: (doc: KnowledgeDoc) => void;
+  onDirectOpen?: (doc: KnowledgeDoc) => void;
 };
 
-const KnowledgeCard: React.FC<KnowledgeCardProps> = ({ doc, view, size, onOpen }) => {
+const KnowledgeCard: React.FC<KnowledgeCardProps> = ({ doc, view, size, onOpen, onDirectOpen }) => {
   const { t } = useTranslation();
+  const clickIntent = useSingleDoubleClick(onOpen, onDirectOpen);
   const loadImage = useCallback(() => loadKnowledgeImage(doc.path), [doc.path]);
   const chunks = t('contentHub.knowledge.chunks', { n: doc.chunkCount });
   const meta = `${chunks}${doc.size ? ` · ${formatSize(doc.size)}` : ''}${doc.mtime ? ` · ${formatTime(doc.mtime)}` : ''}`;
@@ -36,7 +38,8 @@ const KnowledgeCard: React.FC<KnowledgeCardProps> = ({ doc, view, size, onOpen }
       <div
         className='break-inside-avoid mb-12px rd-10px overflow-hidden cursor-pointer
           bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative'
-        onClick={() => onOpen(doc)}
+        onClick={() => clickIntent.handleClick(doc)}
+        onDoubleClick={() => clickIntent.handleDoubleClick(doc)}
         title={title}
       >
         {badge}
@@ -54,7 +57,8 @@ const KnowledgeCard: React.FC<KnowledgeCardProps> = ({ doc, view, size, onOpen }
     <div
       className={`flex flex-col items-center gap-4px ${dim.card} rd-10px cursor-pointer
         bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative`}
-      onClick={() => onOpen(doc)}
+      onClick={() => clickIntent.handleClick(doc)}
+      onDoubleClick={() => clickIntent.handleDoubleClick(doc)}
       title={title}
     >
       {badge}

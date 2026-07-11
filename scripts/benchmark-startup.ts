@@ -2,8 +2,8 @@
  * Electron Cold Startup Benchmark
  *
  * Launches the Electron app N times and measures per-phase startup timings by
- * parsing the electron-log file for [AionUi:ready] / [AionUi:init] /
- * [AionUi:process] marks, plus `ready-to-show` / `did-finish-load` /
+ * parsing the electron-log file for [CentaurAI:ready] / [CentaurAI:init] /
+ * [CentaurAI:process] marks, plus `ready-to-show` / `did-finish-load` /
  * time-to-interactive (chat input visible).
  *
  * Optional `--with-memory` mode samples RSS / heap in the main and renderer
@@ -111,14 +111,14 @@ type StartupTiming = {
   wallDomContentLoadedMs: number;
   wallTimeToInteractiveMs: number;
   wallTotalMs: number;
-  // Parsed from [AionUi:ready] marks
+  // Parsed from [CentaurAI:ready] marks
   readyInitializeProcessMs: number;
   readyInitializeZoomFactorMs: number;
   readyCreateWindowMs: number;
   readyInitializeAcpDetectorMs: number;
-  // Parsed from [AionUi:init] marks
+  // Parsed from [CentaurAI:init] marks
   initTotalMs: number;
-  // Parsed from [AionUi:process] marks
+  // Parsed from [CentaurAI:process] marks
   processInitStorageMs: number;
   processExtensionRegistryMs: number;
   processChannelManagerMs: number;
@@ -178,10 +178,12 @@ function readNewLogLines(logPath: string, offset: number): string[] {
 
 // ── Log parsing ─────────────────────────────────────────────────────────────
 
-// Matches: [AionUi:ready] <label> +<ms>ms
-// Matches: [AionUi:init]  <label> +<ms>ms
-// Matches: [AionUi:process] <label> +<ms>ms
-const MARK_REGEX = /\[AionUi:(ready|init|process)\]\s+([^+]+?)\s+\+(\d+)ms/;
+// Matches canonical [CentaurAI:ready] marks and legacy [AionUi:ready] marks.
+const MARK_REGEX = /\[(?:CentaurAI|AionUi):(ready|init|process)\]\s+([^+]+?)\s+\+(\d+)ms/;
+
+function includesAppLog(line: string, message: string): boolean {
+  return line.includes(`[CentaurAI] ${message}`) || line.includes(`[AionUi] ${message}`);
+}
 
 type ParsedMarks = {
   ready: Map<string, number>;
@@ -210,9 +212,9 @@ function parseStartupLog(lines: string[]): ParsedMarks {
       continue;
     }
 
-    if (line.includes('[AionUi] Renderer did-finish-load')) marks.logs.rendererDidFinishLoad = true;
-    else if (line.includes('[AionUi] Window ready-to-show')) marks.logs.windowReadyToShow = true;
-    else if (line.includes('[AionUi] Showing main window')) marks.logs.showingMainWindow = true;
+    if (includesAppLog(line, 'Renderer did-finish-load')) marks.logs.rendererDidFinishLoad = true;
+    else if (includesAppLog(line, 'Window ready-to-show')) marks.logs.windowReadyToShow = true;
+    else if (includesAppLog(line, 'Showing main window')) marks.logs.showingMainWindow = true;
   }
 
   return marks;

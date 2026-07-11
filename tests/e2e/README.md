@@ -14,22 +14,29 @@ bunx electron-vite build
 > `bun run start` (`electron-vite dev`) uses Vite's HMR and hot-reloads automatically.
 > E2E tests do NOT use Vite dev server — they load static files from `out/`.
 
-### 2. Ensure `aioncore` is on PATH
+### 2. Make CentaurAI Core available
 
-The Electron main process spawns the `aioncore` binary during startup and
+The Electron main process spawns `centaurai-core` during startup and
 exposes its port to the renderer via `window.__backendPort`. The binary is
-located via `which aioncore`, so it must be reachable from the `PATH`
-inherited by the Playwright runner. If it isn't, `__backendPort` will be `0`
-and every HTTP call from the renderer (or from e2e helpers that use
+resolved from `CENTAURAI_CORE_BIN`, then `AIONUI_BACKEND_BIN`, then
+`centaurai-core` on the `PATH` inherited by Playwright. If it cannot be found,
+`__backendPort` will be `0` and every HTTP call from the renderer (or helpers using
 `tests/e2e/helpers/httpBridge.ts`) will fail with `Failed to fetch`.
 
 ```bash
-# Install the backend binary (builds to ~/.cargo/bin/aioncore)
-cd ../AionCore && cargo install --path crates/aionui-app
+# Install the canonical backend binary (to ~/.cargo/bin/centaurai-core)
+cd ../centaurai-core && cargo install --path crates/aionui-app
 
 # Make sure it's on PATH when running tests
 export PATH="$HOME/.cargo/bin:$PATH"
+
+# Or point to an exact local build
+export CENTAURAI_CORE_BIN="../centaurai-core/target/release/centaurai-core"
 ```
+
+Legacy `AIONUI_BACKEND_BINARY` and `aioncore` lookup are test-only rollback
+paths. They are ignored unless `CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK=1` (or
+`AIONUI_BACKEND_ALLOW_LEGACY=1`) is set explicitly.
 
 ### 3. Run Tests
 

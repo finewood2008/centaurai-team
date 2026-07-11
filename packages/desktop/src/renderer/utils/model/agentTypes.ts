@@ -6,8 +6,10 @@
 
 import { ipcBridge } from '@/common';
 
-/** SWR key for agent metadata rows (from `/api/agents`). */
+/** SWR key for agent metadata rows adapted from `/api/agents/management`. */
 export const DETECTED_AGENTS_SWR_KEY = 'agents.detected';
+/** SWR key for the complete management catalog, including unavailable rows. */
+export const MANAGED_AGENTS_SWR_KEY = 'agents.managed';
 
 /** Type of an agent. */
 export type AgentType = 'acp' | 'remote' | 'aionrs' | 'openclaw-gateway' | 'nanobot';
@@ -62,7 +64,7 @@ export type AgentHandshake = {
 };
 
 /**
- * Unified agent metadata returned by `/api/agents`.
+ * Unified agent metadata adapted from Core's `/api/agents/management` response.
  *
  * Replaces the old split of `DetectedAgent` / `AvailableAgent` — the
  * backend now stores the same shape in the `agent_metadata` table,
@@ -86,6 +88,8 @@ export type AgentMetadata = {
   enabled: boolean;
   /** True iff the backend resolved the spawn command on `$PATH` at hydrate time. */
   available: boolean;
+  /** Diagnostics-first state from Core's management catalog. */
+  management_status?: 'online' | 'unchecked' | 'missing' | 'offline';
   /** True when the agent supports team mode (MCP stdio capable). Computed by backend. */
   team_capable?: boolean;
 
@@ -128,6 +132,17 @@ export async function fetchDetectedAgents(): Promise<AgentMetadata[]> {
     }
   } catch {
     // fallback to empty
+  }
+  return [];
+}
+
+/** Shared fetcher for the settings management surface. */
+export async function fetchManagedAgents(): Promise<AgentMetadata[]> {
+  try {
+    const agents = await ipcBridge.acpConversation.getManagedAgents.invoke();
+    if (Array.isArray(agents)) return agents as AgentMetadata[];
+  } catch {
+    // The settings surface renders its empty state while Core is unavailable.
   }
   return [];
 }

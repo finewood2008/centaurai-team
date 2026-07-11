@@ -463,7 +463,7 @@ jobs:
           Write-Host "SMOKE INSTALL: windows-x64"
           Write-Host "=========================================="
 
-          $installer = Get-ChildItem -Path out -Filter "AionUi-*-win-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem -Path out -Filter "CentaurAI*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) {
             throw "No Windows installer found in out/"
           }
@@ -471,13 +471,16 @@ jobs:
           Write-Host "Using installer: $($installer.FullName)"
           Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -NoNewWindow
 
-          $candidates = @(
-            "$env:LOCALAPPDATA\\Programs\\AionUi\\AionUi.exe",
-            "$env:ProgramFiles\\AionUi\\AionUi.exe",
-            "$env:ProgramFiles(x86)\\AionUi\\AionUi.exe"
-          )
-
-          $installedExe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          $installRoots = @(
+            "$env:LOCALAPPDATA\\Programs",
+            "$env:ProgramFiles",
+            "${env:ProgramFiles(x86)}"
+          ) | Where-Object { $_ -and (Test-Path $_) }
+          $installedExe = $installRoots |
+            ForEach-Object { Get-ChildItem -Path $_ -Directory -Filter "CentaurAI*" -ErrorAction SilentlyContinue } |
+            ForEach-Object { Get-ChildItem -Path $_.FullName -File -Filter "CentaurAI*.exe" -ErrorAction SilentlyContinue } |
+            Where-Object { $_.Name -ne 'centaurai-core.exe' } |
+            Select-Object -First 1
           if (-not $installedExe) {
             throw "Silent install finished but app executable not found in expected locations"
           }
@@ -493,17 +496,19 @@ jobs:
           Write-Host "=========================================="
           Write-Host "Skipping runtime install smoke for windows-arm64: NSIS silent install does not reliably install on the GitHub Windows ARM runner."
 
-          $installer = Get-ChildItem -Path out -Filter "AionUi-*-win-arm64.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installer = Get-ChildItem -Path out -Filter "CentaurAI*-win-arm64.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $installer) {
             throw "No Windows ARM64 installer found in out/"
           }
 
-          $unpackedExe = "out\win-arm64-unpacked\AionUi.exe"
-          if (-not (Test-Path $unpackedExe)) {
-            throw "Windows ARM64 unpacked executable not found: $unpackedExe"
+          $unpackedExe = Get-ChildItem -Path "out\win-arm64-unpacked" -File -Filter "CentaurAI*.exe" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'centaurai-core.exe' } |
+            Select-Object -First 1
+          if (-not $unpackedExe) {
+            throw "Windows ARM64 unpacked CentaurAI executable not found"
           }
 
-          Get-Item $installer.FullName, $unpackedExe | Format-Table FullName, Length
+          Get-Item $installer.FullName, $unpackedExe.FullName | Format-Table FullName, Length
 
       - name: Install smoke test (macOS arm64)
         if: matrix.platform == 'macos-arm64'
@@ -515,8 +520,8 @@ jobs:
           echo "=========================================="
 
           DMG_FILE=$(ls out/*.dmg | head -n 1)
-          MOUNT_POINT="/tmp/aionui-smoke-mount"
-          APP_DIR="/tmp/aionui-smoke-app"
+          MOUNT_POINT="/tmp/centaurai-smoke-mount"
+          APP_DIR="/tmp/centaurai-smoke-app"
 
           rm -rf "$MOUNT_POINT" "$APP_DIR"
           mkdir -p "$MOUNT_POINT" "$APP_DIR"
@@ -526,7 +531,8 @@ jobs:
           hdiutil detach "$MOUNT_POINT"
 
           APP_PATH=$(ls -d "$APP_DIR"/*.app | head -n 1)
-          APP_BIN="$APP_PATH/Contents/MacOS/AionUi"
+          APP_EXECUTABLE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_PATH/Contents/Info.plist")
+          APP_BIN="$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
 
           test -x "$APP_BIN"
           "$APP_BIN" --version || true
@@ -551,7 +557,7 @@ jobs:
           PKG_NAME=$(dpkg-deb -f "$DEB_FILE" Package)
           sudo dpkg -i "$DEB_FILE" || sudo apt-get install -f -y
 
-          INSTALLED_BIN=$(dpkg -L "$PKG_NAME" | grep -Ei '/(bin|opt)/.*(aionui)$' | head -n 1 || true)
+          INSTALLED_BIN=$(dpkg -L "$PKG_NAME" | awk '/^\/usr\/bin\// { print; exit }' || true)
           if [ -z "$INSTALLED_BIN" ]; then
             echo "Package files:"
             dpkg -L "$PKG_NAME" | head -n 50

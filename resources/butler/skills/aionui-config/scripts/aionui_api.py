@@ -2,11 +2,12 @@
 """
 AionUi backend API helper.
 
-Discovers the running AionUi backend (aioncore) REST API and exposes thin
+Discovers the running CentaurAI Core REST API and exposes thin
 wrappers for the operations this skill needs: assistants, skills, rules, avatar.
 
 The backend port is dynamic (changes every launch) and is NOT written to a
-file, so we discover it: list aioncore's listening ports, then probe each one
+file, so we discover it: list centaurai-core (with legacy aioncore fallback)
+listening ports, then probe each one
 for a working /api/assistants endpoint. Cross-platform (lsof on macOS/Linux,
 netstat on Windows), with 13400 as a documented fallback.
 
@@ -22,10 +23,17 @@ All commands print the JSON response (or the discovered base URL) to stdout.
 Non-zero exit on failure.
 """
 import json
+import os
 import subprocess
 import sys
 import urllib.request
 import urllib.error
+
+
+def _legacy_fallback_enabled():
+    value = (os.environ.get("CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK") or
+             os.environ.get("AIONUI_BACKEND_ALLOW_LEGACY") or "")
+    return value.strip().lower() in ("1", "true", "yes")
 
 
 def _candidate_ports():
@@ -39,10 +47,16 @@ def _candidate_ports():
 
     # macOS / Linux
     try:
-        out = subprocess.run(
-            ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-c", "aioncore"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout
+        outputs = []
+        process_names = ["centaurai-core"]
+        if _legacy_fallback_enabled():
+            process_names.append("aioncore")
+        for process_name in process_names:
+            outputs.append(subprocess.run(
+                ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-c", process_name],
+                capture_output=True, text=True, timeout=5,
+            ).stdout)
+        out = "\n".join(outputs)
         for line in out.splitlines():
             for tok in line.split():
                 if tok.startswith("127.0.0.1:"):
@@ -72,8 +86,14 @@ def _candidate_ports():
 
 def _probe(port):
     try:
-        r = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/assistants", timeout=2)
-        return json.loads(r.read()).get("success") is True
+        health = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+        identity = json.loads(health.read())
+        if identity.get("status") != "ok":
+            return False
+        if identity.get("service") != "centaurai-core" and not _legacy_fallback_enabled():
+            return False
+        assistants = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/assistants", timeout=2)
+        return json.loads(assistants.read()).get("success") is True
     except Exception:
         return False
 
@@ -82,7 +102,10 @@ def discover():
     for p in _candidate_ports():
         if _probe(p):
             return f"http://127.0.0.1:{p}"
-    raise SystemExit("AionUi backend not found. Is the app running?")
+    raise SystemExit(
+        "CentaurAI Core not found. Is the app running? "
+        "Legacy aioncore requires CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK=1."
+    )
 
 
 def request(method, path, body=None):

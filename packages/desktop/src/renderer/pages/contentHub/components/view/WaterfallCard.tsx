@@ -8,6 +8,7 @@ import { Copy, Download, FolderOpen, Share } from '@icon-park/react';
 import { formatSize, formatTime, shortConversation } from '@/renderer/pages/guid/components/RecentFiles';
 import { ipcBridge } from '@/common';
 import FileThumb from './FileThumb';
+import { useSingleDoubleClick } from './clickIntent';
 import { WATERFALL_EMOJI } from './viewConfig';
 import { useHubFileActions } from '../../useHubFileActions';
 import type { FileEntry, HubCardSize } from '../../types';
@@ -16,6 +17,7 @@ type WaterfallCardProps = {
   file: FileEntry;
   size: HubCardSize;
   onOpen: (file: FileEntry) => void;
+  onDirectOpen?: (file: FileEntry) => void;
   onShare?: (file: FileEntry) => void;
   onContextMenu?: (file: FileEntry, e: React.MouseEvent) => void;
 };
@@ -26,14 +28,16 @@ const ActionChip: React.FC<{ onClick: (e: React.MouseEvent) => void; children: R
 }) => (
   <span
     onClick={onClick}
+    onDoubleClick={(event) => event.stopPropagation()}
     className='w-20px h-20px flex items-center justify-center rd-4px bg-[var(--color-bg-2)] text-t-secondary hover:text-t-primary cursor-pointer'
   >
     {children}
   </span>
 );
 
-const WaterfallCard: React.FC<WaterfallCardProps> = ({ file, size, onOpen, onShare, onContextMenu }) => {
+const WaterfallCard: React.FC<WaterfallCardProps> = ({ file, size, onOpen, onDirectOpen, onShare, onContextMenu }) => {
   const actions = useHubFileActions();
+  const clickIntent = useSingleDoubleClick(onOpen, onDirectOpen);
 
   const stop = (fn: () => void) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -49,7 +53,8 @@ const WaterfallCard: React.FC<WaterfallCardProps> = ({ file, size, onOpen, onSha
     <div
       className='break-inside-avoid mb-12px rd-10px overflow-hidden cursor-pointer
         bg-[var(--color-fill-1)] hover:bg-[var(--color-fill-2)] transition-colors group relative'
-      onClick={() => onOpen(file)}
+      onClick={() => clickIntent.handleClick(file)}
+      onDoubleClick={() => clickIntent.handleDoubleClick(file)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(file, e) : undefined}
       title={`${file.name}\n${file.conversation}\n${formatSize(file.size)} · ${formatTime(file.mtime)}`}
     >
@@ -65,9 +70,11 @@ const WaterfallCard: React.FC<WaterfallCardProps> = ({ file, size, onOpen, onSha
         <ActionChip onClick={handleDownload}>
           <Download size='11' />
         </ActionChip>
-        <ActionChip onClick={handleShowFolder}>
-          <FolderOpen size='11' />
-        </ActionChip>
+        {actions.canReveal && (
+          <ActionChip onClick={handleShowFolder}>
+            <FolderOpen size='11' />
+          </ActionChip>
+        )}
       </div>
       <FileThumb name={file.name} loadImage={loadImage} variant='natural' emojiClass={WATERFALL_EMOJI[size]} />
       <div className='px-8px py-8px'>

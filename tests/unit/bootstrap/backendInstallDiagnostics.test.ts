@@ -6,17 +6,24 @@ describe('collectBackendInstallDiagnostics', () => {
   it('records packaged runtime manifest and missing backend binary metadata', () => {
     const files = new Map<string, { mtimeMs: number; size: number; content?: string }>([
       ['C:\\AionUi\\resources', { mtimeMs: 1000, size: 0 }],
-      ['C:\\AionUi\\resources\\bundled-aioncore\\win32-x64', { mtimeMs: 2000, size: 0 }],
+      ['C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64', { mtimeMs: 2000, size: 0 }],
       [
-        'C:\\AionUi\\resources\\bundled-aioncore\\win32-x64\\manifest.json',
+        'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64\\manifest.json',
         {
           mtimeMs: 3000,
           size: 88,
           content: JSON.stringify({
-            version: 'v0.9.0',
+            tag: 'v0.1.47',
+            repository: 'finewood2008/centaurai-core',
+            commit: 'a'.repeat(40),
+            artifactUrl:
+              'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-x86_64-pc-windows-msvc.zip',
+            sha256: 'b'.repeat(64),
+            binaryName: 'centaurai-core.exe',
+            fallbackUsed: false,
             generatedAt: '2026-05-29T12:00:00.000Z',
-            sourceType: 'download',
-            files: ['aioncore.exe', 'managed-resources/'],
+            sourceType: 'github-release',
+            files: ['centaurai-core.exe', 'managed-resources/'],
           }),
         },
       ],
@@ -25,9 +32,10 @@ describe('collectBackendInstallDiagnostics', () => {
     const diagnostics = collectBackendInstallDiagnostics(
       {
         runtimeKey: 'win32-x64',
-        binaryName: 'aioncore.exe',
+        binaryName: 'centaurai-core.exe',
         resourcesPath: 'C:\\AionUi\\resources',
-        checkedBundledPath: 'C:\\AionUi\\resources\\bundled-aioncore\\win32-x64\\aioncore.exe',
+        checkedBundledPath:
+          'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64\\centaurai-core.exe',
       },
       {
         appVersion: '2.1.7',
@@ -44,24 +52,31 @@ describe('collectBackendInstallDiagnostics', () => {
       appVersion: '2.1.7',
       arch: 'x64',
       binaryExists: false,
-      binaryName: 'aioncore.exe',
-      binaryPath: 'C:\\AionUi\\resources\\bundled-aioncore\\win32-x64\\aioncore.exe',
-      bundledDirPath: 'C:\\AionUi\\resources\\bundled-aioncore',
+      binaryName: 'centaurai-core.exe',
+      binaryPath: 'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64\\centaurai-core.exe',
+      bundledDirPath: 'C:\\AionUi\\resources\\bundled-centaurai-core',
       execPath: 'C:\\AionUi\\AionUi.exe',
       isPackaged: true,
       manifestExists: true,
-      manifestFiles: ['aioncore.exe', 'managed-resources/'],
+      manifestFiles: ['centaurai-core.exe', 'managed-resources/'],
+      manifestRepository: 'finewood2008/centaurai-core',
+      manifestTag: 'v0.1.47',
+      manifestCommit: 'a'.repeat(40),
+      manifestArtifactUrl:
+        'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-x86_64-pc-windows-msvc.zip',
+      manifestSha256: 'b'.repeat(64),
+      manifestBinaryName: 'centaurai-core.exe',
+      manifestFallbackUsed: false,
       manifestGeneratedAt: '2026-05-29T12:00:00.000Z',
-      manifestPath: 'C:\\AionUi\\resources\\bundled-aioncore\\win32-x64\\manifest.json',
+      manifestPath: 'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64\\manifest.json',
       manifestSize: 88,
       manifestMtimeMs: 3000,
-      manifestSourceType: 'download',
-      manifestVersion: 'v0.9.0',
+      manifestSourceType: 'github-release',
       platform: 'win32',
       resourcesDirMtimeMs: 1000,
       resourcesPath: 'C:\\AionUi\\resources',
       runtimeDirMtimeMs: 2000,
-      runtimeDirPath: 'C:\\AionUi\\resources\\bundled-aioncore\\win32-x64',
+      runtimeDirPath: 'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64',
       runtimeKey: 'win32-x64',
     });
   });

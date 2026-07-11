@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAuthGate, GATE_COOKIE_NAME, parseCookie } from '../../../packages/web-host/src/webui-auth-gate.js';
 
 const FIXED_SECRET = Buffer.alloc(32, 7);
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function cookieValue(setCookie: string): string {
   // "webui_gate=<token>; Path=/; ..." → "webui_gate=<token>"
@@ -50,6 +54,74 @@ describe('createAuthGate', () => {
   it('rejects an expired cookie', () => {
     const gate = createAuthGate({ secret: FIXED_SECRET });
     expect(gate.isAuthorized(cookieValue(gate.mintCookie(-1)))).toBe(false);
+  });
+
+  it('expires the default session after eight hours', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-11T00:00:00.000Z'));
+    const gate = createAuthGate({ secret: FIXED_SECRET });
+    const cookie = cookieValue(gate.mintCookie());
+
+    vi.advanceTimersByTime(8 * 60 * 60 * 1000);
+
+    expect(gate.isAuthorized(cookie)).toBe(false);
+  });
+
+  it('revokes a logged-out bearer without invalidating a sibling session', () => {
+    const gate = createAuthGate({ secret: FIXED_SECRET });
+    const loggedOut = gate.mintToken({ userId: 'alice' });
+    const stillActive = gate.mintToken({ userId: 'alice' });
+
+    expect(gate.revokeToken(loggedOut)).toBe(true);
+    expect(gate.isAuthorizedToken(loggedOut)).toBe(false);
+    expect(gate.isAuthorizedToken(stillActive)).toBe(true);
+  });
+
+  it('revokes the current cookie token and rejects repeated revocation', () => {
+    const gate = createAuthGate({ secret: FIXED_SECRET });
+    const cookie = cookieValue(gate.mintCookie({ userId: 'alice' }));
+
+    expect(gate.revokeCookie(cookie)).toBe(true);
+    expect(gate.revokeCookie(cookie)).toBe(false);
+    expect(gate.isAuthorized(cookie)).toBe(false);
+  });
+
+  it('revokes all sessions for one user without affecting another user', () => {
+    const gate = createAuthGate({ secret: FIXED_SECRET });
+    const aliceCookie = cookieValue(gate.mintCookie({ userId: 'alice' }));
+    const aliceBearer = gate.mintToken({ userId: 'alice' });
+    const bobBearer = gate.mintToken({ userId: 'bob' });
+
+    expect(gate.revokeUserSessions('alice')).toBe(2);
+    expect(gate.isAuthorized(aliceCookie)).toBe(false);
+    expect(gate.isAuthorizedToken(aliceBearer)).toBe(false);
+    expect(gate.isAuthorizedToken(bobBearer)).toBe(true);
+  });
+
+  it('evicts the oldest session when one user exceeds the per-user cap', () => {
+    const gate = createAuthGate({ secret: FIXED_SECRET, maxSessionsPerUser: 2, maxSessions: 10 });
+    const aliceOldest = gate.mintToken({ userId: 'alice' });
+    const aliceNewer = gate.mintToken({ userId: 'alice' });
+    const bob = gate.mintToken({ userId: 'bob' });
+    const aliceNewest = gate.mintToken({ userId: 'alice' });
+
+    expect(gate.isAuthorizedToken(aliceOldest)).toBe(false);
+    expect(gate.isAuthorizedToken(aliceNewer)).toBe(true);
+    expect(gate.isAuthorizedToken(aliceNewest)).toBe(true);
+    expect(gate.isAuthorizedToken(bob)).toBe(true);
+  });
+
+  it('enforces a process-wide session cap across different users', () => {
+    const gate = createAuthGate({ secret: FIXED_SECRET, maxSessionsPerUser: 10, maxSessions: 3 });
+    const oldest = gate.mintToken({ userId: 'alice' });
+    const second = gate.mintToken({ userId: 'bob' });
+    const third = gate.mintToken({ userId: 'carol' });
+    const newest = gate.mintToken({ userId: 'dave' });
+
+    expect(gate.isAuthorizedToken(oldest)).toBe(false);
+    expect(gate.isAuthorizedToken(second)).toBe(true);
+    expect(gate.isAuthorizedToken(third)).toBe(true);
+    expect(gate.isAuthorizedToken(newest)).toBe(true);
   });
 
   it('rejects a malformed token', () => {

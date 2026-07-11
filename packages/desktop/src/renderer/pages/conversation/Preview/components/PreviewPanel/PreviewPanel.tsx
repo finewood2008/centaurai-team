@@ -7,6 +7,7 @@
 import { ipcBridge } from '@/common';
 import { downloadFileFromPath, downloadTextContent } from '@/renderer/utils/file/download';
 import { useLayoutContext } from '@/renderer/hooks/context/LayoutContext';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 import { PreviewToolbarExtrasProvider, type PreviewToolbarExtras } from '../../context/PreviewToolbarExtrasContext';
 import { usePreviewContext } from '../../context/PreviewContext';
 import { useResizableSplit } from '@/renderer/hooks/ui/useResizableSplit';
@@ -33,7 +34,7 @@ import {
   type CloseTabConfirmState,
   type PreviewTab,
 } from '.';
-import { DEFAULT_SPLIT_RATIO, FILE_TYPES_WITH_BUILTIN_OPEN, MAX_SPLIT_WIDTH, MIN_SPLIT_WIDTH } from '../../constants';
+import { DEFAULT_SPLIT_RATIO, MAX_SPLIT_WIDTH, MIN_SPLIT_WIDTH } from '../../constants';
 import {
   usePreviewHistory,
   usePreviewKeyboardShortcuts,
@@ -171,7 +172,7 @@ const PreviewPanel: React.FC = () => {
   // 处理关闭tab / Handle close tab
   const handleCloseTab = useCallback(
     (tabId: string) => {
-      const tab = tabs.find((t) => t.id === tabId);
+      const tab = tabs.find((previewTab) => previewTab.id === tabId);
       // 如果tab有未保存的修改，显示确认对话框 / If tab has unsaved changes, show confirmation dialog
       if (tab?.isDirty) {
         setCloseTabConfirm({ show: true, tabId });
@@ -227,7 +228,7 @@ const PreviewPanel: React.FC = () => {
   // 关闭左侧 tabs / Close tabs to the left
   const handleCloseLeft = useCallback(
     (tabId: string) => {
-      const currentIndex = tabs.findIndex((t) => t.id === tabId);
+      const currentIndex = tabs.findIndex((previewTab) => previewTab.id === tabId);
       if (currentIndex <= 0) return;
 
       const tabsToClose = tabs.slice(0, currentIndex);
@@ -240,7 +241,7 @@ const PreviewPanel: React.FC = () => {
   // 关闭右侧 tabs / Close tabs to the right
   const handleCloseRight = useCallback(
     (tabId: string) => {
-      const currentIndex = tabs.findIndex((t) => t.id === tabId);
+      const currentIndex = tabs.findIndex((previewTab) => previewTab.id === tabId);
       if (currentIndex < 0 || currentIndex >= tabs.length - 1) return;
 
       const tabsToClose = tabs.slice(currentIndex + 1);
@@ -253,7 +254,7 @@ const PreviewPanel: React.FC = () => {
   // 关闭其他 tabs / Close other tabs
   const handleCloseOthers = useCallback(
     (tabId: string) => {
-      const tabsToClose = tabs.filter((t) => t.id !== tabId);
+      const tabsToClose = tabs.filter((previewTab) => previewTab.id !== tabId);
       tabsToClose.forEach((tab) => closeTab(tab.id));
       setContextMenu({ show: false, x: 0, y: 0, tabId: null });
     },
@@ -273,11 +274,6 @@ const PreviewPanel: React.FC = () => {
   const isMarkdown = content_type === 'markdown';
   const isHTML = content_type === 'html';
   const isEditable = metadata?.editable !== false; // 默认可编辑 / Default editable
-
-  // 检查文件类型是否已有内置的打开按钮（Word、PPT、PDF、Excel 组件内部已提供）
-  // Check if file type already has built-in open button
-  // (Word, PPT, PDF, Excel components provide their own)
-  const hasBuiltInOpenButton = (FILE_TYPES_WITH_BUILTIN_OPEN as readonly string[]).includes(content_type);
 
   // 对所有有 file_path 的文件显示"在系统中打开"按钮（统一在工具栏显示）
   // Show "Open in System" button for all files with file_path (unified in toolbar)
@@ -366,21 +362,31 @@ const PreviewPanel: React.FC = () => {
     }
 
     try {
-      // 使用系统默认应用打开文件 / Open file with system default application
-      await ipcBridge.shell.openFile.invoke(metadata.file_path);
+      const desktop = isElectronDesktop();
+      if (desktop) {
+        // 使用系统默认应用打开文件 / Open file with system default application
+        await ipcBridge.shell.openFile.invoke(metadata.file_path);
+      } else {
+        const rawFileName = metadata.file_name || `${content_type}-${Date.now()}`;
+        await downloadFileFromPath(metadata.file_path, rawFileName, metadata.workspace);
+      }
       try {
-        messageApi.success(t('preview.openInSystemSuccess'));
+        messageApi.success(
+          desktop
+            ? t('preview.openInSystemSuccess')
+            : t('messages.downloadSuccess', { defaultValue: 'Download successful' })
+        );
       } catch {
         // Context holder may be unmounted after async operation
       }
-    } catch (err) {
+    } catch {
       try {
         messageApi.error(t('preview.openInSystemFailed'));
       } catch {
         // Context holder may be unmounted after async operation
       }
     }
-  }, [metadata?.file_path, messageApi, t]);
+  }, [content_type, metadata?.file_name, metadata?.file_path, metadata?.workspace, messageApi, t]);
 
   // 渲染历史下拉菜单 / Render history dropdown
   const renderHistoryDropdown = () => {
@@ -586,7 +592,14 @@ const PreviewPanel: React.FC = () => {
         </div>
       );
     } else if (content_type === 'pdf') {
-      return <PDFPreview file_path={metadata?.file_path} content={content} />;
+      return (
+        <PDFPreview
+          file_path={metadata?.file_path}
+          file_name={metadata?.file_name}
+          workspace={metadata?.workspace}
+          content={content}
+        />
+      );
     } else if (content_type === 'ppt') {
       return <PptViewer file_path={metadata?.file_path} content={content} workspace={metadata?.workspace} />;
     } else if (content_type === 'word') {

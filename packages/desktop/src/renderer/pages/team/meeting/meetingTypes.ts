@@ -95,7 +95,7 @@ export type MeetingState = {
   awaitingContinue: boolean;
   /**
    * Workspace path of the auto-archived 方案书 (.md) once the meeting concludes.
-   * The file lands in the team's 临时空间 file tree and syncs to the Content Hub.
+   * The file lands in the team's 待整理生成物 file tree and syncs to Workspace.
    */
   archivedPath: string | null;
   /** Monotonic counter — bumped on every state change to drive re-renders. */

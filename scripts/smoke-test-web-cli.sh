@@ -34,8 +34,8 @@ cd "$TEMP_DIR/aionui-web"
 #   ├── aionui-web           ← single compiled executable (no bin/, no dist/, no node_modules)
 #   ├── package.json         ← for version lookup
 #   ├── static/              ← SPA assets
-#   └── bundled-aioncore/<plat-arch>/...
-for dir in static bundled-aioncore; do
+#   └── bundled-centaurai-core/<plat-arch>/...
+for dir in static bundled-centaurai-core; do
   if [ ! -d "$dir" ]; then
     echo "❌ Missing $dir directory"
     exit 1
@@ -71,25 +71,44 @@ echo "✓ Version: $VERSION"
 # 5. Test backend binary
 echo ""
 echo "5. Checking backend binary..."
-BACKEND_DIR="bundled-aioncore/$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/aarch64/arm64/; s/x86_64/x64/')"
-BACKEND_BINARY="$BACKEND_DIR/aioncore"
+BACKEND_DIR="bundled-centaurai-core/$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/aarch64/arm64/; s/x86_64/x64/')"
+BACKEND_BINARY="$BACKEND_DIR/centaurai-core"
 if [ ! -x "$BACKEND_BINARY" ]; then
   echo "❌ Backend binary missing or not executable: $BACKEND_BINARY"
   exit 1
 fi
-# aioncore has no --version flag. Read the pinned version from manifest.json
-# (which prepareAioncore writes at pack time) and use --help to confirm the
-# binary loads successfully on this platform's GLIBC / libstdc++ / etc.
-if [ -f "$BACKEND_DIR/manifest.json" ]; then
-  BACKEND_VERSION=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$BACKEND_DIR/manifest.json" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-  echo "✓ Backend version (from manifest): ${BACKEND_VERSION:-unknown}"
-fi
-if ! "$BACKEND_BINARY" --help > /dev/null 2>&1; then
-  echo "❌ Backend binary failed to exec (--help returned non-zero)"
-  "$BACKEND_BINARY" --help 2>&1 | head -5
+BACKEND_VERSION=$("$BACKEND_BINARY" --version)
+if ! echo "$BACKEND_VERSION" | grep -q '0\.1\.47'; then
+  echo "❌ Unexpected CentaurAI Core version: $BACKEND_VERSION"
   exit 1
 fi
-echo "✓ Backend binary loads on this platform"
+echo "✓ Backend binary: $BACKEND_VERSION"
+
+python3 - "$BACKEND_DIR/manifest.json" <<'PY'
+import json, re, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    manifest = json.load(handle)
+assert manifest["service"] == "centaurai-core", manifest
+assert manifest["repository"] == "finewood2008/centaurai-core", manifest
+assert manifest["tag"] == "v0.1.47", manifest
+assert re.fullmatch(r"[0-9a-f]{40}", manifest["commit"]), manifest
+assert re.fullmatch(r"[0-9a-f]{64}", manifest["sha256"]), manifest
+assert manifest["binaryName"] == "centaurai-core", manifest
+assert manifest["fallbackUsed"] is False, manifest
+print(f"✓ Provenance: {manifest['repository']}@{manifest['tag']} commit={manifest['commit']}")
+PY
+
+for tool in codex-acp claude-agent-acp; do
+  if ! find "$BACKEND_DIR/managed-resources/acp/$tool" -type f -name manifest.json -print -quit | grep -q .; then
+    echo "❌ Missing managed $tool manifest"
+    exit 1
+  fi
+done
+if ! find "$BACKEND_DIR/managed-resources/node" -type f -path '*/bin/node' -print -quit | grep -q .; then
+  echo "❌ Missing managed Node executable"
+  exit 1
+fi
+echo "✓ Managed Node, Codex ACP, and Claude ACP resources present"
 
 # 6. HTTP-level smoke: start web-cli, curl the root, check for SPA shell
 echo ""

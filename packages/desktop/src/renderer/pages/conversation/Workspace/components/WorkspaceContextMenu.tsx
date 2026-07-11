@@ -14,6 +14,7 @@ type WorkspaceContextMenuProps = {
   style: React.CSSProperties | undefined;
   node: IDirOrFile | null;
   t: TFunction;
+  canReveal?: boolean;
   // File operation handlers
   handleAddToChat: (node: IDirOrFile) => void;
   handleOpenNode: (node: IDirOrFile) => Promise<void>;
@@ -35,6 +36,7 @@ const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
   style,
   node,
   t,
+  canReveal = true,
   handleAddToChat,
   handleOpenNode,
   handleRevealNode,
@@ -80,16 +82,18 @@ const WorkspaceContextMenu: React.FC<WorkspaceContextMenuProps> = ({
         >
           {t('conversation.workspace.contextMenu.open')}
         </button>
-        <button
-          type='button'
-          className={MENU_BUTTON_BASE}
-          onClick={() => {
-            void handleRevealNode(node);
-            closeContextMenu();
-          }}
-        >
-          {t('conversation.workspace.contextMenu.openLocation')}
-        </button>
+        {canReveal && (
+          <button
+            type='button'
+            className={MENU_BUTTON_BASE}
+            onClick={() => {
+              void handleRevealNode(node);
+              closeContextMenu();
+            }}
+          >
+            {t('conversation.workspace.contextMenu.openLocation')}
+          </button>
+        )}
         {isFile && isPreviewSupported && (
           <button
             type='button'

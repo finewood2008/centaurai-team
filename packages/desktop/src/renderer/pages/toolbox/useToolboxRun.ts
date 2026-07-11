@@ -269,7 +269,7 @@ async function persistTextOutput(
  * generated images from the workspace for inline display. The created
  * conversation persists so the user can also open it in the normal chat view.
  * Workbench-category tools mark that backing conversation as hidden from the
- * sidebar; their saved files still surface through the workspace/Content Hub.
+ * sidebar; their saved files still surface through Workspace.
  */
 export function useToolboxRun(): UseToolboxRun {
   const { t } = useTranslation();

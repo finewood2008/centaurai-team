@@ -1,5 +1,5 @@
 /**
- * useNas — browses and mutates the enterprise LAN network drive.
+ * useNas — browses and mutates the Enterprise NAS.
  *
  * Holds the current relative path, the listing for it, and navigation +
  * mutation helpers (P2). `disabled` means the admin has not configured a shared

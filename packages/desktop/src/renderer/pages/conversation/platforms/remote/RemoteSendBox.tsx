@@ -53,8 +53,8 @@ const useRemoteSendBoxDraft = getSendBoxDraftHook('remote', {
 const EMPTY_AT_PATH: Array<string | FileOrFolderItem> = [];
 const EMPTY_UPLOAD_FILES: string[] = [];
 
-const RemoteSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id }) => {
-  const [workspacePath, setWorkspacePath] = useState('');
+const RemoteSendBox: React.FC<{ conversation_id: string; workspace?: string }> = ({ conversation_id, workspace }) => {
+  const [workspacePath, setWorkspacePath] = useState(workspace ?? '');
   const { t } = useTranslation();
   const teamPermission = useTeamPermission();
   const { checkAndUpdateTitle } = useAutoTitle();
@@ -135,6 +135,12 @@ const RemoteSendBox: React.FC<{ conversation_id: string }> = ({ conversation_id 
     },
     [mutateDraft]
   );
+
+  useEffect(() => {
+    if (workspace) {
+      setWorkspacePath(workspace);
+    }
+  }, [workspace]);
 
   const handleContentChange = useCallback(
     (val: string) => {

@@ -89,7 +89,7 @@
     }
   },
   "meeting": {
-    "attachShared": "引用共享库",
+    "attachShared": "引用企业 NAS",
     "boardTitle": "智囊团",
     "cancel": "取消会议",
     "continue": "继续讨论 →",
@@ -116,7 +116,7 @@
       "copied": "已复制方案书",
       "copy": "复制",
       "copyFailed": "复制失败",
-      "openHub": "在内容中心查看"
+      "openHub": "在工作空间查看"
     },
     "extraExpert": {
       "title": "加入更多专家（国产模型 / OpenClaw / Hermes 等）",

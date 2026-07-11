@@ -1,5 +1,5 @@
 /**
- * knowledgeApi — read-only access to the local vector DB (knowledge base).
+ * knowledgeApi — access to the local vector DB behind the Super Knowledge Base.
  *
  * Desktop runs co-located with the vector DB and reaches it directly. A WebUI
  * browser client cannot (the DB binds loopback on the server host), so it goes
@@ -7,10 +7,30 @@
  * endpoint. Mirrors the search recipe in pages/guid/hooks/useGuidSend.ts.
  */
 import { ipcBridge } from '@/common';
+import { LOCAL_VECTOR_DB_PROXY_BASE, normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { configService } from '@/common/config/configService';
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { fetchWithWebuiAuth, getBaseUrl, isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
 import { isElectronDesktop } from '@/renderer/utils/platform';
 import { blobToDataUrl } from '../components/view/imageThumb';
+
+const VECTOR_REQUEST_TIMEOUT_MS = 15_000;
+const VECTOR_UPLOAD_TIMEOUT_MS = 5 * 60_000;
+const MAX_SEARCH_RESULTS = 20;
+
+const shouldUseDirectVectorDb = (): boolean => isElectronDesktop() && !isRemoteClientBridgeMode();
+
+async function requestVector(
+  url: string,
+  init: RequestInit = {},
+  throughWebHost = false,
+  timeoutMs = VECTOR_REQUEST_TIMEOUT_MS
+): Promise<Response> {
+  // AbortSignal.timeout stays attached while callers consume json/blob bodies;
+  // clearing a manual timer as soon as headers arrive would leave a slow body
+  // able to hang the renderer indefinitely.
+  const requestInit = { ...init, signal: AbortSignal.timeout(timeoutMs) };
+  return throughWebHost ? await fetchWithWebuiAuth(url, requestInit) : await fetch(url, requestInit);
+}
 
 export type KnowledgeDoc = {
   id: string;
@@ -32,7 +52,7 @@ export type KnowledgeSearchResult = {
 };
 
 export function vectorEndpoint(): string {
-  return (configService.get('vectorDB.endpoint') ?? 'http://127.0.0.1:8618').replace(/\/+$/, '');
+  return normalizeVectorDbEndpoint(configService.get('vectorDB.endpoint'));
 }
 
 type RawDoc = { id: string; chunk_count?: number; metadata?: Record<string, unknown> };
@@ -57,17 +77,62 @@ function normalize(raw: RawDoc): KnowledgeDoc {
 
 export async function fetchKnowledgeDocs(limit = 300, offset = 0): Promise<{ total: number; docs: KnowledgeDoc[] }> {
   const endpoint = vectorEndpoint();
-  const resp = isElectronDesktop()
-    ? await fetch(`${endpoint}/api/documents?limit=${limit}&offset=${offset}`)
-    : await fetch(`${getBaseUrl()}/api/vector-documents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint, limit, offset }),
-      });
+  const safeLimit = Math.max(1, Math.min(300, Math.trunc(Number(limit) || 300)));
+  const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+  const direct = shouldUseDirectVectorDb();
+  const resp = direct
+    ? await requestVector(`${LOCAL_VECTOR_DB_PROXY_BASE}/api/documents?limit=${safeLimit}&offset=${safeOffset}`)
+    : await requestVector(
+        `${getBaseUrl()}/api/vector-documents`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint, limit: safeLimit, offset: safeOffset }),
+        },
+        true
+      );
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   const items: RawDoc[] = Array.isArray(data.items) ? data.items : [];
   return { total: num(data.total) || items.length, docs: items.map(normalize) };
+}
+
+export async function uploadKnowledgeFile(file: File): Promise<void> {
+  const endpoint = vectorEndpoint();
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const direct = shouldUseDirectVectorDb();
+  const resp = await requestVector(
+    direct
+      ? `${LOCAL_VECTOR_DB_PROXY_BASE}/api/upload`
+      : `${getBaseUrl()}/api/vector-upload?endpoint=${encodeURIComponent(endpoint)}`,
+    {
+      method: 'POST',
+      body: form,
+    },
+    !direct,
+    VECTOR_UPLOAD_TIMEOUT_MS
+  );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+}
+
+export async function deleteKnowledgeDoc(docId: string): Promise<void> {
+  const endpoint = vectorEndpoint();
+  const direct = shouldUseDirectVectorDb();
+  const resp = direct
+    ? await requestVector(`${LOCAL_VECTOR_DB_PROXY_BASE}/api/documents/${encodeURIComponent(docId)}`, {
+        method: 'DELETE',
+      })
+    : await requestVector(
+        `${getBaseUrl()}/api/vector-documents`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint, docId, action: 'delete' }),
+        },
+        true
+      );
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
 type RawSearchHit = {
@@ -99,28 +164,34 @@ export async function searchKnowledge(
   mode: 'text' | 'visual' | 'hybrid' = 'text'
 ): Promise<KnowledgeSearchResult[]> {
   const endpoint = vectorEndpoint();
-  const body = { query, n_results: nResults, mode };
-  const resp = isElectronDesktop()
-    ? await fetch(`${endpoint}/api/search`, {
+  const safeResultCount = Math.max(1, Math.min(MAX_SEARCH_RESULTS, Math.trunc(Number(nResults) || 8)));
+  const body = { query: String(query).slice(0, 4_000), n_results: safeResultCount, mode };
+  const direct = shouldUseDirectVectorDb();
+  const resp = direct
+    ? await requestVector(`${LOCAL_VECTOR_DB_PROXY_BASE}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
-    : await fetch(`${getBaseUrl()}/api/vector-search`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint, ...body }),
-      });
+    : await requestVector(
+        `${getBaseUrl()}/api/vector-search`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint, ...body }),
+        },
+        true
+      );
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const data = await resp.json();
   const results: RawSearchHit[] = Array.isArray(data.results) ? data.results : [];
   return results.map(normalizeSearchHit);
 }
 
-function imageUrl(path: string): string {
+export function knowledgeImageUrl(path: string): string {
   const endpoint = vectorEndpoint();
-  return isElectronDesktop()
-    ? `${endpoint}/api/image?path=${encodeURIComponent(path)}`
+  return shouldUseDirectVectorDb()
+    ? `${LOCAL_VECTOR_DB_PROXY_BASE}/api/image?path=${encodeURIComponent(path)}`
     : `${getBaseUrl()}/api/vector-image?endpoint=${encodeURIComponent(endpoint)}&path=${encodeURIComponent(path)}`;
 }
 
@@ -132,10 +203,10 @@ function imageUrl(path: string): string {
  */
 export async function loadKnowledgeImage(path: string): Promise<string | null> {
   try {
-    if (isElectronDesktop()) {
+    if (shouldUseDirectVectorDb()) {
       return await ipcBridge.fs.getImageBase64.invoke({ path });
     }
-    const resp = await fetch(imageUrl(path));
+    const resp = await requestVector(knowledgeImageUrl(path), {}, true);
     if (!resp.ok) return null;
     return await blobToDataUrl(await resp.blob());
   } catch {

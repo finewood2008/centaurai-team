@@ -42,8 +42,14 @@ export type WebHostOptions = {
   installerDir?: string;
   /** Directory hosting the enterprise LAN shared library, served at /api/shared-drive/*. */
   sharedDriveDir?: string;
+  /** Directory hosting the generated asset registry, served at /api/content-assets/*. */
+  contentAssetsDir?: string;
   /** Root of the enterprise LAN network drive, browsed read-only at /api/nas/*. */
   nasRootDir?: string;
+  /** Server-owned vector DB origin used by the LAN knowledge proxy. */
+  vectorEndpoint?: string;
+  /** Explicit administrator opt-in for plaintext HTTP to a non-loopback vector origin. */
+  allowInsecureVectorEndpoint?: boolean;
   /** Image workbench SPA dist dir, served to browser/LAN users at /workbench/image/*. */
   imageWorkbenchDir?: string;
   /** Server-held image API key, injected by the /workbench/image/__proxy/* proxy. */
@@ -80,4 +86,6 @@ export type WebHostHandle = {
   inspectEntry: EntryGuard['inspect'];
   /** Force a check + heal of the entry document; returns the resulting health. */
   repairEntry: EntryGuard['repair'];
+  /** Immediately revoke every active LAN session belonging to a backend user. */
+  revokeUserSessions: (userId: string) => number;
 };

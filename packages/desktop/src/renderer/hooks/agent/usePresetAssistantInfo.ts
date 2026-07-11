@@ -9,6 +9,7 @@ import { useTranslation } from 'react-i18next';
 import type { TChatConversation } from '@/common/config/storage';
 import { ipcBridge } from '@/common';
 import type { Assistant } from '@/common/types/agent/assistantTypes';
+import { resolveLocaleKey } from '@/common/utils/utils';
 import CoworkLogo from '@/renderer/assets/icons/cowork.svg';
 import { resolveExtensionAssetUrl } from '@/renderer/utils/platform';
 import { DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents, type AgentMetadata } from '@/renderer/utils/model/agentTypes';
@@ -163,7 +164,7 @@ function hasMatchingEnabledSkills(candidateSkills: string[] | undefined, enabled
  * Build assistant info from a backend-provided Assistant record.
  */
 function buildPresetInfoFromAssistant(assistant: Assistant, locale: string): PresetAssistantInfo {
-  const localeKey = locale.startsWith('zh') ? 'zh-CN' : 'en-US';
+  const localeKey = resolveLocaleKey(locale);
   const name = assistant.name_i18n?.[localeKey] || assistant.name_i18n?.[locale] || assistant.name || assistant.id;
   const avatar = typeof assistant.avatar === 'string' ? assistant.avatar : '';
   const normalized = normalizeAvatar(avatar);
@@ -183,6 +184,7 @@ function inferLegacyAssistantInfo(
       assistant.id,
       assistant.name,
       assistant.name_i18n?.['zh-CN'],
+      assistant.name_i18n?.['zh-TW'],
       assistant.name_i18n?.['en-US'],
     ])
   );

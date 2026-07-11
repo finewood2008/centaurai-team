@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """AionUi troubleshooting helper — engine-agnostic.
 
-Discovers the live aioncore backend (port, log-dir, data-dir, version) from the
+Discovers the live centaurai-core backend (port, log-dir, data-dir, provenance) from the
 running process, then exposes troubleshooting reads over the backend's REST API,
 its SQLite store, and its log files. Nothing here is specific to a single engine
 (claude / aionrs / gemini / openclaw); everything goes through AionUi's own
@@ -33,6 +33,7 @@ import re
 import json
 import sqlite3
 import subprocess
+import shlex
 import urllib.request
 import urllib.error
 import glob
@@ -41,30 +42,58 @@ import glob
 
 
 def _ps_aioncore():
-    """Return (pid, full_command) for the aioncore backend process, or (None, None).
+    """Return (pid, full_command, fallback_used) for the backend, or (None, None, False).
 
-    The backend is the aioncore launched with --data-dir (the Electron-spawned
+    Prefer centaurai-core launched with --data-dir (the Electron-spawned
     long-lived core), NOT the short-lived `mcp-guide-stdio` / `mcp-team-stdio`
     helper subprocesses that share the same binary name.
     """
     try:
         out = subprocess.check_output(["ps", "-axo", "pid,command"], text=True)
     except Exception:
-        return None, None
+        return None, None, False
+    candidates = []
     for line in out.splitlines():
-        if "aioncore" in line and "--data-dir" in line and "--port" in line:
+        if ("centaurai-core" in line or "aioncore" in line) and "--data-dir" in line and "--port" in line:
             line = line.strip()
             pid = line.split(None, 1)[0]
             cmd = line.split(None, 1)[1] if " " in line else ""
             if pid.isdigit():
-                return int(pid), cmd
-    return None, None
+                fallback = "centaurai-core" not in cmd and "aioncore" in cmd
+                candidates.append((fallback, int(pid), cmd))
+    if not candidates:
+        return None, None, False
+    fallback, pid, cmd = sorted(candidates, key=lambda item: item[0])[0]
+    return pid, cmd, fallback
 
 
 def _arg(cmd, flag):
     """Extract a `--flag VALUE` from a command string (VALUE has no spaces here)."""
     m = re.search(re.escape(flag) + r"\s+(\S+)", cmd or "")
     return m.group(1) if m else None
+
+
+def _binary_path(cmd):
+    """Return the executable path from a process command line."""
+    try:
+        parts = shlex.split(cmd or "")
+    except ValueError:
+        parts = (cmd or "").split()
+    return os.path.abspath(parts[0]) if parts else None
+
+
+def _artifact_provenance(binary_path):
+    """Read the adjacent bundle manifest for a packaged core."""
+    if not binary_path:
+        return None
+    manifest_path = os.path.join(os.path.dirname(binary_path), "manifest.json")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as manifest_file:
+            manifest = json.load(manifest_file)
+    except (OSError, ValueError):
+        return None
+    allowed = ("repository", "tag", "commit", "artifactUrl", "sha256", "binaryName")
+    return {key: manifest.get(key) for key in allowed if manifest.get(key) is not None}
 
 
 def _listen_ports(pid):
@@ -102,11 +131,11 @@ def discover(quiet=False):
     or exits(3) if not found. Memoized per-process."""
     if _CACHE:
         return _CACHE
-    pid, cmd = _ps_aioncore()
+    pid, cmd, fallback_used = _ps_aioncore()
     if not pid:
         if not quiet:
             sys.stderr.write(
-                "AionUi backend (aioncore) is not running. Ask the user to launch "
+                "CentaurAI Core is not running. Ask the user to launch "
                 "AionUi — do not guess a port.\n")
         sys.exit(3)
     log_dir = _arg(cmd, "--log-dir")
@@ -123,16 +152,24 @@ def discover(quiet=False):
     if not base:
         if not quiet:
             sys.stderr.write(
-                f"Found aioncore pid {pid} but no REST port answered /health "
+                f"Found backend pid {pid} but no REST port answered /health "
                 f"(ports tried: {_listen_ports(pid)}).\n")
         sys.exit(3)
+    health = _try_health(port) or {}
+    binary_path = _binary_path(cmd)
     info = {
         "pid": pid,
+        "binary_path": binary_path,
         "base_url": base,
         "port": port,
         "log_dir": log_dir,
         "data_dir": data_dir or os.path.expanduser("~/.aionui"),
         "version": version,
+        "service": health.get("service"),
+        "core_version": health.get("version"),
+        "core_commit": health.get("commit"),
+        "artifact": _artifact_provenance(binary_path),
+        "fallback_used": fallback_used or health.get("service") != "centaurai-core",
         "db_path": os.path.join(data_dir or os.path.expanduser("~/.aionui"),
                                 "aionui-backend.db"),
     }
@@ -421,8 +458,9 @@ def cmd_logs(argv):
 
 def cmd_overview(argv):
     info = discover()
-    snap = {"backend": {"version": info["version"], "port": info["port"],
-                        "log_dir": info["log_dir"], "data_dir": info["data_dir"]}}
+    snap = {"backend": {key: info.get(key) for key in (
+        "binary_path", "service", "core_version", "core_commit", "artifact",
+        "fallback_used", "version", "port", "log_dir", "data_dir")}}
     # health
     _, h = api_get("/health")
     snap["health"] = h

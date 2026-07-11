@@ -120,7 +120,7 @@ export type ToolDef = {
   /**
    * When present, text output is written into the created conversation
    * workspace as a Markdown artifact, so it appears in the temporary workspace
-   * panel and Content Hub automatically.
+   * panel and Workspace automatically.
    */
   persistTextOutput?: {
     fileNameSuffix: string;
@@ -167,6 +167,6 @@ export type ToolRunResult = {
   text: string;
   /** Generated images (for image tools). */
   images: ToolImageResult[];
-  /** Text/document artifacts saved into the workspace for Content Hub. */
+  /** Text/document artifacts saved into the workspace for later browsing. */
   files?: string[];
 };

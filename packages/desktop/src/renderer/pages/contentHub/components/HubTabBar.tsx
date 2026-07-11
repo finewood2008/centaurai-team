@@ -1,5 +1,5 @@
 /**
- * HubTabBar — top-level section switcher: 我的产物 / 共享库 / 知识库.
+ * HubTabBar — top-level section switcher: 生成物 / 企业 NAS / 超级知识库.
  */
 import React from 'react';
 import classNames from 'classnames';

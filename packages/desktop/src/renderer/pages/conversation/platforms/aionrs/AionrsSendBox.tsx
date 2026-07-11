@@ -33,7 +33,7 @@ import {
   type ConversationCommandQueueItem,
 } from '@/renderer/pages/conversation/platforms/useConversationCommandQueue';
 import { useConversationRuntimeView } from '@/renderer/pages/conversation/runtime/useConversationRuntimeView';
-import { getConversationOrNull } from '@/renderer/pages/conversation/utils/conversationCache';
+import { getConversationOrNull, refreshConversationCache } from '@/renderer/pages/conversation/utils/conversationCache';
 import { getConversationRuntimeWorkspaceErrorMessage } from '@/renderer/pages/conversation/utils/conversationCreateError';
 import { warmupConversation } from '@/renderer/pages/conversation/utils/warmupConversation';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
@@ -98,10 +98,11 @@ const useSendBoxDraft = (conversation_id: string) => {
 const AionrsSendBox: React.FC<{
   conversation_id: string;
   modelSelection: AionrsModelSelection;
+  workspace?: string;
   session_mode?: string;
   agent_name?: string;
-}> = ({ conversation_id, modelSelection, session_mode, agent_name }) => {
-  const [workspacePath, setWorkspacePath] = useState('');
+}> = ({ conversation_id, modelSelection, workspace, session_mode, agent_name }) => {
+  const [workspacePath, setWorkspacePath] = useState(workspace ?? '');
   const [dynamicModes, setDynamicModes] = useState<AgentModeOption[]>([]);
   const [currentMode, setCurrentMode] = useState<string | undefined>(session_mode);
   const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
@@ -149,7 +150,25 @@ const AionrsSendBox: React.FC<{
       await teamPermission.warmupSession();
     }
     await warmupConversation(conversation_id);
+    await refreshConversationCache(conversation_id).catch((error) => {
+      console.warn('[AionrsSendBox] Failed to refresh conversation after warmup:', error);
+    });
+    await getConversationOrNull(conversation_id)
+      .then((latest) => {
+        if (latest?.extra?.workspace) {
+          setWorkspacePath(latest.extra.workspace);
+        }
+      })
+      .catch((error) => {
+        console.warn('[AionrsSendBox] Failed to load workspace after warmup:', error);
+      });
   }, [conversation_id, teamPermission]);
+
+  useEffect(() => {
+    if (workspace) {
+      setWorkspacePath(workspace);
+    }
+  }, [workspace]);
 
   useEffect(() => {
     void getConversationOrNull(conversation_id).then((res) => {

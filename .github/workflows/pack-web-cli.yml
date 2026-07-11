@@ -118,7 +118,7 @@ jobs:
         env:
           PACK_PLATFORM: ${{ matrix.platform }}
           PACK_ARCH: ${{ matrix.arch }}
-          # Version is pinned in repo-root package.json (aioncoreVersion).
+          # Exact release tag is pinned in repo-root package.json (centauraiCoreVersion).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload tarball artifact

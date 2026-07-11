@@ -11,6 +11,8 @@ import {
   MULTI_USER_ENABLED,
   OFFICE_ASSISTANTS_ENABLED,
 } from '@/common/config/constants';
+import { isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
+import { isElectronDesktop } from '@/renderer/utils/platform';
 const Conversation = React.lazy(() => import('@renderer/pages/conversation'));
 const Guid = React.lazy(() => import('@renderer/pages/guid'));
 const AgentSettings = React.lazy(() => import('@renderer/pages/settings/AgentSettings'));
@@ -22,6 +24,7 @@ const ModeSettings = React.lazy(() => import('@renderer/pages/settings/ModeSetti
 const LocalModelsSettings = React.lazy(() => import('@renderer/pages/settings/LocalModelsSettings'));
 const SystemSettings = React.lazy(() => import('@renderer/pages/settings/SystemSettings'));
 const WebuiSettings = React.lazy(() => import('@renderer/pages/settings/WebuiSettings'));
+const AccountSettings = React.lazy(() => import('@renderer/pages/settings/AccountSettings'));
 const ClientSettings = React.lazy(() => import('@renderer/pages/settings/ClientSettings'));
 const UsersSettings = React.lazy(() => import('@renderer/pages/settings/UsersSettings'));
 const ExtensionSettingsPage = React.lazy(() => import('@renderer/pages/settings/ExtensionSettingsPage'));
@@ -30,7 +33,6 @@ const ComponentsShowcase = React.lazy(() => import('@renderer/pages/TestShowcase
 const ScheduledTasksPage = React.lazy(() => import('@renderer/pages/cron/ScheduledTasksPage'));
 const TaskDetailPage = React.lazy(() => import('@renderer/pages/cron/ScheduledTasksPage/TaskDetailPage'));
 const TeamIndex = React.lazy(() => import('@renderer/pages/team'));
-const AppStorePage = React.lazy(() => import('@renderer/pages/appstore'));
 const WorkbenchPage = React.lazy(() => import('@renderer/pages/workbench'));
 const AdvisorsPage = React.lazy(() => import('@renderer/pages/advisors/AdvisorsPage'));
 const ContentHubPage = React.lazy(() => import('@renderer/pages/contentHub'));
@@ -38,6 +40,17 @@ const DecisionHome = React.lazy(() => import('@renderer/pages/decision/DecisionH
 
 // Edition-aware landing: Decision opens on the 决策作战室 home; Team on the guide page.
 const HOME_PATH = IS_DECISION ? '/decision' : '/guid';
+
+function isDesktopAdminRuntime(): boolean {
+  return isElectronDesktop() && !isRemoteClientBridgeMode();
+}
+
+function getDefaultSettingsPath(): string {
+  if (MULTI_USER_ENABLED && !IS_DECISION && !isDesktopAdminRuntime()) {
+    return '/settings/account';
+  }
+  return '/settings/model';
+}
 
 function isDynamicImportFetchError(error: Error): boolean {
   return /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
@@ -192,6 +205,16 @@ const PanelRoute: React.FC<{ layout: React.ReactElement }> = ({ layout }) => {
           <Route path='/settings/tools' element={<Navigate to='/settings/capabilities?tab=tools' replace />} />
           <Route path='/settings/appearance' element={withRouteFallback(AppearanceSettings)} />
           <Route path='/settings/display' element={<Navigate to='/settings/appearance' replace />} />
+          <Route
+            path='/settings/account'
+            element={
+              MULTI_USER_ENABLED && !IS_DECISION ? (
+                withRouteFallback(AccountSettings)
+              ) : (
+                <Navigate to='/settings/model' replace />
+              )
+            }
+          />
           {/* Multi-user / LAN-server settings — full + Team; Decision is single-user, loopback-only. */}
           <Route
             path='/settings/webui'
@@ -203,17 +226,23 @@ const PanelRoute: React.FC<{ layout: React.ReactElement }> = ({ layout }) => {
           />
           <Route
             path='/settings/users'
-            element={MULTI_USER_ENABLED ? withRouteFallback(UsersSettings) : <Navigate to='/settings/model' replace />}
+            element={
+              MULTI_USER_ENABLED && isDesktopAdminRuntime() ? (
+                withRouteFallback(UsersSettings)
+              ) : (
+                <Navigate to='/settings/account' replace />
+              )
+            }
           />
           {/* Desktop pet is disabled in the CentaurAI shell. */}
           <Route path='/settings/pet' element={<Navigate to='/settings/model' replace />} />
           <Route path='/settings/system' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/about' element={withRouteFallback(SystemSettings)} />
           <Route path='/settings/ext/:tabId' element={withRouteFallback(ExtensionSettingsPage)} />
-          <Route path='/settings/appstore' element={withRouteFallback(AppStorePage)} />
-          <Route path='/settings' element={<Navigate to='/settings/model' replace />} />
+          <Route path='/settings/appstore' element={<Navigate to='/settings/model' replace />} />
+          <Route path='/settings' element={<Navigate to={getDefaultSettingsPath()} replace />} />
           <Route path='/test/components' element={withRouteFallback(ComponentsShowcase)} />
-          <Route path='/appstore' element={<Navigate to='/settings/appstore' replace />} />
+          <Route path='/appstore' element={<Navigate to='/settings/model' replace />} />
           {/* Workbench (office assistants + image studio) — full + Team; removed in Decision. */}
           <Route
             path='/workbench'

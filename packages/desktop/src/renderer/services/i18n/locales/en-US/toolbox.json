@@ -290,7 +290,7 @@
   "imageModelUnset": "Not configured",
   "imageModelPlaceholder": "Select an image model",
   "cancelRun": "Stop generation",
-  "savedToContentHub": "Saved automatically to Content Hub: {{fileName}}",
+  "savedToContentHub": "Saved automatically to Workspace: {{fileName}}",
   "generatedFiles": "Generated files",
   "openFile": "Open",
   "revealFile": "Reveal",
@@ -336,7 +336,7 @@
       "generatingWorkbench": "Generating workbench content",
       "generatingAgent": "Agent generating content",
       "collectingResults": "Collecting generated results",
-      "savingContentHub": "Saving to Content Hub"
+      "savingContentHub": "Saving to Workspace"
     },
     "stream": {
       "agentStarted": "Agent started processing",

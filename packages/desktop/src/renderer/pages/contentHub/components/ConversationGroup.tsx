@@ -13,8 +13,10 @@ type ConversationGroupProps = {
   view: HubViewMode;
   size: HubCardSize;
   onOpen: (file: FileEntry) => void;
+  onDirectOpen?: (file: FileEntry) => void;
   onShare?: (file: FileEntry) => void;
   onContextMenu?: (file: FileEntry, e: React.MouseEvent) => void;
+  renderList?: (files: FileEntry[]) => React.ReactNode;
 };
 
 const ConversationGroup: React.FC<ConversationGroupProps> = ({
@@ -23,8 +25,10 @@ const ConversationGroup: React.FC<ConversationGroupProps> = ({
   view,
   size,
   onOpen,
+  onDirectOpen,
   onShare,
   onContextMenu,
+  renderList,
 }) => {
   const [open, setOpen] = useState(true);
 
@@ -40,14 +44,19 @@ const ConversationGroup: React.FC<ConversationGroupProps> = ({
       </div>
       {open && (
         <div className='pl-20px'>
-          <FileGrid
-            files={files}
-            view={view}
-            size={size}
-            onOpen={onOpen}
-            onShare={onShare}
-            onContextMenu={onContextMenu}
-          />
+          {view === 'list' && renderList ? (
+            renderList(files)
+          ) : (
+            <FileGrid
+              files={files}
+              view={view}
+              size={size}
+              onOpen={onOpen}
+              onDirectOpen={onDirectOpen}
+              onShare={onShare}
+              onContextMenu={onContextMenu}
+            />
+          )}
         </div>
       )}
     </div>

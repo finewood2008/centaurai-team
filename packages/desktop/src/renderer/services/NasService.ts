@@ -9,8 +9,9 @@
  * routes on the host's web-host static-server (NOT served by aioncore, so HTTP
  * callers resolve their own base URL).
  */
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { fetchWithWebuiAuth, getBaseUrl } from '@/common/adapter/httpBridge';
 import { ipcBridge } from '@/common';
+import { normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { configService } from '@/common/config/configService';
 import { downloadFileFromPath } from '@/renderer/utils/file/download';
 import type { NasIndexProgressDTO } from '@/common/adapter/ipcBridge';
@@ -78,7 +79,7 @@ export async function listNas(relPath = ''): Promise<NasListResult> {
   }
   const base = await resolveBase();
   const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
-  const resp = await fetch(`${base}/api/nas/list${q}`);
+  const resp = await fetchWithWebuiAuth(`${base}/api/nas/list${q}`);
   if (!resp.ok) throw new Error(`nas list failed: ${resp.status}`);
   const body = (await resp.json()) as { data?: NasListing; disabled?: boolean };
   return {
@@ -97,24 +98,54 @@ export async function nasPreviewUrl(relPath: string): Promise<string> {
   return `${base}/api/nas/preview?path=${encodeURIComponent(relPath)}`;
 }
 
-/** Open a file for viewing (admin: system handler; web: new tab). */
-export async function openNasFile(relPath: string): Promise<void> {
+function openResolvedUrl(resolveUrl: () => Promise<string>): Promise<void> {
+  const target = window.open('', '_blank');
+  return resolveUrl()
+    .then((url) => {
+      if (target) target.location.href = url;
+      else window.location.assign(url);
+    })
+    .catch((error: unknown) => {
+      target?.close();
+      throw error;
+    });
+}
+
+export async function getNasLocalFileInfo(
+  relPath: string
+): Promise<{ path: string; name: string; mime: string; size: number } | null> {
+  if (!isAdminElectron()) return null;
+  return ipcBridge.nasDriveLocal.fileInfo.invoke({ path: relPath });
+}
+
+/** Open the original NAS file (admin: OS handler; web: attachment URL). */
+export async function openNasFileDirect(relPath: string): Promise<void> {
   if (isAdminElectron()) {
-    const info = await ipcBridge.nasDriveLocal.fileInfo.invoke({ path: relPath });
+    const info = await getNasLocalFileInfo(relPath);
     if (info) await ipcBridge.shell.openFile.invoke(info.path);
     return;
   }
-  window.open(await nasPreviewUrl(relPath), '_blank');
+  return openResolvedUrl(() => nasDownloadUrl(relPath));
+}
+
+/** Open a file for viewing (admin: system handler; web: new tab). */
+export async function openNasFile(relPath: string): Promise<void> {
+  if (isAdminElectron()) {
+    const info = await getNasLocalFileInfo(relPath);
+    if (info) await ipcBridge.shell.openFile.invoke(info.path);
+    return;
+  }
+  return openResolvedUrl(() => nasPreviewUrl(relPath));
 }
 
 /** Download a file (admin: native save from local path; web: browser download). */
 export async function downloadNasFile(relPath: string): Promise<void> {
   if (isAdminElectron()) {
-    const info = await ipcBridge.nasDriveLocal.fileInfo.invoke({ path: relPath });
+    const info = await getNasLocalFileInfo(relPath);
     if (info) await downloadFileFromPath(info.path, info.name);
     return;
   }
-  window.open(await nasDownloadUrl(relPath), '_blank');
+  return openResolvedUrl(() => nasDownloadUrl(relPath));
 }
 
 // --- Mutations (P2). Admin → main-process IPC; browser/distributed → HTTP. ---
@@ -127,7 +158,7 @@ export async function createNasFolder(parentRel: string, name: string): Promise<
     return;
   }
   const base = await resolveBase();
-  const resp = await fetch(
+  const resp = await fetchWithWebuiAuth(
     `${base}/api/nas/mkdir?path=${encodeURIComponent(parentRel)}&name=${encodeURIComponent(name)}`,
     {
       method: 'POST',
@@ -143,7 +174,9 @@ export async function removeNasEntry(relPath: string): Promise<void> {
     return;
   }
   const base = await resolveBase();
-  const resp = await fetch(`${base}/api/nas/remove?path=${encodeURIComponent(relPath)}`, { method: 'DELETE' });
+  const resp = await fetchWithWebuiAuth(`${base}/api/nas/remove?path=${encodeURIComponent(relPath)}`, {
+    method: 'DELETE',
+  });
   if (!resp.ok) throw new Error(`nas remove failed: ${resp.status}`);
 }
 
@@ -154,9 +187,10 @@ export async function moveNasEntry(fromRel: string, toRel: string): Promise<void
     return;
   }
   const base = await resolveBase();
-  const resp = await fetch(`${base}/api/nas/move?from=${encodeURIComponent(fromRel)}&to=${encodeURIComponent(toRel)}`, {
-    method: 'POST',
-  });
+  const resp = await fetchWithWebuiAuth(
+    `${base}/api/nas/move?from=${encodeURIComponent(fromRel)}&to=${encodeURIComponent(toRel)}`,
+    { method: 'POST' }
+  );
   if (!resp.ok) throw new Error(`nas move failed: ${resp.status}`);
 }
 
@@ -195,7 +229,7 @@ export async function uploadNasFiles(parentRel: string, files: File[]): Promise<
         continue;
       }
       const base = await resolveBase();
-      const resp = await fetch(
+      const resp = await fetchWithWebuiAuth(
         `${base}/api/nas/upload?path=${encodeURIComponent(parentRel)}&name=${encodeURIComponent(file.name)}`,
         { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: file }
       );
@@ -240,7 +274,7 @@ export type NasIndexProgress = NasIndexProgressDTO;
 
 /** Start indexing a NAS folder into the knowledge base; returns a job id to poll. */
 export async function startNasIndex(relPath: string, includeVideo: boolean): Promise<string> {
-  const endpoint = (configService.get('vectorDB.endpoint') ?? 'http://127.0.0.1:8618').replace(/\/+$/, '');
+  const endpoint = normalizeVectorDbEndpoint(configService.get('vectorDB.endpoint'));
   const { jobId } = await ipcBridge.nasDriveLocal.indexFolder.invoke({ path: relPath, endpoint, includeVideo });
   return jobId;
 }

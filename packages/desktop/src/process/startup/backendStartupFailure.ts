@@ -105,11 +105,12 @@ function classifyIncompleteInstallation(details: ErrorWithDetails['details']): B
   const hasPackagedApp = resourcesDirEntries.some((entry) => PACKAGED_APP_MARKER_ENTRIES.has(entry));
   if (!hasPackagedApp) return undefined;
 
-  const missingBundledAioncoreDir = !resourcesDirEntries.includes('bundled-aioncore/');
+  const bundledCoreDir = 'bundled-centaurai-core';
+  const missingBundledAioncoreDir = !resourcesDirEntries.includes(`${bundledCoreDir}/`);
   const missingRuntimeDir = details.runtimeDirExists === false && typeof details.runtimeKey === 'string';
-  const missingResources = missingBundledAioncoreDir ? ['bundled-aioncore/'] : [];
+  const missingResources = missingBundledAioncoreDir ? [`${bundledCoreDir}/`] : [];
   if (details.runtimeDirExists === false && typeof details.runtimeKey === 'string') {
-    missingResources.push(`bundled-aioncore/${details.runtimeKey}/`);
+    missingResources.push(`${bundledCoreDir}/${details.runtimeKey}/`);
   }
   const runtimeDirEntries = getStringArray(details.runtimeDirEntries);
   const missingManagedResourcesDir =
@@ -118,7 +119,7 @@ function classifyIncompleteInstallation(details: ErrorWithDetails['details']): B
     runtimeDirEntries !== undefined &&
     !runtimeDirEntries.includes('managed-resources/');
   if (missingManagedResourcesDir && typeof details.runtimeKey === 'string') {
-    missingResources.push(`bundled-aioncore/${details.runtimeKey}/managed-resources/`);
+    missingResources.push(`${bundledCoreDir}/${details.runtimeKey}/managed-resources/`);
   }
   const missingRuntimeBinary =
     details.runtimeDirExists === true &&
@@ -127,7 +128,7 @@ function classifyIncompleteInstallation(details: ErrorWithDetails['details']): B
     runtimeDirEntries !== undefined &&
     !runtimeDirEntries.includes(details.binaryName);
   if (missingRuntimeBinary && typeof details.runtimeKey === 'string' && typeof details.binaryName === 'string') {
-    missingResources.push(`bundled-aioncore/${details.runtimeKey}/${details.binaryName}`);
+    missingResources.push(`${bundledCoreDir}/${details.runtimeKey}/${details.binaryName}`);
   }
 
   if (missingResources.length === 0) return undefined;

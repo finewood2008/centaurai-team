@@ -12,22 +12,15 @@
  * The first entry is used as the default when the user hasn't made a selection.
  */
 export const DEFAULT_CODEX_MODELS: Array<{ id: string; label: string; description: string }> = [
-  { id: 'gpt-5.3-codex', label: 'gpt-5.3-codex', description: 'Latest frontier agentic coding model' },
-  { id: 'gpt-5.4', label: 'gpt-5.4', description: 'Latest frontier agentic coding model' },
-  { id: 'gpt-5.2-codex', label: 'gpt-5.2-codex', description: 'Frontier agentic coding model' },
-  {
-    id: 'gpt-5.1-codex-max',
-    label: 'gpt-5.1-codex-max',
-    description: 'Codex-optimized flagship for deep and fast reasoning',
-  },
+  { id: 'gpt-5.6-sol', label: 'gpt-5.6-sol', description: 'Latest frontier agentic coding model' },
+  { id: 'gpt-5.5', label: 'GPT-5.5', description: 'Frontier model for complex coding and research' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', description: 'Strong model for everyday coding' },
+  { id: 'gpt-5.4-mini', label: 'GPT-5.4-Mini', description: 'Small, fast, and cost-efficient coding model' },
+  { id: 'gpt-5.3-codex', label: 'gpt-5.3-codex', description: 'Coding-optimized model' },
+  { id: 'gpt-5.3-codex-spark', label: 'GPT-5.3-Codex-Spark', description: 'Ultra-fast coding model' },
   {
     id: 'gpt-5.2',
     label: 'gpt-5.2',
-    description: 'Latest frontier model with improvements across knowledge, reasoning and coding',
-  },
-  {
-    id: 'gpt-5.1-codex-mini',
-    label: 'gpt-5.1-codex-mini',
-    description: 'Optimized for codex. Cheaper, faster, but less capable',
+    description: 'Optimized for professional work and long-running agents',
   },
 ];

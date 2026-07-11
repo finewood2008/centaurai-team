@@ -25,8 +25,21 @@ import {
   setDesktopWebUIInitialPassword,
 } from '@process/utils/webuiConfig';
 import { advertiseServer, discoverServersOnce, type AdvertiseHandle } from '@process/discovery/lanDiscovery';
+import type { IWebUIMemoryFile } from '@/common/adapter/ipcBridge';
 
 type AdminUsernameResult = { username?: string };
+type RawMemoryFile = {
+  path?: unknown;
+  rel_path?: unknown;
+  source_path?: unknown;
+  size?: unknown;
+  updated_at?: unknown;
+  source_agent?: unknown;
+  metadata?: unknown;
+};
+type RawMemoryFilesResponse = { files?: unknown };
+type RawMemoryDocumentResponse = { content?: unknown; updated_at?: unknown };
+type VectorJsonResult<T> = { ok: boolean; status: number; data: T | null; text: string };
 
 /** Active LAN advertisement while the WebUI server runs (for the distributed
  *  client's auto-discovery). Started on WebUI start, stopped on WebUI stop. */
@@ -95,6 +108,86 @@ async function fetchAdminUsername(): Promise<string> {
   }
 }
 
+function safeVectorEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, '');
+  const parsed = new URL(trimmed);
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('[WebUI memory] vector endpoint must use http or https');
+  }
+  return trimmed;
+}
+
+function normalizeMemoryRelPath(relPath: string): string {
+  const normalized = relPath.trim().replace(/^\/+/, '').replace(/\\/g, '/');
+  if (!normalized) throw new Error('[WebUI memory] memory path is required');
+  if (normalized.split('/').some((segment) => segment === '..')) {
+    throw new Error('[WebUI memory] memory path cannot contain parent segments');
+  }
+  return normalized;
+}
+
+function encodeMemoryRelPath(relPath: string): string {
+  return normalizeMemoryRelPath(relPath).split('/').filter(Boolean).map(encodeURIComponent).join('/');
+}
+
+function memoryScopeQuery(scope?: string): string {
+  if (!scope) return '';
+  const normalized = scope.trim().toLowerCase();
+  if (!['auto', 'visible', 'personal', 'shared', 'all'].includes(normalized)) return '';
+  return normalized === 'auto' ? '' : `?scope=${encodeURIComponent(normalized)}`;
+}
+
+async function fetchVectorJson<T>(
+  endpoint: string,
+  apiPath: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string }
+): Promise<VectorJsonResult<T>> {
+  const response = await fetch(`${safeVectorEndpoint(endpoint)}${apiPath}`, init);
+  const text = await response.text();
+  let data: T | null = null;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      data = null;
+    }
+  }
+  return { ok: response.ok, status: response.status, data, text };
+}
+
+function assertVectorOk(action: string, result: VectorJsonResult<unknown>): void {
+  if (result.ok) return;
+  const detail = result.text ? `: ${result.text.slice(0, 180)}` : '';
+  throw new Error(`[WebUI memory] ${action} failed with HTTP ${result.status}${detail}`);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function normalizeMemoryFile(raw: RawMemoryFile): IWebUIMemoryFile | null {
+  const metadata = recordValue(raw.metadata);
+  const pathValue =
+    stringValue(raw.path) ??
+    stringValue(raw.rel_path) ??
+    stringValue(metadata?.rel_path) ??
+    stringValue(metadata?.path) ??
+    stringValue(raw.source_path);
+  if (!pathValue) return null;
+  return {
+    path: pathValue,
+    size: typeof raw.size === 'number' ? raw.size : undefined,
+    updated_at: stringValue(raw.updated_at),
+    source_agent: stringValue(raw.source_agent) ?? stringValue(metadata?.source_agent),
+    metadata,
+  };
+}
+
 /**
  * On first Enable-WebUI click after a fresh install, the backend's users table
  * holds the seeded `system_default_user` row with an empty password_hash.
@@ -158,6 +251,49 @@ export function initWebuiBridge(): void {
     await stopAdvertising();
     await stopDesktopWebUI();
     ipcBridge.webui.statusChanged.emit({ running: false });
+  });
+
+  ipcBridge.webui.memoryRead.provider(async ({ endpoint, relPath, scope }) => {
+    const result = await fetchVectorJson<RawMemoryDocumentResponse>(
+      endpoint,
+      `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`,
+      { method: 'GET' }
+    );
+    if (result.status === 404) return { content: '' };
+    assertVectorOk('read memory file', result);
+    return {
+      content: typeof result.data?.content === 'string' ? result.data.content : '',
+      updated_at: stringValue(result.data?.updated_at),
+    };
+  });
+
+  ipcBridge.webui.memoryList.provider(async ({ endpoint, scope }) => {
+    const result = await fetchVectorJson<RawMemoryFilesResponse>(endpoint, `/api/memory/files${memoryScopeQuery(scope)}`, {
+      method: 'GET',
+    });
+    assertVectorOk('list memory files', result);
+    const files = Array.isArray(result.data?.files)
+      ? result.data.files.map((file) => normalizeMemoryFile(file as RawMemoryFile)).filter((file) => !!file)
+      : [];
+    return { files };
+  });
+
+  ipcBridge.webui.memoryWrite.provider(async ({ endpoint, relPath, content, sourceAgent, scope }) => {
+    const result = await fetchVectorJson<unknown>(endpoint, `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-By': 'centaur-vdb' },
+      body: JSON.stringify({ content, source_agent: sourceAgent ?? 'centaurai-account' }),
+    });
+    assertVectorOk('write memory file', result);
+  });
+
+  ipcBridge.webui.memoryDelete.provider(async ({ endpoint, relPath, scope }) => {
+    const result = await fetchVectorJson<unknown>(endpoint, `/api/memory/files/${encodeMemoryRelPath(relPath)}${memoryScopeQuery(scope)}`, {
+      method: 'DELETE',
+      headers: { 'X-Requested-By': 'centaur-vdb' },
+    });
+    if (result.status === 404) return;
+    assertVectorOk('delete memory file', result);
   });
 
   // LAN discovery: let the renderer (distributed client's "select server"

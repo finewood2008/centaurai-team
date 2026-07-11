@@ -1,6 +1,6 @@
 ---
 name: aionui-troubleshooting
-description: Diagnose a running CentaurAI installation — locate and inspect conversations (including stuck/running ones), read aioncore logs, check LLM provider health, list scheduled cron jobs and their last run status, inspect teams and member state, and check MCP server health. Use when the user reports that CentaurAI is misbehaving: a conversation is stuck or errored, an LLM/provider call is failing, a scheduled task did not run, an MCP server has no tools, a team member is hung, or they just ask "what's wrong with CentaurAI" / "排查一下 aionui". Engine-agnostic — works the same for claude / aionrs / gemini / openclaw conversations.
+description: Diagnose a running CentaurAI installation — identify CentaurAI Core provenance and legacy fallback use, locate and inspect conversations (including stuck/running ones), read backend logs, check LLM provider health, list scheduled cron jobs and their last run status, inspect teams and member state, and check MCP server health. Use when CentaurAI is misbehaving, a conversation is stuck or errored, an LLM/provider call fails, a scheduled task did not run, an MCP server has no tools, a team member is hung, or the user asks "what's wrong with CentaurAI" / "排查一下 aionui". Engine-agnostic — works the same for claude / aionrs / gemini / openclaw conversations.
 ---
 
 > **⚠️ Platform note — read before running any command.** The shell snippets in this skill are written for **macOS / Linux** (bash/zsh). Always check which OS you are on first. On **Windows** do **not** run them verbatim — the underlying tool/CLI commands are usually cross-platform, but the surrounding shell syntax is not. Translate it to PowerShell before running:
@@ -22,7 +22,7 @@ description: Diagnose a running CentaurAI installation — locate and inspect co
 # CentaurAI Troubleshooting
 
 Diagnose a running CentaurAI installation by reading its **project-level** data:
-the aioncore REST API, the unified SQLite store, and the aioncore log files.
+the CentaurAI Core REST API, the unified SQLite store, and backend log files.
 
 This is **engine-agnostic**. CentaurAI runs conversations on several backends
 (`acp`/claude, `aionrs`, `gemini`), but troubleshooting goes
@@ -35,8 +35,8 @@ backend and are already covered by the unified `messages` table.
 
 ## How it works
 
-CentaurAI is front/back separated: the Electron UI talks to a local `aioncore`
-backend. The backend's REST port is **dynamic** (aioncore launches with
+CentaurAI is front/back separated: the Electron UI talks to local
+`centaurai-core`. The backend's REST port is **dynamic** (it launches with
 `--port 0`), so the first step is always discovery. The helper script discovers
 everything from the running process and wraps every read.
 
@@ -53,23 +53,34 @@ python3 scripts/aion_diag.py discover
 ```json
 {
   "pid": 86716,
+  "binary_path": "/Applications/CentaurAI.app/Contents/Resources/bundled-centaurai-core/darwin-arm64/centaurai-core",
   "base_url": "http://127.0.0.1:58188",
   "port": 58188,
   "log_dir": "/Users/you/Library/Logs/CentaurAI",
   "data_dir": "/Users/you/.aionui",
   "version": "2.1.18",
+  "service": "centaurai-core",
+  "core_version": "0.1.47",
+  "core_commit": "558d5e0e...",
+  "artifact": {"repository": "finewood2008/centaurai-core", "tag": "v0.1.47"},
+  "fallback_used": false,
   "db_path": "/Users/you/.aionui/aionui-backend.db"
 }
 ```
 
 How discovery works (and why it's robust):
 
-- Finds the aioncore process started with `--data-dir` (the long-lived backend,
+- Finds the `centaurai-core` process started with `--data-dir` (the long-lived backend,
   not the short-lived `mcp-guide-stdio` / `mcp-team-stdio` helper subprocesses).
+- Recognizes legacy `aioncore` only as a compatibility fallback and reports
+  `fallback_used: true`; surface this prominently in the diagnosis.
 - Reads `--log-dir`, `--data-dir`, `--app-version` straight from its argv — so
   if the user changed the log directory, **we follow it**, never hardcode it.
+- Reports the actual executable path and, for bundled builds, the adjacent
+  provenance manifest (repository, tag, commit, artifact URL, and hashes).
 - The REST port is NOT in argv (`--port 0`), so the script probes every port the
   process listens on and keeps the one that answers `/health` with `status:ok`.
+  A canonical core also reports `service:centaurai-core`, `version`, and `commit`.
 
 If `discover` exits with an error / code 3, CentaurAI is **not running**. Tell the
 user to launch it — do not guess a port.
@@ -132,7 +143,7 @@ python3 scripts/aion_diag.py logs --errors --lines 100
 
 > `model_health` only holds the **most recent** check per model — there's no
 > historical error log in it. For the actual failure cause (timeout, 401, 429,
-> bad base_url), the aioncore log is the source of truth.
+> bad base_url), the backend log is the source of truth.
 
 ### "A scheduled task didn't run"
 
@@ -171,7 +182,7 @@ others are `idle`) is the one to drill into with `conversation <member-conv-id>`
 ### "Is the backend even alive? What version?"
 
 ```bash
-python3 scripts/aion_diag.py health      # GET /health: status + core version + build_time
+python3 scripts/aion_diag.py health      # GET /health: service + version + commit + build_time
 python3 scripts/aion_diag.py discover    # also shows app version, port, dirs
 ```
 
@@ -181,7 +192,8 @@ python3 scripts/aion_diag.py discover    # also shows app version, port, dirs
 python3 scripts/aion_diag.py logs [--lines N] [--errors] [--conv <id>]
 ```
 
-- Tails the latest `*.aioncore.log` in the discovered `log_dir` (NDJSON: one
+- Tails the latest `*.aioncore.log` in the discovered `log_dir` (the log suffix
+  remains a compatibility interface; NDJSON: one
   JSON object per line — timestamp, level, target, HTTP status/path).
 - `--errors` keeps only ERROR/WARN/error/panic lines.
 - `--conv <id>` keeps only lines mentioning that conversation id — the fastest
@@ -199,7 +211,7 @@ get /api/<path>` does a raw (redacted) GET.
 
 | Concern                           | Source                                  | Access                  |
 | --------------------------------- | --------------------------------------- | ----------------------- |
-| Backend alive / version           | `GET /health`                           | REST                    |
+| Backend identity / provenance     | `GET /health` service/version/commit    | REST                    |
 | Conversation list + runtime state | `GET /api/conversations[/{id}]`         | REST                    |
 | Conversation messages / errors    | `messages` table (by `conversation_id`) | SQLite (read-only)      |
 | LLM provider health               | `GET /api/providers` → `model_health`   | REST (api_key redacted) |

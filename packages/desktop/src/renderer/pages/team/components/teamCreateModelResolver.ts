@@ -6,6 +6,7 @@
 
 import { configService } from '@/common/config/configService';
 import type { AcpModelInfo } from '@/common/types/platform/acpTypes';
+import { normalizeAcpModelIdForCreate } from '@/common/utils/acpModelIds';
 import { getAgents } from '@/renderer/hooks/agent/useAgents';
 
 /**
@@ -43,13 +44,14 @@ export async function resolveDefaultTeamAgentModel(params: {
 }
 
 async function resolveAcpDefaultModel(agent_type: string): Promise<string> {
-  // 1. Try handshake data from /api/agents
+  // 1. Try handshake data from Core's management catalog
   try {
     const agents = await getAgents();
     const matched = agents.find((a) => (a.backend ?? a.agent_type) === agent_type);
     const handshakeModels = matched?.handshake?.available_models as AcpModelInfo | undefined;
-    if (handshakeModels?.current_model_id) {
-      return handshakeModels.current_model_id;
+    const normalizedModelId = normalizeAcpModelIdForCreate(agent_type, handshakeModels?.current_model_id);
+    if (normalizedModelId) {
+      return normalizedModelId;
     }
   } catch {
     // Fall through to cached models

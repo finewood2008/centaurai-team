@@ -46,7 +46,7 @@ import { Brain, MagicHat, Shield } from '@icon-park/react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { buildSendFailureError } from './buildSendFailureError';
-import { maybeAttachLocalVectorContext } from './localVectorDbContext';
+import { maybeAttachKnowledgeRetrievalContext } from './knowledgeRetrievalContext';
 import { useAcpInitialMessage } from './useAcpInitialMessage';
 import type { UseAcpMessageReturn } from './useAcpMessage';
 
@@ -259,8 +259,8 @@ const AcpSendBox: React.FC<{
 
   const executeCommand = useCallback(
     async ({ input, files }: Pick<ConversationCommandQueueItem, 'input' | 'files'>) => {
-      const inputWithLocalContext = await maybeAttachLocalVectorContext(input, backend);
-      const displayMessage = buildDisplayMessage(inputWithLocalContext, files, workspacePath || '');
+      const inputWithKnowledgeContext = await maybeAttachKnowledgeRetrievalContext(input, backend);
+      const displayMessage = buildDisplayMessage(inputWithKnowledgeContext, files, workspacePath || '');
 
       runtimeView.markSendStarted();
       setAiProcessing(true);

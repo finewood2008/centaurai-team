@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveImageWorkbenchConfig, restoreDesktopWebUIFromPreferences } from '@/process/utils/webuiConfig';
+import {
+  resolveImageWorkbenchConfig,
+  resolveVectorEndpoint,
+  restoreDesktopWebUIFromPreferences,
+} from '@/process/utils/webuiConfig';
+import { DEFAULT_VECTOR_DB_ENDPOINT } from '@/common/config/constants';
 
 const { httpRequestMock, startWebHostMock } = vi.hoisted(() => ({
   httpRequestMock: vi.fn(),
@@ -101,9 +106,9 @@ describe('restoreDesktopWebUIFromPreferences', () => {
     await done;
 
     // 3 preference reads (2 refused + 1 success) prove the retry-not-disable
-    // behavior; startDesktopWebUI then makes 3 more reads
-    // (resolveNasRootDir + resolveImageWorkbenchConfig settings + providers) → 6 total.
-    expect(httpRequestMock).toHaveBeenCalledTimes(6);
+    // behavior; startDesktopWebUI then makes 4 more reads (resolveNasRootDir +
+    // resolveVectorEndpoint + resolveImageWorkbenchConfig settings + providers) → 7 total.
+    expect(httpRequestMock).toHaveBeenCalledTimes(7);
     expect(startWebHostMock).toHaveBeenCalledTimes(1);
     expect(startWebHostMock.mock.calls[0][0]).toMatchObject({ allowRemote: true });
   });
@@ -114,6 +119,40 @@ describe('restoreDesktopWebUIFromPreferences', () => {
     await restoreDesktopWebUIFromPreferences();
 
     expect(startWebHostMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveVectorEndpoint', () => {
+  const previousEndpoint = process.env.AIONUI_VECTOR_DB_ENDPOINT;
+  const previousCentaurEndpoint = process.env.CENTAURAI_VECTOR_DB_ENDPOINT;
+
+  beforeEach(() => {
+    httpRequestMock.mockReset();
+    delete process.env.AIONUI_VECTOR_DB_ENDPOINT;
+    delete process.env.CENTAURAI_VECTOR_DB_ENDPOINT;
+  });
+
+  afterEach(() => {
+    if (previousEndpoint === undefined) delete process.env.AIONUI_VECTOR_DB_ENDPOINT;
+    else process.env.AIONUI_VECTOR_DB_ENDPOINT = previousEndpoint;
+    if (previousCentaurEndpoint === undefined) delete process.env.CENTAURAI_VECTOR_DB_ENDPOINT;
+    else process.env.CENTAURAI_VECTOR_DB_ENDPOINT = previousCentaurEndpoint;
+  });
+
+  it('rejects a historical non-loopback client setting and falls back to the edition default', async () => {
+    httpRequestMock.mockResolvedValueOnce({ 'vectorDB.endpoint': 'https://attacker.example' });
+    await expect(resolveVectorEndpoint()).resolves.toBe(DEFAULT_VECTOR_DB_ENDPOINT);
+  });
+
+  it('accepts a strict loopback client setting', async () => {
+    httpRequestMock.mockResolvedValueOnce({ 'vectorDB.endpoint': 'http://localhost:9861/' });
+    await expect(resolveVectorEndpoint()).resolves.toBe('http://localhost:9861');
+  });
+
+  it('allows an explicit administrator environment override for an external origin', async () => {
+    process.env.AIONUI_VECTOR_DB_ENDPOINT = 'https://vectors.example:9443';
+    await expect(resolveVectorEndpoint()).resolves.toBe('https://vectors.example:9443');
+    expect(httpRequestMock).not.toHaveBeenCalled();
   });
 });
 

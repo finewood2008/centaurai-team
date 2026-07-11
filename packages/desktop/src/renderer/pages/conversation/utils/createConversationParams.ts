@@ -12,6 +12,7 @@ import type { Assistant } from '@/common/types/agent/assistantTypes';
 import { DEFAULT_CODEX_MODELS } from '@/common/types/codex/codexModels';
 import { CODEX_MODE_NATIVE_FULL_ACCESS, normalizeCodexMode } from '@/common/types/codex/codexModes';
 import { resolveLocaleKey } from '@/common/utils';
+import { normalizeAcpModelIdForCreate } from '@/common/utils/acpModelIds';
 import { loadPresetAssistantResources } from '@/common/utils/presetAssistantResources';
 import {
   buildAgentConversationParams,
@@ -68,17 +69,18 @@ async function resolvePreferredAcpModelId(backend: string): Promise<string | und
   const acpConfig = configService.get('acp.config');
   const backendConfig = acpConfig?.[backend as string] as { preferredModelId?: string } | undefined;
   const preferredModelId = backendConfig?.preferredModelId;
-  if (typeof preferredModelId === 'string' && preferredModelId.trim().length > 0) {
-    return preferredModelId;
+  const normalizedPreferredModelId = normalizeAcpModelIdForCreate(backend, preferredModelId);
+  if (normalizedPreferredModelId) {
+    return normalizedPreferredModelId;
   }
 
   // Fallback: last-seen model info persisted on the backend's agent_metadata row.
   const agents = await getAgents();
   const matched = agents.find((a) => (a.backend ?? a.agent_type) === backend);
   const handshakeModels = matched?.handshake?.available_models as AcpModelInfo | undefined;
-  const handshakeModelId = handshakeModels?.current_model_id;
-  if (typeof handshakeModelId === 'string' && handshakeModelId.trim().length > 0) {
-    return handshakeModelId;
+  const normalizedHandshakeModelId = normalizeAcpModelIdForCreate(backend, handshakeModels?.current_model_id);
+  if (normalizedHandshakeModelId) {
+    return normalizedHandshakeModelId;
   }
 
   if (backend === 'codex' && DEFAULT_CODEX_MODELS.length > 0) {

@@ -53,7 +53,7 @@ export function buildReferenceContext(knowledgeContext: string | null, attachmen
   }
   if (attachmentPaths.length > 0) {
     const list = attachmentPaths.map((p) => `- ${p}`).join('\n');
-    sections.push(`── 共享库资料（本机文件，可用文件读取工具打开查阅）──\n${list}`);
+    sections.push(`── 企业 NAS 资料（本机文件，可用文件读取工具打开查阅）──\n${list}`);
   }
   if (sections.length === 0) return '';
   return ['【背景资料 / 参考材料】（请在讨论中充分参考）', ...sections].join('\n\n');
@@ -443,11 +443,11 @@ export function hasResolutionOptions(text: string): boolean {
 
 /**
  * Task asking the leader (who has officecli + file skills) to archive the 方案书
- * as Word/PPT/Markdown into the workspace, where it surfaces in the Content Hub.
+ * as Word/PPT/Markdown into the workspace, where it surfaces in Workspace.
  */
 export function buildExportTask(plan: string): string {
   return [
-    '请把下面这份《方案书》整理并归档到当前工作区目录（之后可在「内容中心」查看）：',
+    '请把下面这份《方案书》整理并归档到当前工作区目录（之后可在「工作空间」查看）：',
     '1）用 officecli 导出为 Word（.docx）一份；',
     '2）用 officecli 导出为 PPT（.pptx）一份；',
     '3）同时保存一份 Markdown（.md）。',

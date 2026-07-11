@@ -1,4 +1,4 @@
-# 半人马AI超级工作台 build variant.
+# 半人马AI超级知识库 build variant.
 # Differs from electron-builder.yml ONLY by branding (appId / productName /
 # executableName / linux launcher name). Same full payload as the base (keeps the
 # bundled aioncore backend — the team box is the multi-user LAN server).
@@ -6,8 +6,8 @@
 # AIONUI_EDITION=team (Vite `define` → common/config/constants.ts), NOT here.
 # Keep in sync with electron-builder.yml for any shared files/target changes.
 appId: com.centaurai.team
-productName: CentaurAI Team
-executableName: CentaurAI Team
+productName: CentaurAI Knowledge Base
+executableName: CentaurAI Knowledge Base
 copyright: Copyright © 2026 半人马人工智能（深圳）有限公司
 
 protocols:
@@ -116,9 +116,9 @@ extraResources:
     to: .
   - from: resources/app.png
     to: app.png
-  # aioncore binary (pre-compiled per platform/arch, ships its own bun runtime)
-  - from: resources/bundled-aioncore
-    to: bundled-aioncore
+  # CentaurAI Core binary and managed ACP resources (pre-compiled per platform/arch)
+  - from: resources/bundled-centaurai-core
+    to: bundled-centaurai-core
   - from: resources/hub
     to: hub
   # Bundled expert library (agency advisors) seeded into the backend on startup
@@ -200,7 +200,7 @@ linux:
   description: ${description}
   desktop:
     entry:
-      Name: CentaurAI 超级工作台
+      Name: CentaurAI 超级知识库
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;

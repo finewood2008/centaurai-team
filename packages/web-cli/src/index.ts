@@ -7,12 +7,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openBrowserUrl, shouldAutoOpenBrowser } from './browser.js';
 import { ensureAdminPassword } from './ensureAdminPassword.js';
+import {
+  CoreBinaryResolveError,
+  resolveCoreBinary,
+  type CoreBinaryResolution,
+} from '../../shared-scripts/src/resolve-core-binary.js';
 
 // tarball layout:
 //   aionui-web/
 //   ├── aionui-web              ← bun-compiled standalone binary (process.execPath)
 //   ├── package.json             ← for runtime version lookup
-//   ├── bundled-aioncore/<plat-arch>/aioncore[.exe]
+//   ├── bundled-centaurai-core/<plat-arch>/centaurai-core[.exe]
 //   └── static/                  ← SPA assets
 //
 // Under `bun build --compile`, import.meta.url resolves to a virtual /$bunfs/
@@ -49,7 +54,6 @@ const isPackaged = (() => {
   return exeName === 'aionui-web' || exeName === 'aionui-web.exe';
 })();
 
-const BACKEND_BINARY = process.platform === 'win32' ? 'aioncore.exe' : 'aioncore';
 const DEFAULT_PORT = 25808;
 const RESET_COMMAND = isPackaged ? 'aionui-web resetpass' : 'bun run resetpass';
 
@@ -73,14 +77,36 @@ function parseArgs(argv: string[]): { command: string; flags: Map<string, string
   return { command, flags };
 }
 
-function resolveBackendBinary(flags: Map<string, string | true>): string {
+function resolveBackendBinary(flags: Map<string, string | true>, allowMissing = false): CoreBinaryResolution | undefined {
   const override = flags.get('backend-bin');
-  if (typeof override === 'string') return path.resolve(override);
-  const envOverride = process.env.AIONUI_BACKEND_BIN;
-  if (envOverride) return path.resolve(envOverride);
-  const platArch = `${process.platform}-${process.arch}`;
-  const bundled = path.join(cliRoot, 'bundled-aioncore', platArch, BACKEND_BINARY);
-  return bundled;
+  const env = { ...process.env };
+  if (typeof override === 'string') env.CENTAURAI_CORE_BIN = path.resolve(override);
+  try {
+    return resolveCoreBinary({ resourcesRoot: cliRoot, env });
+  } catch (error) {
+    const hasExplicitOverride = typeof override === 'string' || Boolean(env.CENTAURAI_CORE_BIN || env.AIONUI_BACKEND_BIN);
+    if (!allowMissing || hasExplicitOverride) throw error;
+    if (error instanceof CoreBinaryResolveError) {
+      console.warn('[centaurai-core] binary resolution failed', error.diagnostics);
+    }
+    return undefined;
+  }
+}
+
+function logBackendResolution(resolution: CoreBinaryResolution): void {
+  const manifest = resolution.manifest ?? {};
+  const details = {
+    path: resolution.path,
+    source: resolution.source,
+    fallbackUsed: resolution.fallbackUsed,
+    repository: manifest.repository,
+    tag: manifest.tag,
+    commit: manifest.commit,
+    artifactUrl: manifest.artifactUrl,
+    sha256: manifest.sha256,
+  };
+  if (resolution.fallbackUsed) console.warn('[centaurai-core] LEGACY FALLBACK binary resolved', details);
+  else console.info('[centaurai-core] binary resolved', details);
 }
 
 function resolveStaticDir(flags: Map<string, string | true>): string {
@@ -131,7 +157,8 @@ function readPackageVersion(): string {
 }
 
 async function runStart(flags: Map<string, string | true>): Promise<void> {
-  const backendBin = resolveBackendBinary(flags);
+  const backendResolution = resolveBackendBinary(flags, true);
+  const backendBin = backendResolution?.path;
   const staticDir = resolveStaticDir(flags);
   const dataDir = resolveDataDir(flags);
   fs.mkdirSync(dataDir, { recursive: true });
@@ -157,20 +184,18 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
   console.log(`[aionui-web] data dir   : ${dataDir}`);
   console.log(`[aionui-web] log dir    : ${logDir}`);
   console.log(`[aionui-web] static dir : ${staticDir}`);
-  console.log(`[aionui-web] backend bin: ${backendBin}`);
+  console.log(`[aionui-web] backend bin: ${backendBin ?? '<not found>'}`);
   console.log(`[aionui-web] launching  : port=${port} allowRemote=${allowRemote}`);
 
-  const backendAvailable = fs.existsSync(backendBin);
-
-  if (!backendAvailable) {
+  if (!backendResolution) {
     // Graceful degradation: serve the SPA shell without spawning backend.
     // API calls from the browser will 502/ECONNREFUSED — frontend is expected
     // to surface this to the user (e.g. "backend missing" banner).
     console.warn('');
     console.warn('⚠️  Backend binary not found — starting in FRONTEND-ONLY mode.');
-    console.warn(`   Missing: ${backendBin}`);
+    console.warn('   No canonical CentaurAI Core binary was resolved.');
     console.warn('   The web UI will load but API calls will fail until a backend is available.');
-    console.warn('   To enable backend: download aioncore and set AIONUI_BACKEND_BIN.');
+    console.warn('   To enable backend: install centaurai-core or set CENTAURAI_CORE_BIN.');
     console.warn('');
 
     const handle = await startStaticServer({
@@ -196,6 +221,8 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
     console.log('');
     console.log('Press Ctrl+C to stop.');
   } else {
+    logBackendResolution(backendResolution);
+    const resolvedBackendBin = backendResolution.path;
     const handle = await startWebHost({
       app: {
         version,
@@ -216,7 +243,7 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
       },
       backend: {
         kind: 'ownBackend',
-        resolveBackend: () => backendBin,
+        resolveBackend: () => resolvedBackendBin,
       },
     });
 
@@ -277,12 +304,14 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
  * DB the user normally runs against.
  */
 async function runResetPassword(flags: Map<string, string | true>): Promise<void> {
-  const backendBin = resolveBackendBinary(flags);
-  if (!fs.existsSync(backendBin)) {
-    console.error(`[aionui-web] backend binary not found: ${backendBin}`);
-    console.error('  hint: pass --backend-bin <path> or set AIONUI_BACKEND_BIN');
+  const backendResolution = resolveBackendBinary(flags);
+  if (!backendResolution) {
+    console.error('[aionui-web] CentaurAI Core binary not found');
+    console.error('  hint: pass --backend-bin <path> or set CENTAURAI_CORE_BIN');
     process.exit(1);
   }
+  const backendBin = backendResolution.path;
+  logBackendResolution(backendResolution);
   const dataDir = resolveDataDir(flags);
   fs.mkdirSync(dataDir, { recursive: true });
   const logDir = resolveLogDir(flags, dataDir);
@@ -397,7 +426,8 @@ Options for resetpass:
 
 Environment variables:
   AIONUI_PORT, AIONUI_ALLOW_REMOTE, AIONUI_DATA_DIR, AIONUI_LOG_DIR,
-  AIONUI_BACKEND_BIN, AIONUI_OPEN_BROWSER
+  CENTAURAI_CORE_BIN, CENTAURAI_CORE_BUNDLED_DIR,
+  AIONUI_BACKEND_BIN, AIONUI_BACKEND_BUNDLED_DIR, AIONUI_OPEN_BROWSER
 `);
     return;
   }

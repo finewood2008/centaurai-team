@@ -1,5 +1,5 @@
 /**
- * CategorySidebar — "全员可见 + 按分类" navigation for the shared library.
+ * CategorySidebar — legacy category navigation for Enterprise NAS entries.
  */
 import React from 'react';
 import classNames from 'classnames';

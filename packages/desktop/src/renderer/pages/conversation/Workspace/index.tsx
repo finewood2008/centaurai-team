@@ -114,7 +114,6 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
     closeContextMenu: modalsHook.closeContextMenu,
     setRenameModal: modalsHook.setRenameModal,
     setDeleteModal: modalsHook.setDeleteModal,
-    openPreview,
   });
 
   // Setup events
@@ -157,6 +156,16 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
     () => getDisplayName(workspace, isTemporaryWorkspace, t),
     [workspace, isTemporaryWorkspace, t]
   );
+  const emptyWorkspaceTitle = searchHook.searchText
+    ? t('conversation.workspace.search.empty')
+    : isTemporaryWorkspace
+      ? t('conversation.workspace.generatedEmpty')
+      : t('conversation.workspace.empty');
+  const emptyWorkspaceDescription = searchHook.searchText
+    ? ''
+    : isTemporaryWorkspace
+      ? t('conversation.workspace.generatedEmptyDescription')
+      : t('conversation.workspace.emptyDescription');
 
   let contextMenuStyle: React.CSSProperties | undefined;
   if (modalsHook.contextMenu.visible) {
@@ -312,6 +321,7 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
               style={contextMenuStyle}
               node={modalsHook.contextMenu.node}
               t={t}
+              canReveal={fileOpsHook.canReveal}
               handleAddToChat={fileOpsHook.handleAddToChat}
               handleOpenNode={fileOpsHook.handleOpenNode}
               handleRevealNode={fileOpsHook.handleRevealNode}
@@ -328,14 +338,8 @@ const ChatWorkspace: React.FC<WorkspaceProps> = ({
                 <Empty
                   description={
                     <div>
-                      <span className='text-t-secondary font-bold text-14px'>
-                        {searchHook.searchText
-                          ? t('conversation.workspace.search.empty')
-                          : t('conversation.workspace.empty')}
-                      </span>
-                      <div className='text-t-secondary'>
-                        {searchHook.searchText ? '' : t('conversation.workspace.emptyDescription')}
-                      </div>
+                      <span className='text-t-secondary font-bold text-14px'>{emptyWorkspaceTitle}</span>
+                      <div className='text-t-secondary'>{emptyWorkspaceDescription}</div>
                     </div>
                   }
                 />

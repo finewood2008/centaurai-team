@@ -1,6 +1,6 @@
 /**
  * SharedLibraryPicker — modal that lets the user pick one or more files from the
- * enterprise shared library to attach to the composer. Resolves each pick to a
+ * Enterprise NAS-compatible shared store to attach to the composer. Resolves each pick to a
  * local path (via SharedDriveService) and returns them through onConfirm.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';

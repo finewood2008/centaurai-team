@@ -12,7 +12,7 @@
  * resolve their own base URL (getBaseUrl() points at aioncore in Electron).
  */
 import { ipcBridge } from '@/common';
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { fetchWithWebuiAuth, getBaseUrl } from '@/common/adapter/httpBridge';
 import { downloadFileFromPath } from '@/renderer/utils/file/download';
 import { uploadFileViaHttp } from '@/renderer/services/FileService';
 import type { SharedFileEntry, SharedCategoryEntry } from '@/common/adapter/ipcBridge';
@@ -51,7 +51,7 @@ export async function resolveBase(): Promise<string> {
 
 async function getJson<T>(pathAndQuery: string): Promise<T> {
   const base = await resolveBase();
-  const resp = await fetch(`${base}${pathAndQuery}`);
+  const resp = await fetchWithWebuiAuth(`${base}${pathAndQuery}`);
   if (!resp.ok) throw new Error(`shared-drive ${pathAndQuery} failed: ${resp.status}`);
   const body = (await resp.json()) as { success?: boolean; data?: T };
   return (body.data ?? ([] as unknown)) as T;
@@ -74,7 +74,9 @@ export async function removeShared(id: string): Promise<void> {
     return;
   }
   const base = await resolveBase();
-  const resp = await fetch(`${base}/api/shared-drive/remove?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const resp = await fetchWithWebuiAuth(`${base}/api/shared-drive/remove?id=${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
   if (!resp.ok) throw new Error(`shared-drive remove failed: ${resp.status}`);
 }
 
@@ -88,24 +90,62 @@ export async function sharedPreviewUrl(id: string): Promise<string> {
   return `${base}/api/shared-drive/preview?id=${encodeURIComponent(id)}`;
 }
 
-/** Open a shared item for viewing (admin: system handler; web: new tab). */
-export async function openShared(id: string): Promise<void> {
+function openResolvedUrl(resolveUrl: () => Promise<string>): Promise<void> {
+  const target = window.open('', '_blank');
+  return resolveUrl()
+    .then((url) => {
+      if (target) target.location.href = url;
+      else window.location.assign(url);
+    })
+    .catch((error: unknown) => {
+      target?.close();
+      throw error;
+    });
+}
+
+export async function getSharedLocalInfo(id: string): Promise<{ path: string; name: string; mime: string } | null> {
+  if (!isAdminElectron()) return null;
+  return ipcBridge.sharedDriveLocal.blobInfo.invoke({ id });
+}
+
+/** Open a shared item preview (admin: system handler; web: inline preview tab). */
+export async function previewShared(id: string): Promise<void> {
   if (isAdminElectron()) {
-    const info = await ipcBridge.sharedDriveLocal.blobInfo.invoke({ id });
+    const info = await getSharedLocalInfo(id);
     if (info) await ipcBridge.shell.openFile.invoke(info.path);
     return;
   }
-  window.open(await sharedPreviewUrl(id), '_blank');
+  return openResolvedUrl(() => sharedPreviewUrl(id));
+}
+
+/** Open the original shared file (admin: OS handler; web: attachment URL). */
+export async function openSharedDirect(id: string): Promise<void> {
+  if (isAdminElectron()) {
+    const info = await getSharedLocalInfo(id);
+    if (info) await ipcBridge.shell.openFile.invoke(info.path);
+    return;
+  }
+  return openResolvedUrl(() => sharedDownloadUrl(id));
+}
+
+/** Open a shared item for viewing (admin: system handler; web: new tab). */
+export async function openShared(id: string): Promise<void> {
+  if (isAdminElectron()) {
+    const info = await getSharedLocalInfo(id);
+    if (info) await ipcBridge.shell.openFile.invoke(info.path);
+    return;
+  }
+  return openResolvedUrl(() => sharedPreviewUrl(id));
 }
 
 /** Download a shared item to the user's machine. */
 export async function downloadShared(id: string, name: string): Promise<void> {
   if (isAdminElectron()) {
-    const info = await ipcBridge.sharedDriveLocal.blobInfo.invoke({ id });
+    const info = await getSharedLocalInfo(id);
     if (info) await downloadFileFromPath(info.path, name);
     return;
   }
-  window.open(await sharedDownloadUrl(id), '_blank');
+  return openResolvedUrl(() => sharedDownloadUrl(id));
 }
 
 export type ShareToTeamInput = {
@@ -165,7 +205,7 @@ export async function fetchSharedAsFile(id: string, name: string): Promise<File>
     return new File([base64ToBytes(base64)], name, { type: info.mime });
   }
   const url = await sharedDownloadUrl(id);
-  const resp = await fetch(url);
+  const resp = await fetchWithWebuiAuth(url);
   if (!resp.ok) throw new Error(`shared-drive fetch failed: ${resp.status}`);
   const blob = await resp.blob();
   return new File([blob], name, { type: blob.type || 'application/octet-stream' });
@@ -195,7 +235,7 @@ async function uploadBytes(body: BlobPart, name: string, meta: UploadMeta): Prom
   if (meta.conversationId) params.set('conversation_id', meta.conversationId);
   if (meta.uploader) params.set('uploader', meta.uploader);
   if (meta.uploaderId) params.set('uploaderId', meta.uploaderId);
-  const resp = await fetch(`${base}/api/shared-drive/upload?${params.toString()}`, {
+  const resp = await fetchWithWebuiAuth(`${base}/api/shared-drive/upload?${params.toString()}`, {
     method: 'POST',
     headers: { 'content-type': 'application/octet-stream' },
     body: body instanceof Blob ? body : new Blob([body]),

@@ -7,6 +7,7 @@
 import { ipcBridge } from '@/common';
 import { emitter } from '@/renderer/utils/emitter';
 import type { FileEntry } from '@/renderer/pages/guid/components/RecentFiles';
+import { isUnsafeTemporaryWorkspacePath } from '@/renderer/utils/workspace/workspace';
 
 const STANDALONE_ARTIFACTS_KEY = 'centaurai.generated-artifacts.v1';
 const MAX_STANDALONE_ARTIFACTS = 300;
@@ -35,12 +36,13 @@ const GENERATED_ARTIFACT_EXTENSIONS = [
   'svg',
 ] as const;
 
-const GENERATED_ARTIFACT_EXT_RE = new RegExp(`\\.(${GENERATED_ARTIFACT_EXTENSIONS.join('|')})\\b`, 'i');
+const GENERATED_ARTIFACT_EXT_PATTERN = GENERATED_ARTIFACT_EXTENSIONS.join('|');
+const GENERATED_ARTIFACT_EXT_RE = new RegExp(`\\.(${GENERATED_ARTIFACT_EXT_PATTERN})\\b`, 'i');
 const GENERATED_ARTIFACT_PATH_RE = new RegExp(
   [
-    String.raw`file:\/\/[^\s<>"'\`]+\.(?:${GENERATED_ARTIFACT_EXTENSIONS.join('|')})\b`,
-    String.raw`["'\`]([^"'\`]+?\.(?:${GENERATED_ARTIFACT_EXTENSIONS.join('|')}))["'\`]`,
-    String.raw`(?:~|\/|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^<>"'\`\s]*?\.(?:${GENERATED_ARTIFACT_EXTENSIONS.join('|')})\b`,
+    String.raw`file:\/\/[^<>"'\`\r\n]+?\.(?:${GENERATED_ARTIFACT_EXT_PATTERN})\b`,
+    String.raw`["'\`]([^"'\`]+?\.(?:${GENERATED_ARTIFACT_EXT_PATTERN}))["'\`]`,
+    String.raw`(?:~|\/|\.{1,2}[\\/]|[A-Za-z]:[\\/])[^<>"'\`\r\n]*?\.(?:${GENERATED_ARTIFACT_EXT_PATTERN})\b`,
   ].join('|'),
   'gi'
 );
@@ -55,15 +57,36 @@ type StoredGeneratedArtifact = {
   addedAt: number;
 };
 
+type ConversationWorkspaceInfo = {
+  workspace: string;
+  isTemporary: boolean;
+};
+
 export type RegisterGeneratedArtifactsOptions = {
   paths: Array<string | null | undefined>;
   workspace?: string | null;
+  sourceWorkspace?: string | null;
   conversationId?: string;
   source?: ArtifactSource;
   standaloneLabel?: string;
 };
 
 const copiedExternalArtifactPaths = new Map<string, string>();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function inferConversationWorkspaceInfo(conversation: unknown): ConversationWorkspaceInfo | null {
+  if (!isRecord(conversation) || !isRecord(conversation.extra)) return null;
+  const extra = conversation.extra;
+  const workspace = typeof extra.workspace === 'string' && extra.workspace.trim() ? extra.workspace.trim() : '';
+  const isTemporary =
+    extra.is_temporary_workspace === true ||
+    extra.custom_workspace === false ||
+    (extra.is_temporary_workspace !== false && extra.custom_workspace !== true);
+  return { workspace, isTemporary };
+}
 
 function stripTrailingSlash(path: string): string {
   return path.replace(/[\\/]+$/, '');
@@ -193,6 +216,103 @@ export function extractGeneratedArtifactPaths(value: unknown, depth = 0): string
   return dedupePaths(paths);
 }
 
+function isReadonlyToolName(name: string): boolean {
+  return /^(read|list|get|search|grep|find|cat|view|preview|inspect|stat|metadata|ls)([_-]|$)/i.test(name);
+}
+
+function isWritingToolName(name: string): boolean {
+  return /(write|create|save|export|generate|convert|render|build|make|docx|word|ppt|pptx|pdf|xlsx|excel|image|artifact|report|deck|slides)/i.test(
+    name
+  );
+}
+
+function isCompletedToolStatus(status: unknown): boolean {
+  if (typeof status !== 'string') return false;
+  return /^(completed|success|succeeded|done|finished)$/i.test(status);
+}
+
+function looksLikeSinglePathValue(value: string): boolean {
+  const path = cleanPathToken(value);
+  if (!path || !GENERATED_ARTIFACT_EXT_RE.test(path) || /[\r\n]/.test(path)) return false;
+  if (isAbsolutePath(path) || /^\.{1,2}[\\/]/.test(path)) return true;
+  return !/[\s,，;；:：]/.test(path);
+}
+
+function extractExplicitPathValue(value: unknown, depth = 0): string[] {
+  if (depth > 4 || value == null) return [];
+  if (typeof value === 'string') {
+    if (looksLikeSinglePathValue(value)) return dedupePaths([value]);
+    return extractGeneratedArtifactPaths(value);
+  }
+  if (Array.isArray(value)) return dedupePaths(value.flatMap((item) => extractExplicitPathValue(item, depth + 1)));
+  if (!isRecord(value)) return [];
+  return extractPathFields(value, depth + 1);
+}
+
+function extractPathFields(value: unknown, depth = 0): string[] {
+  if (depth > 4 || value == null) return [];
+  if (typeof value === 'string') return extractGeneratedArtifactPaths(value);
+  if (Array.isArray(value)) return dedupePaths(value.flatMap((item) => extractPathFields(item, depth + 1)));
+  if (!isRecord(value)) return [];
+
+  const paths: string[] = [];
+  for (const [key, nested] of Object.entries(value)) {
+    if (
+      /(^|_)(path|paths|file|files|uri|uris|url|urls|output|outputs|artifact|artifacts|relative_path|full_path)$/i.test(
+        key
+      )
+    ) {
+      paths.push(...extractExplicitPathValue(nested, depth + 1));
+    } else if (/^(text|content|markdown|message|stdout|stderr|command|cmd)$/i.test(key)) {
+      paths.push(...extractGeneratedArtifactPaths(nested));
+    } else if (isRecord(nested) || Array.isArray(nested)) {
+      paths.push(...extractPathFields(nested, depth + 1));
+    }
+  }
+  return dedupePaths(paths);
+}
+
+export function extractGeneratedArtifactPathsFromToolPayload(payload: unknown): string[] {
+  if (Array.isArray(payload)) {
+    return dedupePaths(payload.flatMap(extractGeneratedArtifactPathsFromToolPayload));
+  }
+  if (!isRecord(payload)) {
+    return extractGeneratedArtifactPaths(payload);
+  }
+
+  const acpUpdate = isRecord(payload.update) ? payload.update : undefined;
+  if (acpUpdate) {
+    const kind = typeof acpUpdate.kind === 'string' ? acpUpdate.kind : '';
+    if (!isCompletedToolStatus(acpUpdate.status) || kind === 'read') return [];
+    return dedupePaths([
+      ...extractPathFields(acpUpdate.locations),
+      ...extractPathFields(acpUpdate.content),
+      ...(kind === 'edit' || kind === 'execute' ? extractPathFields(acpUpdate.rawInput) : []),
+    ]);
+  }
+
+  if (Array.isArray(payload.tools)) {
+    return dedupePaths(payload.tools.flatMap(extractGeneratedArtifactPathsFromToolPayload));
+  }
+
+  const name = typeof payload.name === 'string' ? payload.name : '';
+  const status = payload.status;
+  if (name || status !== undefined || 'output' in payload || 'result_display' in payload) {
+    if (status !== undefined && !isCompletedToolStatus(status)) return [];
+    if (name && isReadonlyToolName(name)) return [];
+    return dedupePaths([
+      ...extractGeneratedArtifactPaths(payload.output),
+      ...extractGeneratedArtifactPaths(payload.result_display),
+      ...extractPathFields(payload.result_display),
+      ...(name && isWritingToolName(name)
+        ? [...extractPathFields(payload.args), ...extractPathFields(payload.input)]
+        : []),
+    ]);
+  }
+
+  return extractGeneratedArtifactPaths(payload);
+}
+
 export function notifyGeneratedArtifactsChanged(): void {
   emitter.emit('acp.workspace.refresh');
   emitter.emit('codex.workspace.refresh');
@@ -206,6 +326,7 @@ export function notifyGeneratedArtifactsChanged(): void {
 export async function registerGeneratedArtifacts({
   paths,
   workspace,
+  sourceWorkspace,
   conversationId,
   source = 'conversation',
   standaloneLabel,
@@ -215,22 +336,39 @@ export async function registerGeneratedArtifacts({
 
   const registered: string[] = [];
   let workspacePath = typeof workspace === 'string' && workspace.trim() ? workspace.trim() : '';
+  const sourceWorkspacePath =
+    typeof sourceWorkspace === 'string' && sourceWorkspace.trim() ? sourceWorkspace.trim() : '';
+  let conversationWorkspaceInfo: ConversationWorkspaceInfo | null = null;
 
-  if (!workspacePath && conversationId) {
+  if (conversationId && (!workspacePath || isUnsafeTemporaryWorkspacePath(workspacePath))) {
     try {
       const conversation = await ipcBridge.conversation.get.invoke({ id: conversationId });
-      const conversationWorkspace = (conversation?.extra as { workspace?: string } | undefined)?.workspace;
-      if (typeof conversationWorkspace === 'string' && conversationWorkspace.trim()) {
-        workspacePath = conversationWorkspace.trim();
+      conversationWorkspaceInfo = inferConversationWorkspaceInfo(conversation);
+      if (!workspacePath && conversationWorkspaceInfo?.workspace) {
+        workspacePath = conversationWorkspaceInfo.workspace;
       }
     } catch {
       // Keep the standalone fallback below when the conversation is no longer readable.
     }
   }
 
+  if (
+    workspacePath &&
+    isUnsafeTemporaryWorkspacePath(workspacePath) &&
+    source !== 'toolbox' &&
+    (conversationWorkspaceInfo?.isTemporary ?? true)
+  ) {
+    workspacePath = '';
+  }
+
   if (workspacePath) {
     const externalPaths: string[] = [];
     for (const path of candidates) {
+      if (!isAbsolutePath(path) && sourceWorkspacePath && sourceWorkspacePath !== workspacePath) {
+        externalPaths.push(joinWorkspacePath(sourceWorkspacePath, path));
+        continue;
+      }
+
       const resolvedPath = joinWorkspacePath(workspacePath, path);
       if (!isAbsolutePath(path) || isInsideWorkspace(resolvedPath, workspacePath)) {
         registered.push(resolvedPath);
@@ -284,6 +422,13 @@ export async function registerGeneratedArtifactsFromPayload(
   return registerGeneratedArtifacts({ ...options, paths: extractGeneratedArtifactPaths(payload) });
 }
 
+export async function registerGeneratedArtifactsFromToolPayload(
+  payload: unknown,
+  options: Omit<RegisterGeneratedArtifactsOptions, 'paths'>
+): Promise<string[]> {
+  return registerGeneratedArtifacts({ ...options, paths: extractGeneratedArtifactPathsFromToolPayload(payload) });
+}
+
 export async function loadStandaloneGeneratedArtifactFiles(): Promise<FileEntry[]> {
   const stored = readStoredArtifacts();
   if (stored.length === 0) return [];
@@ -301,6 +446,11 @@ export async function loadStandaloneGeneratedArtifactFiles(): Promise<FileEntry[
             size: metadata.size || 0,
             mtime: toEpochSeconds(metadata.lastModified || item.addedAt),
             conversation: item.conversation || '工具箱',
+            draftProvenance: 'registered-generated-artifact',
+            // The standalone registry proves this is generated content, but it
+            // is renderer storage and does not provide a backend-managed root
+            // boundary strong enough to authorize permanent deletion.
+            canDiscardDraft: false,
           } satisfies FileEntry,
         };
       } catch {
@@ -310,7 +460,7 @@ export async function loadStandaloneGeneratedArtifactFiles(): Promise<FileEntry[
     })
   );
 
-  const live = resolved.filter((entry): entry is { item: StoredGeneratedArtifact; file: FileEntry } => entry !== null);
+  const live = resolved.filter((entry) => entry !== null);
   if (live.length !== stored.length) writeStoredArtifacts(live.map((entry) => entry.item));
 
   return live.map((entry) => entry.file).toSorted((a, b) => b.mtime - a.mtime);

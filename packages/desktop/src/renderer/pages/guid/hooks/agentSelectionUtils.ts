@@ -5,6 +5,7 @@
  */
 
 import { configService } from '@/common/config/configService';
+import { normalizeAcpModelIdForCreate } from '@/common/utils/acpModelIds';
 import type { AgentSource } from '@/renderer/utils/model/agentTypes';
 
 /** Save preferred mode to the agent's own config key */
@@ -28,7 +29,11 @@ export async function savePreferredModelId(agentKey: string, model_id: string): 
   try {
     const config = configService.get('acp.config');
     const backendConfig = config?.[agentKey as string] || {};
-    await configService.set('acp.config', { ...config, [agentKey]: { ...backendConfig, preferredModelId: model_id } });
+    const preferredModelId = normalizeAcpModelIdForCreate(agentKey, model_id) ?? model_id;
+    await configService.set('acp.config', {
+      ...config,
+      [agentKey]: { ...backendConfig, preferredModelId },
+    });
   } catch {
     /* silent */
   }

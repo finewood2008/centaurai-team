@@ -10,12 +10,6 @@ import useSWR from 'swr';
 
 export interface GoogleAuthModelResult {
   isGoogleAuth: boolean;
-  subscriptionStatus?: {
-    isSubscriber: boolean;
-    tier?: string;
-    lastChecked: number;
-    message?: string;
-  };
 }
 
 export const useGoogleAuthModels = (): GoogleAuthModelResult => {
@@ -28,16 +22,7 @@ export const useGoogleAuthModels = (): GoogleAuthModelResult => {
     return data.success;
   });
 
-  const shouldCheckSubscription = Boolean(isGoogleAuth);
-
-  // Only hit subscription API when authenticated.
-  const subscriptionKey = shouldCheckSubscription ? 'google.subscription.status' + proxyKey : null;
-  const { data: subscriptionResponse } = useSWR(subscriptionKey, () => {
-    return ipcBridge.google.subscriptionStatus.invoke({ proxy: googleConfig?.proxy });
-  });
-
   return {
     isGoogleAuth: Boolean(isGoogleAuth),
-    subscriptionStatus: subscriptionResponse ?? undefined,
   };
 };

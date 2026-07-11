@@ -8,14 +8,15 @@
  * starting Electron. Replaces the former `electron-vite dev -- --webui` flow.
  *
  * Env vars:
- *   AIONUI_PORT           : static server port (default 33000)
- *   AIONUI_HOST           : listen host; set to 0.0.0.0 to imply --remote
- *   AIONUI_ALLOW_REMOTE   : "1"/"true" to expose to LAN
- *   AIONUI_DATA_DIR       : override userData path (default Electron-compatible)
- *   AIONUI_LOG_DIR        : override log dir (default <dataDir>/logs)
- *   AIONUI_STATIC_DIR     : override static dir (default out/renderer)
- *   AIONUI_BACKEND_BIN    : absolute path to aioncore binary (else PATH lookup)
- *   AIONUI_BACKEND_BUNDLED_DIR : dir containing bundled-aioncore/<plat-arch>/binary
+ *   CENTAURAI_PORT        : static server port (default 25808 in production)
+ *   CENTAURAI_HOST        : listen host; set to 0.0.0.0 to imply --remote
+ *   CENTAURAI_ALLOW_REMOTE: "1"/"true" to expose to LAN
+ *   CENTAURAI_DATA_DIR    : override userData path (default Electron-compatible)
+ *   CENTAURAI_LOG_DIR     : override log dir (default <dataDir>/logs)
+ *   CENTAURAI_STATIC_DIR  : override static dir (default out/renderer)
+ *   CENTAURAI_CORE_BIN    : absolute path to centaurai-core (canonical override)
+ *   CENTAURAI_CORE_BUNDLED_DIR : base dir containing <plat-arch>/centaurai-core
+ *   AIONUI_BACKEND_BIN / AIONUI_BACKEND_BUNDLED_DIR : compatibility aliases
  *   AIONUI_OPEN_BROWSER   : "1"/"true" to force open, "0"/"false" to disable
  */
 
@@ -25,18 +26,62 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { startWebHost } from '@aionui/web-host';
+import { resolveCoreBinary, type CoreBinaryResolution } from '../packages/shared-scripts/src/resolve-core-binary.js';
 import { openBrowserUrl, shouldAutoOpenBrowser } from '../packages/web-cli/src/browser.js';
 
 // Aligned with packages/desktop/src/common/config/constants.ts WEBUI_DEFAULT_PORT.
 const DEFAULT_PORT = (() => {
   if (process.env.NODE_ENV === 'production') return 25808;
-  if (process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
+  if (process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1') return 25810;
   return 25809;
 })();
-const BACKEND_BINARY = process.platform === 'win32' ? 'aioncore.exe' : 'aioncore';
-
 const __filename = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(__filename), '..');
+
+export function parseAppVersion(packageMetadata: unknown): string {
+  if (!packageMetadata || typeof packageMetadata !== 'object' || !('version' in packageMetadata)) {
+    throw new Error('Root package.json does not contain a valid version');
+  }
+
+  const version = (packageMetadata as { version?: unknown }).version;
+  if (typeof version !== 'string' || version.trim().length === 0) {
+    throw new Error('Root package.json does not contain a valid version');
+  }
+
+  return version.trim();
+}
+
+export function readAppVersion(packageJsonPath = path.join(repoRoot, 'package.json')): string {
+  return parseAppVersion(JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as unknown);
+}
+
+export function createStandaloneAppMetadata(userDataPath: string) {
+  return {
+    version: readAppVersion(),
+    isPackaged: false,
+    resourcesPath: repoRoot,
+    userDataPath,
+  };
+}
+
+export function resolveStandaloneImageWorkbenchConfig(env: NodeJS.ProcessEnv) {
+  // AIONUI_IMAGE_KEY is the oldest deployment alias. Read it only as a
+  // compatibility fallback so existing secrets do not need to be exposed or
+  // rewritten during the CentaurAI service migration.
+  const apiKey =
+    env.CENTAURAI_IMAGE_WORKBENCH_KEY?.trim() || env.AIONUI_IMAGE_WORKBENCH_KEY?.trim() || env.AIONUI_IMAGE_KEY?.trim();
+  if (!apiKey) return undefined;
+  return {
+    apiKey,
+    baseUrl: env.CENTAURAI_IMAGE_UPSTREAM_URL?.trim() || env.AIONUI_IMAGE_UPSTREAM_URL?.trim(),
+    profileName: env.CENTAURAI_IMAGE_WORKBENCH_PROFILE_NAME?.trim() || env.AIONUI_IMAGE_WORKBENCH_PROFILE_NAME?.trim(),
+    model: env.CENTAURAI_IMAGE_WORKBENCH_MODEL?.trim() || env.AIONUI_IMAGE_WORKBENCH_MODEL?.trim(),
+    apiMode:
+      (env.CENTAURAI_IMAGE_WORKBENCH_API_MODE ?? env.AIONUI_IMAGE_WORKBENCH_API_MODE) === 'responses'
+        ? ('responses' as const)
+        : ('images' as const),
+  };
+}
 
 const args = process.argv.slice(2);
 const has = (name: string): boolean => args.includes(name);
@@ -79,14 +124,18 @@ const getFlag = (name: string): string | undefined => {
  * `bun run webui` just follows it.
  */
 function resolveBackendDataDir(): string {
-  const override = getFlag('--data-dir') ?? process.env.AIONUI_DATA_DIR;
+  const override = getFlag('--data-dir') ?? process.env.CENTAURAI_DATA_DIR ?? process.env.AIONUI_DATA_DIR;
   if (override && override.trim().length > 0) {
     const resolved = path.resolve(override);
     fs.mkdirSync(resolved, { recursive: true });
     return resolved;
   }
   const suffix =
-    process.env.NODE_ENV === 'production' ? '' : process.env.AIONUI_MULTI_INSTANCE === '1' ? '-dev-2' : '-dev';
+    process.env.NODE_ENV === 'production'
+      ? ''
+      : process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1'
+        ? '-dev-2'
+        : '-dev';
   const dir = path.join(os.homedir(), `.aionui-web${suffix}`);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
@@ -100,20 +149,23 @@ function parseBoolean(v: string | undefined): boolean {
 function resolvePort(): number {
   const cli = getFlag('--port');
   if (cli && /^\d+$/.test(cli)) return Number(cli);
-  const env = process.env.AIONUI_PORT ?? process.env.PORT;
+  const env = process.env.CENTAURAI_PORT ?? process.env.AIONUI_PORT ?? process.env.PORT;
   if (env && /^\d+$/.test(env)) return Number(env);
   return DEFAULT_PORT;
 }
 
 function resolveAllowRemote(): boolean {
   if (has('--remote')) return true;
-  const host = process.env.AIONUI_HOST?.trim();
+  const host = (process.env.CENTAURAI_HOST ?? process.env.AIONUI_HOST)?.trim();
   if (host && ['0.0.0.0', '::', '::0'].includes(host)) return true;
-  return parseBoolean(process.env.AIONUI_ALLOW_REMOTE ?? process.env.AIONUI_REMOTE);
+  return parseBoolean(
+    process.env.CENTAURAI_ALLOW_REMOTE ?? process.env.AIONUI_ALLOW_REMOTE ?? process.env.AIONUI_REMOTE
+  );
 }
 
 function resolveStaticDir(): string {
-  if (process.env.AIONUI_STATIC_DIR) return process.env.AIONUI_STATIC_DIR;
+  const override = process.env.CENTAURAI_STATIC_DIR ?? process.env.AIONUI_STATIC_DIR;
+  if (override) return override;
   const candidate = path.join(repoRoot, 'out', 'renderer');
   if (fs.existsSync(path.join(candidate, 'index.html'))) return candidate;
   throw new Error(`Renderer assets not found at ${candidate}. Run "bun run package" first, or set AIONUI_STATIC_DIR.`);
@@ -128,33 +180,30 @@ function resolveStaticDir(): string {
  */
 function runPackageIfNeeded(): void {
   if (has('--no-build')) return;
-  if (parseBoolean(process.env.AIONUI_NO_BUILD)) return;
-  if (process.env.AIONUI_STATIC_DIR) return;
+  if (parseBoolean(process.env.CENTAURAI_NO_BUILD ?? process.env.AIONUI_NO_BUILD)) return;
+  if (process.env.CENTAURAI_STATIC_DIR || process.env.AIONUI_STATIC_DIR) return;
   console.log('[webui] running "bun run package" to refresh out/renderer (pass --no-build to skip)...');
   const start = Date.now();
   execSync('bun run package', { cwd: repoRoot, stdio: 'inherit' });
   console.log(`[webui] package finished in ${((Date.now() - start) / 1000).toFixed(1)}s`);
 }
 
-function resolveBackendBinary(): string {
-  if (process.env.AIONUI_BACKEND_BIN) return process.env.AIONUI_BACKEND_BIN;
-
-  const bundledBase = process.env.AIONUI_BACKEND_BUNDLED_DIR ?? path.join(repoRoot, 'resources', 'bundled-aioncore');
-  const runtimeKey = `${process.platform}-${process.arch}`;
-  const bundled = path.join(bundledBase, runtimeKey, BACKEND_BINARY);
-  if (fs.existsSync(bundled)) return bundled;
-
-  try {
-    const cmd = process.platform === 'win32' ? `where ${BACKEND_BINARY}` : `which ${BACKEND_BINARY}`;
-    const found = execSync(cmd, { encoding: 'utf-8', timeout: 5000 }).trim().split(/\r?\n/)[0];
-    if (found && fs.existsSync(found)) return found;
-  } catch {
-    // fall through
-  }
-
-  throw new Error(
-    `Cannot find "${BACKEND_BINARY}". Set AIONUI_BACKEND_BIN, put it on PATH, or place it at ${bundled}.`
-  );
+function resolveBackendBinary(): CoreBinaryResolution {
+  const resolution = resolveCoreBinary({ resourcesRoot: path.join(repoRoot, 'resources') });
+  const manifest = resolution.manifest ?? {};
+  const details = {
+    path: resolution.path,
+    source: resolution.source,
+    fallbackUsed: resolution.fallbackUsed,
+    repository: manifest.repository,
+    tag: manifest.tag,
+    commit: manifest.commit,
+    artifactUrl: manifest.artifactUrl,
+    sha256: manifest.sha256,
+  };
+  if (resolution.fallbackUsed) console.warn('[centaurai-core] LEGACY FALLBACK binary resolved', details);
+  else console.info('[centaurai-core] binary resolved', details);
+  return resolution;
 }
 
 /**
@@ -215,8 +264,9 @@ async function main(): Promise<void> {
   // This keeps `bun run webui` fully self-contained on hosts without AionUi.app.
   const workDir = resolveBackendDataDir();
   const staticDir = resolveStaticDir();
-  const backendBin = resolveBackendBinary();
-  const logDir = process.env.AIONUI_LOG_DIR ?? path.join(workDir, 'logs');
+  const backendResolution = resolveBackendBinary();
+  const backendBin = backendResolution.path;
+  const logDir = process.env.CENTAURAI_LOG_DIR ?? process.env.AIONUI_LOG_DIR ?? path.join(workDir, 'logs');
 
   console.log('[webui] work dir   :', workDir);
   console.log('[webui] static dir :', staticDir);
@@ -224,24 +274,11 @@ async function main(): Promise<void> {
   console.log(`[webui] launching  : port=${port} allowRemote=${allowRemote}`);
 
   const handle = await startWebHost({
-    app: {
-      version: '0.0.0',
-      isPackaged: false,
-      resourcesPath: repoRoot,
-      userDataPath: workDir,
-    },
+    app: createStandaloneAppMetadata(workDir),
     staticDir,
     port,
     allowRemote,
-    imageWorkbenchConfig: process.env.AIONUI_IMAGE_WORKBENCH_KEY?.trim()
-      ? {
-          apiKey: process.env.AIONUI_IMAGE_WORKBENCH_KEY.trim(),
-          baseUrl: process.env.AIONUI_IMAGE_UPSTREAM_URL?.trim(),
-          profileName: process.env.AIONUI_IMAGE_WORKBENCH_PROFILE_NAME?.trim(),
-          model: process.env.AIONUI_IMAGE_WORKBENCH_MODEL?.trim(),
-          apiMode: process.env.AIONUI_IMAGE_WORKBENCH_API_MODE === 'responses' ? 'responses' : 'images',
-        }
-      : undefined,
+    imageWorkbenchConfig: resolveStandaloneImageWorkbenchConfig(process.env),
     dataDir: workDir,
     sharedDriveDir: path.join(workDir, 'sharedDrive'),
     logDir,
@@ -260,7 +297,7 @@ async function main(): Promise<void> {
   });
 
   console.log('');
-  console.log('AionUi WebUI is ready');
+  console.log('CentaurAI Team WebUI is ready');
   console.log(`  Local  : ${handle.localUrl}`);
   if (handle.networkUrl) console.log(`  Network: ${handle.networkUrl}`);
 
@@ -331,7 +368,9 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
-main().catch((err) => {
-  console.error('[webui] failed to start:', err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  main().catch((err) => {
+    console.error('[webui] failed to start:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

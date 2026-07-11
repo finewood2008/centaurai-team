@@ -5,6 +5,8 @@
  */
 
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { app } from 'electron';
 import {
   indexNasFolder,
   nasFileInfo,
@@ -20,6 +22,7 @@ import {
   type NasIndexProgress,
 } from '@aionui/web-host';
 import { ipcBridge } from '@/common';
+import { normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { resolveNasRootDir } from '../utils/webuiConfig';
 
 // In-memory index-job registry. Admin-desktop only.
@@ -137,7 +140,8 @@ export function initNasDriveBridge(): void {
     indexJobs.set(jobId, { phase: 'walking', total: 0, done: 0, failed: 0, skipped: 0, pruned: 0 });
     // Fire and forget; the renderer polls indexStatus.
     void indexNasFolder(root, relPath, {
-      endpoint: endpoint || 'http://127.0.0.1:8618',
+      endpoint: normalizeVectorDbEndpoint(endpoint),
+      manifestDir: path.join(app.getPath('userData'), 'nas-index-manifests'),
       includeVideo,
       onProgress: (p) => {
         const cancelled = indexJobs.get(jobId)?.cancelled;

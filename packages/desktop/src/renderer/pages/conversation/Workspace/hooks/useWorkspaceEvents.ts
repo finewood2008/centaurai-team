@@ -6,7 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import type { IConversationTurnCompletedEvent, IDirOrFile } from '@/common/adapter/ipcBridge';
-import { registerGeneratedArtifactsFromPayload } from '@/renderer/utils/file/generatedArtifacts';
+import { registerGeneratedArtifacts } from '@/renderer/utils/file/generatedArtifacts';
 import { emitter, useAddEventListener } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 import type { ContextMenuState } from '../types';
@@ -155,25 +155,19 @@ export function useWorkspaceEvents(options: UseWorkspaceEventsOptions) {
   }, [conversation_id, eventPrefix, throttledRefresh]);
 
   /**
-   * Some generators report saved files in the final assistant message instead
-   * of through a file-tool event. Copy external generated artifacts into this
-   * workspace so the temporary-space tree and Content Hub can see them.
+   * Always refresh after a turn completes. Some generators write directly into
+   * the workspace without emitting a file-tool event or mentioning the path in
+   * the final message; the completed turn is the most reliable catch-all signal.
    */
   useEffect(() => {
     const unsubscribe = ipcBridge.conversation.turnCompleted.on((event: IConversationTurnCompletedEvent) => {
       if (event.session_id !== conversation_id) return;
-      void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
-        workspace: event.workspace || workspace,
-        conversationId: conversation_id,
-        source: 'conversation',
-      }).then((registered) => {
-        if (registered.length > 0) throttledRefresh();
-      });
+      throttledRefresh();
     });
     return () => {
       unsubscribe();
     };
-  }, [conversation_id, throttledRefresh, workspace]);
+  }, [conversation_id, throttledRefresh]);
 
   /**
    * 监听手动刷新工作空间事件
@@ -235,6 +229,45 @@ export function useWorkspaceEvents(options: UseWorkspaceEventsOptions) {
       return Promise.resolve();
     });
   }, [setFiles]);
+
+  /**
+   * Listen to direct file-write events from the backend. Some generators stream
+   * file writes without an ACP tool payload, so responseStream alone can miss
+   * new deliverables until a manual refresh.
+   */
+  useEffect(() => {
+    const normalize = (value?: string) => (value || '').replace(/\\/g, '/').replace(/[\\/]+$/, '');
+    const normalizedWorkspace = normalize(workspace);
+
+    const handleGeneratedWorkspaceFile = (event: { file_path?: string; workspace?: string; operation?: string }) => {
+      const eventWorkspace = normalize(event.workspace);
+      if (eventWorkspace && eventWorkspace !== normalizedWorkspace) return;
+
+      if (event.operation === 'delete') {
+        throttledRefresh();
+        return;
+      }
+
+      if (!event.file_path) return;
+      void registerGeneratedArtifacts({
+        paths: [event.file_path],
+        workspace,
+        conversationId: conversation_id,
+        source: 'conversation',
+      });
+      throttledRefresh();
+    };
+
+    const unsubscribeFileStream = ipcBridge.fileStream.contentUpdate.on(handleGeneratedWorkspaceFile);
+    const unsubscribeOfficeAdded = ipcBridge.workspaceOfficeWatch.fileAdded.on((event) => {
+      handleGeneratedWorkspaceFile({ file_path: event.file_path, workspace: event.workspace, operation: 'write' });
+    });
+
+    return () => {
+      unsubscribeFileStream();
+      unsubscribeOfficeAdded();
+    };
+  }, [conversation_id, throttledRefresh, workspace]);
 
   /**
    * 监听右键菜单外部点击 - 关闭菜单

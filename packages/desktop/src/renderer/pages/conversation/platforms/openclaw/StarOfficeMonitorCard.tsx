@@ -453,10 +453,9 @@ const StarOfficeMonitorCard: React.FC<StarOfficeMonitorCardProps> = ({ conversat
                   size='mini'
                   type='outline'
                   className='!rounded-10px'
-                  loading={detecting}
-                  onClick={() => void runDetect({ force: true, timeoutMs: 360 })}
+                  onClick={() => setShowManualUrlEditor(true)}
                 >
-                  {t('starOffice.monitor.detect', { defaultValue: 'Detect again' })}
+                  {t('starOffice.monitor.editUrl', { defaultValue: 'Enter URL' })}
                 </Button>
               </div>
             )}
@@ -468,7 +467,7 @@ const StarOfficeMonitorCard: React.FC<StarOfficeMonitorCardProps> = ({ conversat
               {statusText} · {detectError}
             </div>
           ) : null}
-          {detectState === 'ready' && showManualUrlEditor ? (
+          {detectState !== 'ready' || showManualUrlEditor ? (
             <>
               <div className='text-12px text-t-secondary'>
                 {t('starOffice.monitor.hint', {

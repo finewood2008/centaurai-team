@@ -6,6 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import { useTypingAnimation } from '@/renderer/hooks/chat/useTypingAnimation';
+import { buildSandboxedHtmlDocument, SANDBOXED_HTML_IFRAME_SANDBOX } from '@/renderer/utils/security/sandboxedHtml';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useScrollSyncTarget } from '../../hooks/useScrollSyncHelpers';
 import { generateInspectScript } from './htmlInspectScript';
@@ -221,20 +222,9 @@ const HTMLRenderer: React.FC<HTMLRendererProps> = ({
     return () => observer.disconnect();
   }, []);
 
-  // 判断是否应该直接从文件加载（支持相对资源）- 仅 Electron 环境
-  // Determine if should load directly from file (supports relative resources) - Electron only
-  const shouldLoadFromFile = useMemo(() => {
-    if (!isElectron || !file_path) return false;
-    // 检查 HTML 是否引用了相对资源 / Check if HTML references relative resources
-    const hasRelativeResources =
-      /<link[^>]+href=["'](?!https?:\/\/|data:|\/\/)[^"']+["']/i.test(content) ||
-      /<script[^>]+src=["'](?!https?:\/\/|data:|\/\/)[^"']+["']/i.test(content) ||
-      /<img[^>]+src=["'](?!https?:\/\/|data:|\/\/)[^"']+["']/i.test(content);
-    return hasRelativeResources;
-  }, [content, file_path, isElectron]);
-
-  // 检查是否有相对资源（用于 browser inline 处理）
-  // Check if has relative resources (for browser inline processing)
+  // Relative resources are copied into the isolated document. Never navigate an
+  // AI-authored preview to file://: script in such a page could otherwise use
+  // Chromium's local-file origin to probe unrelated host files.
   const hasRelativeResources = useMemo(() => {
     return (
       /<link[^>]+href=["'](?!https?:\/\/|data:|\/\/)[^"']+["']/i.test(content) ||
@@ -247,24 +237,13 @@ const HTMLRenderer: React.FC<HTMLRendererProps> = ({
   // Typing animation: provide streaming experience when rendering via data URL
   const { displayedContent } = useTypingAnimation({
     content,
-    enabled: !shouldLoadFromFile && !hasRelativeResources,
+    enabled: !hasRelativeResources,
     speed: 40,
   });
 
-  const htmlContent = useMemo(
-    () => (shouldLoadFromFile ? content : displayedContent),
-    [shouldLoadFromFile, content, displayedContent]
-  );
-
-  // 在 browser 环境下，当有相对资源时进行内联化处理
-  // In browser environment, inline relative resources when present
+  // Inline relative resources in the privileged parent before handing the
+  // result to an isolated data/srcdoc origin (both Electron and browser mode).
   useEffect(() => {
-    if (isElectron) {
-      // Electron 环境不需要内联化，使用 webview 加载
-      // Electron environment doesn't need inlining, uses webview loading
-      return;
-    }
-
     if (!hasRelativeResources || !file_path) {
       // 没有相对资源或没有文件路径，使用原始内容
       // No relative resources or no file path, use original content
@@ -291,50 +270,20 @@ const HTMLRenderer: React.FC<HTMLRendererProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [content, file_path, isElectron, hasRelativeResources, workspace]);
+  }, [content, file_path, hasRelativeResources, workspace]);
 
-  // 用于 browser iframe 的最终 HTML 内容
-  // Final HTML content for browser iframe
-  const browserHtmlContent = useMemo(() => {
-    if (hasRelativeResources && file_path) {
-      return inlinedHtmlContent || content; // 在内联化完成前显示原始内容 / Show original content before inlining completes
-    }
-    return displayedContent;
-  }, [hasRelativeResources, file_path, inlinedHtmlContent, content, displayedContent]);
+  const sandboxedHtmlContent = useMemo(
+    () =>
+      buildSandboxedHtmlDocument(hasRelativeResources && file_path ? inlinedHtmlContent || content : displayedContent),
+    [hasRelativeResources, file_path, inlinedHtmlContent, content, displayedContent]
+  );
 
   // 计算 webview 的 src
   // Calculate webview src
   const webviewSrc = useMemo(() => {
-    // 如果有相对资源引用且有文件路径，直接用 file:// URL 加载
-    // If has relative resource references and has file path, load directly via file:// URL
-    if (shouldLoadFromFile && file_path) {
-      return `file://${file_path}`;
-    }
-
-    // 否则使用 data URL（适用于动态生成的 HTML 或没有外部资源的情况）
-    // Otherwise use data URL (for dynamically generated HTML or no external resources)
-    let html = htmlContent;
-
-    // 注入 base 标签支持相对路径 / Inject base tag for relative paths
-    if (file_path) {
-      const fileDir = file_path.substring(0, file_path.lastIndexOf('/') + 1);
-      const base_url = `file://${fileDir}`;
-
-      // 检查是否已有 base 标签 / Check if base tag exists
-      if (!html.match(/<base\s+href=/i)) {
-        if (html.match(/<head>/i)) {
-          html = html.replace(/<head>/i, `<head><base href="${base_url}">`);
-        } else if (html.match(/<html>/i)) {
-          html = html.replace(/<html>/i, `<html><head><base href="${base_url}"></head>`);
-        } else {
-          html = `<head><base href="${base_url}"></head>${html}`;
-        }
-      }
-    }
-
-    const encoded = encodeURIComponent(html);
+    const encoded = encodeURIComponent(sandboxedHtmlContent);
     return `data:text/html;charset=utf-8,${encoded}`;
-  }, [htmlContent, file_path, shouldLoadFromFile]);
+  }, [sandboxedHtmlContent]);
 
   // 当 webviewSrc 改变时重置加载状态 / Reset loading state when webviewSrc changes
   useEffect(() => {
@@ -613,14 +562,14 @@ const HTMLRenderer: React.FC<HTMLRendererProps> = ({
       ) : (
         <iframe
           ref={iframeRef}
-          srcDoc={browserHtmlContent}
+          srcDoc={sandboxedHtmlContent}
           className='w-full h-full border-0'
           style={{
             display: 'block',
             width: '100%',
             height: '100%',
           }}
-          sandbox='allow-scripts allow-same-origin allow-forms allow-popups allow-modals'
+          sandbox={SANDBOXED_HTML_IFRAME_SANDBOX}
         />
       )}
     </div>

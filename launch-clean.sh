@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # CentaurAI 清场启动脚本：先清理上一次的残留进程/端口，再干净启动。
-# 解决「BackendStartupError: aioncore exited before health check passed /
-#       Another instance is already running」——根因是旧实例的 aioncore/ACP
+# 解决「BackendStartupError: centaurai-core exited before health check passed /
+#       Another instance is already running」——根因是旧实例的 core/ACP
 # 子进程没退干净，占着后端端口 51441 与 CDP 端口 9230。
 
 set -u
 
 echo "[centaurai] 清理残留进程…"
-# 先杀 electron 主进程（杀它才会停掉它派生的 aioncore，避免重生）
+# 先杀 electron 主进程（杀它才会停掉它派生的 core，避免重生）
 pkill -9 -f 'electron/dist/electron' 2>/dev/null
 sleep 1
-# 再杀所有 aioncore（含 mcp-team-stdio 子进程）与 ACP 子进程（继承 fd 占 9230）
-pkill -9 -f '/.local/bin/aioncore'              2>/dev/null
+# 再清理 canonical core、显式回退的旧 core 与 ACP 子进程。
+pkill -9 -x 'centaurai-core'                    2>/dev/null
+pkill -9 -x 'aioncore'                          2>/dev/null
 pkill -9 -f 'claude-agent-sdk-linux-x64/claude' 2>/dev/null
 pkill -9 -f 'codex-acp'                         2>/dev/null
 

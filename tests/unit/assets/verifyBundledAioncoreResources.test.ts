@@ -4,153 +4,123 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const {
-  verifyBundledAioncoreResources,
+  verifyBundledCentauraiCoreResources,
 } = require('../../../packages/shared-scripts/src/verify-bundled-aioncore-resources');
 
-describe('verifyBundledAioncoreResources', () => {
-  let tmp: string;
+function write(filePath: string, contents = ''): void {
+  mkdirSync(join(filePath, '..'), { recursive: true });
+  writeFileSync(filePath, contents, { flush: true });
+}
+
+function validManifest(platform: string, arch: string, binaryName: string, fallbackUsed = false): string {
+  const target =
+    platform === 'win32'
+      ? arch === 'arm64'
+        ? 'aarch64-pc-windows-msvc.zip'
+        : 'x86_64-pc-windows-msvc.zip'
+      : platform === 'darwin'
+        ? `${arch === 'arm64' ? 'aarch64' : 'x86_64'}-apple-darwin.tar.gz`
+        : `${arch === 'arm64' ? 'aarch64' : 'x86_64'}-unknown-linux-gnu.tar.gz`;
+  return JSON.stringify({
+    service: 'centaurai-core',
+    repository: 'finewood2008/centaurai-core',
+    tag: 'v0.1.47',
+    commit: 'a'.repeat(40),
+    artifactUrl: `https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-${target}`,
+    sha256: 'b'.repeat(64),
+    binaryName,
+    fallbackUsed,
+  });
+}
+
+function populateBundle(resourcesDir: string, platform: string, arch: string): string {
+  const runtimeKey = `${platform}-${arch}`;
+  const binaryName = platform === 'win32' ? 'centaurai-core.exe' : 'centaurai-core';
+  const base = join(resourcesDir, 'bundled-centaurai-core', runtimeKey);
+  const managed = join(base, 'managed-resources');
+  write(join(base, binaryName));
+  write(join(base, 'manifest.json'), validManifest(platform, arch, binaryName));
+  write(
+    platform === 'win32'
+      ? join(managed, 'node', 'node-v24.11.0-win-x64', 'node.exe')
+      : join(managed, 'node', `node-v24.11.0-${platform}-${arch}`, 'bin', 'node')
+  );
+  for (const [tool, version] of [
+    ['codex-acp', '1.1.2'],
+    ['claude-agent-acp', '0.58.1'],
+  ]) {
+    const toolRoot = join(managed, 'acp', tool, version, runtimeKey);
+    write(join(toolRoot, 'manifest.json'), JSON.stringify({ entrypoint: 'dist/index.js' }));
+    write(join(toolRoot, 'dist', 'index.js'));
+  }
+  return base;
+}
+
+describe('verifyBundledCentauraiCoreResources', () => {
+  let root: string;
   let resourcesDir: string;
-  let managedResourcesDir: string;
-  let codexRoot: string;
+  let base: string;
 
   beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), 'aionui-bundled-resources-'));
-    resourcesDir = join(tmp, 'resources');
-    managedResourcesDir = join(resourcesDir, 'bundled-aioncore', 'win32-x64', 'managed-resources');
-
-    mkdirSync(join(resourcesDir, 'bundled-aioncore', 'win32-x64'), { recursive: true });
-    writeFileSync(join(resourcesDir, 'bundled-aioncore', 'win32-x64', 'aioncore.exe'), '', { flush: true });
-    writeFileSync(join(resourcesDir, 'bundled-aioncore', 'win32-x64', 'manifest.json'), '{}', { flush: true });
-
-    const nodeRoot = join(managedResourcesDir, 'node', 'node-v24.11.0-win-x64');
-    mkdirSync(nodeRoot, { recursive: true });
-    writeFileSync(join(nodeRoot, 'node.exe'), '', { flush: true });
-
-    codexRoot = join(managedResourcesDir, 'acp', 'codex-acp', '0.14.0', 'win32-x64');
-    mkdirSync(codexRoot, { recursive: true });
-    writeFileSync(join(codexRoot, 'manifest.json'), JSON.stringify({ entrypoint: 'codex-acp.exe', path_entries: [] }), {
-      flush: true,
-    });
-    writeFileSync(join(codexRoot, 'codex-acp.exe'), '', { flush: true });
-
-    const claudeRoot = join(managedResourcesDir, 'acp', 'claude-agent-acp', '0.13.0', 'win32-x64');
-    mkdirSync(claudeRoot, { recursive: true });
-    writeFileSync(
-      join(claudeRoot, 'manifest.json'),
-      JSON.stringify({ entrypoint: 'claude-agent-acp.exe', path_entries: [] }),
-      { flush: true }
-    );
-    writeFileSync(join(claudeRoot, 'claude-agent-acp.exe'), '', { flush: true });
+    root = mkdtempSync(join(tmpdir(), 'centaurai-core-bundled-resources-'));
+    resourcesDir = join(root, 'resources');
+    base = populateBundle(resourcesDir, 'win32', 'x64');
   });
 
-  afterEach(() => {
-    rmSync(tmp, { recursive: true, force: true });
-  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it('passes when node and managed ACP entrypoints exist', () => {
-    const result = verifyBundledAioncoreResources({
+  it('passes for complete binary, provenance, Node, Codex, and Claude resources', () => {
+    const result = verifyBundledCentauraiCoreResources({
       resourcesDir,
       electronPlatformName: 'win32',
       targetArch: 'x64',
     });
-
     expect(result.runtimeKey).toBe('win32-x64');
     expect(result.missing).toEqual([]);
+    expect(result.manifest).toMatchObject({ repository: 'finewood2008/centaurai-core', tag: 'v0.1.47' });
   });
 
-  it('reports missing managed node runtime executable', () => {
-    rmSync(join(managedResourcesDir, 'node', 'node-v24.11.0-win-x64', 'node.exe'));
-
-    const result = verifyBundledAioncoreResources({
+  it('reports missing managed Node runtime executable', () => {
+    rmSync(join(base, 'managed-resources', 'node', 'node-v24.11.0-win-x64', 'node.exe'));
+    const result = verifyBundledCentauraiCoreResources({
       resourcesDir,
       electronPlatformName: 'win32',
       targetArch: 'x64',
     });
-
-    expect(result.missing).toContain('bundled-aioncore/win32-x64/managed-resources/node/*/node.exe');
+    expect(result.missing).toContain('bundled-centaurai-core/win32-x64/managed-resources/node/*/node.exe');
   });
 
-  it('passes for non-Windows node runtime layout', () => {
-    const darwinResourcesDir = join(tmp, 'darwin-resources');
-    const darwinManagedResourcesDir = join(darwinResourcesDir, 'bundled-aioncore', 'darwin-arm64', 'managed-resources');
-
-    mkdirSync(join(darwinResourcesDir, 'bundled-aioncore', 'darwin-arm64'), { recursive: true });
-    writeFileSync(join(darwinResourcesDir, 'bundled-aioncore', 'darwin-arm64', 'aioncore'), '', { flush: true });
-    writeFileSync(join(darwinResourcesDir, 'bundled-aioncore', 'darwin-arm64', 'manifest.json'), '{}', {
-      flush: true,
-    });
-    mkdirSync(join(darwinManagedResourcesDir, 'node', 'node-v24.11.0-darwin-arm64', 'bin'), { recursive: true });
-    writeFileSync(join(darwinManagedResourcesDir, 'node', 'node-v24.11.0-darwin-arm64', 'bin', 'node'), '', {
-      flush: true,
-    });
-
-    const darwinCodexRoot = join(darwinManagedResourcesDir, 'acp', 'codex-acp', '0.14.0', 'darwin-arm64');
-    mkdirSync(darwinCodexRoot, { recursive: true });
-    writeFileSync(join(darwinCodexRoot, 'manifest.json'), JSON.stringify({ entrypoint: 'codex-acp' }), {
-      flush: true,
-    });
-    writeFileSync(join(darwinCodexRoot, 'codex-acp'), '', { flush: true });
-
-    const darwinClaudeRoot = join(darwinManagedResourcesDir, 'acp', 'claude-agent-acp', '0.13.0', 'darwin-arm64');
-    mkdirSync(darwinClaudeRoot, { recursive: true });
-    writeFileSync(join(darwinClaudeRoot, 'manifest.json'), JSON.stringify({ entrypoint: 'claude-agent-acp' }), {
-      flush: true,
-    });
-    writeFileSync(join(darwinClaudeRoot, 'claude-agent-acp'), '', { flush: true });
-
-    const result = verifyBundledAioncoreResources({
-      resourcesDir: darwinResourcesDir,
+  it('supports the Unix Node layout', () => {
+    const unixResources = join(root, 'darwin-resources');
+    populateBundle(unixResources, 'darwin', 'arm64');
+    const result = verifyBundledCentauraiCoreResources({
+      resourcesDir: unixResources,
       electronPlatformName: 'darwin',
       targetArch: 'arm64',
     });
-
     expect(result.missing).toEqual([]);
-    expect(result.checked).toContain('bundled-aioncore/darwin-arm64/managed-resources/node/*/bin/node');
+    expect(result.checked).toContain('bundled-centaurai-core/darwin-arm64/managed-resources/node/*/bin/node');
   });
 
-  it('reports missing non-Windows managed node runtime executable', () => {
-    const linuxResourcesDir = join(tmp, 'linux-resources');
-    const linuxManagedResourcesDir = join(linuxResourcesDir, 'bundled-aioncore', 'linux-x64', 'managed-resources');
-
-    mkdirSync(join(linuxResourcesDir, 'bundled-aioncore', 'linux-x64'), { recursive: true });
-    writeFileSync(join(linuxResourcesDir, 'bundled-aioncore', 'linux-x64', 'aioncore'), '', { flush: true });
-    writeFileSync(join(linuxResourcesDir, 'bundled-aioncore', 'linux-x64', 'manifest.json'), '{}', { flush: true });
-    mkdirSync(join(linuxManagedResourcesDir, 'node', 'node-v24.11.0-linux-x64'), { recursive: true });
-
-    const result = verifyBundledAioncoreResources({
-      resourcesDir: linuxResourcesDir,
-      electronPlatformName: 'linux',
-      targetArch: 'x64',
-    });
-
-    expect(result.missing).toContain('bundled-aioncore/linux-x64/managed-resources/node/*/bin/node');
-  });
-
-  it('reports missing managed ACP manifest', () => {
-    rmSync(join(codexRoot, 'manifest.json'));
-
-    const result = verifyBundledAioncoreResources({
+  it('reports a missing ACP entrypoint through the required manifest contract', () => {
+    rmSync(join(base, 'managed-resources', 'acp', 'codex-acp', '1.1.2', 'win32-x64', 'dist', 'index.js'));
+    const result = verifyBundledCentauraiCoreResources({
       resourcesDir,
       electronPlatformName: 'win32',
       targetArch: 'x64',
     });
-
     expect(result.missing).toContain(
-      'bundled-aioncore/win32-x64/managed-resources/acp/codex-acp/*/win32-x64/manifest.json'
+      'bundled-centaurai-core/win32-x64/managed-resources/acp/codex-acp/*/win32-x64/manifest.json'
     );
   });
 
-  it('reports missing managed ACP entrypoint declared by manifest', () => {
-    rmSync(join(codexRoot, 'codex-acp.exe'));
-
-    const result = verifyBundledAioncoreResources({
+  it('rejects a manifest that records compatibility fallback', () => {
+    write(join(base, 'manifest.json'), validManifest('win32', 'x64', 'centaurai-core.exe', true));
+    const result = verifyBundledCentauraiCoreResources({
       resourcesDir,
       electronPlatformName: 'win32',
       targetArch: 'x64',
     });
-
-    expect(result.missing).toContain(
-      'bundled-aioncore/win32-x64/managed-resources/acp/codex-acp/0.14.0/win32-x64/codex-acp.exe'
-    );
+    expect(result.missing).toContain('bundled-centaurai-core/win32-x64/manifest.json<valid-provenance>');
   });
 });

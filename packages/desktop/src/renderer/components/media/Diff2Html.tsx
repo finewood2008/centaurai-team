@@ -140,7 +140,9 @@ const Diff2Html = ({
 
       const name = header.querySelector('.d2h-file-name') as HTMLDivElement;
       if (name && title) {
-        name.innerHTML = title;
+        // Titles can include agent/tool output. Keep them as inert text rather
+        // than reparsing them into the already-generated diff DOM.
+        name.textContent = title;
       }
     } else {
       console.warn('[Diff2Html] Header or operatorRef missing', { hasHeader: !!header, hasRef: !!operatorRef.current });

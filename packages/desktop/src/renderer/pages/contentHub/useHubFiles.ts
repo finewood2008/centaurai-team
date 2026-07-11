@@ -7,26 +7,39 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ipcBridge } from '@/common';
+import { getCurrentFrontendUserId } from '@/common/utils/frontendUserScope';
 import { filterConversationsWithChannelScope } from '@/renderer/utils/user/conversationVisibility';
 import { useGeneratedFilesAutoRefresh } from '@/renderer/hooks/workspace/useGeneratedFilesAutoRefresh';
 import { fetchRecentFiles } from '@/renderer/pages/guid/components/RecentFiles';
-import { getContentTypeByExtension } from '@/renderer/pages/conversation/Preview/fileUtils';
 import { loadStandaloneGeneratedArtifactFiles } from '@/renderer/utils/file/generatedArtifacts';
-import type { FileEntry, HubConversationGroup, HubFileKind } from './types';
+import { filterHubRecords, sortHubRecords } from './components/manage/hubState';
+import {
+  draftAssetFromFile,
+  draftFilesForReview,
+  fileEntryFromAsset,
+  filterArchivedContentAssets,
+  filterSavedContentAssets,
+  listContentAssets,
+  migrateLegacyContentAssets,
+} from './components/manage/contentAssets';
+import type {
+  ContentAsset,
+  FileEntry,
+  HubConversationGroup,
+  HubFileKind,
+  HubFileRecord,
+  HubSortDirection,
+  HubSortKey,
+} from './types';
 
-/** Map a fine-grained PreviewContentType to the coarse hub filter buckets. */
-export function classifyHubFile(name: string): Exclude<HubFileKind, 'all'> {
-  const type = getContentTypeByExtension(name);
-  if (type === 'image') return 'image';
-  if (type === 'pdf' || type === 'word' || type === 'excel' || type === 'ppt') return 'document';
-  if (type === 'code' || type === 'markdown' || type === 'html') return 'code';
-  return 'other';
-}
-
-export function useHubFiles(search: string) {
-  const [files, setFiles] = useState<FileEntry[]>([]);
+export function useHubFiles(search: string, kind: HubFileKind, sortKey: HubSortKey, sortDirection: HubSortDirection) {
+  const [generatedFiles, setGeneratedFiles] = useState<FileEntry[]>([]);
+  const [assets, setAssets] = useState<ContentAsset[]>([]);
   const [loading, setLoading] = useState(true);
-  const [kind, setKind] = useState<HubFileKind>('all');
+
+  const loadAssets = useCallback(async () => {
+    setAssets(await listContentAssets(getCurrentFrontendUserId()));
+  }, []);
 
   const loadFiles = useCallback(async () => {
     setLoading(true);
@@ -37,9 +50,12 @@ export function useHubFiles(search: string) {
         fetchRecentFiles(visibleConversations),
         loadStandaloneGeneratedArtifactFiles(),
       ]);
-      setFiles([...conversationFiles, ...standaloneFiles]);
+      await migrateLegacyContentAssets();
+      setGeneratedFiles([...conversationFiles, ...standaloneFiles]);
+      setAssets(await listContentAssets(getCurrentFrontendUserId()));
     } catch {
-      setFiles([]);
+      setGeneratedFiles([]);
+      setAssets([]);
     } finally {
       setLoading(false);
     }
@@ -54,18 +70,96 @@ export function useHubFiles(search: string) {
   // conversations' outputs surface without a manual reload).
   useGeneratedFilesAutoRefresh(loadFiles);
 
-  // Files matching the search box, sorted newest-first.
-  const searched = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = q ? files.filter((f) => f.name.toLowerCase().includes(q)) : files;
-    return [...list].toSorted((a, b) => b.mtime - a.mtime);
-  }, [files, search]);
+  const savedAssets = useMemo(() => filterSavedContentAssets(assets), [assets]);
+  const archivedAssets = useMemo(() => filterArchivedContentAssets(assets), [assets]);
 
-  // Files for the 按类型 view: search + kind filter applied.
+  const records = useMemo<HubFileRecord<FileEntry>[]>(
+    () =>
+      savedAssets.map((asset) => {
+        const file = fileEntryFromAsset(asset);
+        return {
+          id: asset.id,
+          name: file.name,
+          path: file.path,
+          size: file.size,
+          modifiedAt: file.mtime,
+          kind: asset.kind,
+          source: 'mine',
+          subtitle: file.conversation,
+          raw: file,
+          asset,
+        };
+      }),
+    [savedAssets]
+  );
+
+  const draftFiles = useMemo(() => draftFilesForReview(generatedFiles, assets), [assets, generatedFiles]);
+
+  const archivedRecords = useMemo<HubFileRecord<FileEntry>[]>(
+    () =>
+      archivedAssets.map((asset) => {
+        const file = fileEntryFromAsset(asset);
+        return {
+          id: asset.id,
+          name: file.name,
+          path: file.path,
+          size: file.size,
+          modifiedAt: file.mtime,
+          kind: asset.kind,
+          source: 'mine',
+          subtitle: file.conversation,
+          raw: file,
+          asset,
+        };
+      }),
+    [archivedAssets]
+  );
+
+  const draftRecords = useMemo<HubFileRecord<FileEntry>[]>(
+    () =>
+      draftFiles.map((file) => {
+        const asset = draftAssetFromFile(file);
+        return {
+          id: asset.id,
+          name: file.name,
+          path: file.path,
+          size: file.size,
+          modifiedAt: file.mtime,
+          kind: asset.kind,
+          source: 'mine',
+          subtitle: file.conversation,
+          raw: file,
+          asset,
+        };
+      }),
+    [draftFiles]
+  );
+
+  // Files matching search + type filter, sorted by the shared hub sort state.
+  const visibleRecords = useMemo(() => {
+    return sortHubRecords(filterHubRecords(records, search, kind), sortKey, sortDirection);
+  }, [records, search, kind, sortKey, sortDirection]);
+
+  const visibleDraftRecords = useMemo(() => {
+    return sortHubRecords(filterHubRecords(draftRecords, search, kind), sortKey, sortDirection);
+  }, [draftRecords, search, kind, sortKey, sortDirection]);
+
+  const visibleArchivedRecords = useMemo(() => {
+    return sortHubRecords(filterHubRecords(archivedRecords, search, kind), sortKey, sortDirection);
+  }, [archivedRecords, search, kind, sortKey, sortDirection]);
+
+  const searched = useMemo(() => {
+    return visibleRecords.map((record) => record.raw);
+  }, [visibleRecords]);
+
+  const visibleDraftFiles = useMemo(() => {
+    return visibleDraftRecords.map((record) => record.raw);
+  }, [visibleDraftRecords]);
+
+  // Legacy by-type view now uses the same global filter pipeline.
   const byType = useMemo(() => {
-    if (kind === 'all') return searched;
-    return searched.filter((f) => classifyHubFile(f.name) === kind);
-  }, [searched, kind]);
+    return searched;
+  }, [searched]);
 
   // Files grouped by conversation for the 按会话 view.
   const byConversation = useMemo<HubConversationGroup[]>(() => {
@@ -82,12 +176,26 @@ export function useHubFiles(search: string) {
 
   return {
     loading,
-    total: files.length,
-    kind,
-    setKind,
+    total: savedAssets.length,
+    visibleTotal: searched.length,
+    draftTotal: draftFiles.length,
+    visibleDraftTotal: visibleDraftFiles.length,
+    archivedTotal: archivedAssets.length,
+    visibleArchivedTotal: visibleArchivedRecords.length,
+    assets,
+    savedAssets,
+    records,
+    visibleRecords,
+    draftRecords,
+    visibleDraftRecords,
+    archivedRecords,
+    visibleArchivedRecords,
     searched,
+    draftFiles,
+    visibleDraftFiles,
     byType,
     byConversation,
     reload: loadFiles,
+    reloadAssets: loadAssets,
   };
 }

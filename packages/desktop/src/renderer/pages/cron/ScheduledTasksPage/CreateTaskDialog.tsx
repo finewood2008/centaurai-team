@@ -159,7 +159,7 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({
   const [workspace, setWorkspace] = useState<string | undefined>(undefined);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
 
-  // Available agents from backend `/api/agents`, shared across SWR cache.
+  // Available agents adapted from Core's management catalog, shared across SWR cache.
   const { data: detectedAgents } = useSWR<AgentMetadata[]>(DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents);
 
   // Populate form when entering edit mode
@@ -276,7 +276,7 @@ const CreateTaskDialog: React.FC<CreateTaskDialogProps> = ({
     []
   );
 
-  // ACP model info derived from the backend `/api/agents` handshake.
+  // ACP model info derived from the management catalog handshake fields.
   const acpCachedModelInfo = useMemo<AcpModelInfo | null>(() => {
     if (!resolvedBackend || resolvedBackend === 'gemini' || resolvedBackend === 'aionrs') return null;
     const matched = detectedAgents?.find((a) => (a.backend ?? a.agent_type) === resolvedBackend);

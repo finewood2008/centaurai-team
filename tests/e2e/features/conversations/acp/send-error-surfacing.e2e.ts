@@ -74,13 +74,17 @@ async function goToConversation(page: import('@playwright/test').Page, conversat
 }
 
 async function installAcpFailureRoutes(page: import('@playwright/test').Page): Promise<void> {
-  await page.route('**/api/conversations/*/warmup', async (route) => {
+  await page.route('**/api/conversations/*/runtime/ensure', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         success: true,
-        data: null,
+        data: {
+          recovered: false,
+          config_options: [],
+          runtime: { has_task: true },
+        },
       }),
     });
   });
@@ -148,7 +152,7 @@ test.describe('ACP send error surfacing', () => {
       if (conversationId) {
         await httpDelete(page, `/api/conversations/${encodeURIComponent(conversationId)}`).catch(() => {});
       }
-      await page.unroute('**/api/conversations/*/warmup').catch(() => {});
+      await page.unroute('**/api/conversations/*/runtime/ensure').catch(() => {});
       await page.unroute('**/api/conversations/*/slash-commands').catch(() => {});
       await page.unroute('**/api/conversations/*/messages').catch(() => {});
     }
@@ -173,7 +177,7 @@ test.describe('ACP send error surfacing', () => {
       if (conversationId) {
         await httpDelete(page, `/api/conversations/${encodeURIComponent(conversationId)}`).catch(() => {});
       }
-      await page.unroute('**/api/conversations/*/warmup').catch(() => {});
+      await page.unroute('**/api/conversations/*/runtime/ensure').catch(() => {});
       await page.unroute('**/api/conversations/*/slash-commands').catch(() => {});
       await page.unroute('**/api/conversations/*/messages').catch(() => {});
     }

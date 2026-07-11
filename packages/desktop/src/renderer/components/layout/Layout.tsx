@@ -10,6 +10,7 @@ import PwaPullToRefresh from '@/renderer/components/layout/PwaPullToRefresh';
 import MobileTabBar from '@/renderer/components/layout/MobileTabBar';
 import Titlebar from '@/renderer/components/layout/Titlebar';
 import ToolboxPage from '@/renderer/pages/toolbox/ToolboxPage';
+import { PreviewHost } from '@/renderer/pages/conversation/Preview';
 import { Layout as ArcoLayout } from '@arco-design/web-react';
 import classNames from 'classnames';
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
@@ -355,7 +356,7 @@ const Layout: React.FC<{
                 </div>
                 <div className='collapsed-hidden flex flex-col justify-center leading-tight'>
                   <span className='text-12px text-t-secondary'>
-                    半人马AI{IS_DECISION ? '-超级参谋' : IS_TEAM ? '超级工作台' : ''}
+                    半人马AI{IS_DECISION ? '-超级参谋' : IS_TEAM ? '超级知识库' : ''}
                   </span>
                   <span className='text-16px text-t-primary font-semibold'>CentaurAI</span>
                 </div>
@@ -437,6 +438,7 @@ const Layout: React.FC<{
               {isMobile && <MobileTabBar />}
               {directorySelectionContextHolder}
               <PwaPullToRefresh />
+              <PreviewHost excludeConversationRoutes />
               <Suspense fallback={null}>
                 <UpdateModal />
               </Suspense>

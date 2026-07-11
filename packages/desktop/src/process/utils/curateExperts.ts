@@ -63,7 +63,7 @@ export async function curateExperts(configFile: ConfigFile): Promise<boolean> {
 
   const expertsDir = resolveExpertsDir();
   if (!expertsDir) {
-    console.warn('[AionUi] Bundled experts dataset not found; skipping expert curation');
+    console.warn('[CentaurAI] Bundled experts dataset not found; skipping expert curation');
     return true;
   }
 
@@ -73,7 +73,7 @@ export async function curateExperts(configFile: ConfigFile): Promise<boolean> {
     const parsed = JSON.parse(raw) as unknown;
     cutIds = Array.isArray(parsed) ? (parsed.filter((id) => typeof id === 'string') as string[]) : [];
   } catch (error) {
-    console.error('[AionUi] Failed to read curated-out experts list:', error);
+    console.error('[CentaurAI] Failed to read curated-out experts list:', error);
     return false;
   }
 
@@ -98,7 +98,7 @@ export async function curateExperts(configFile: ConfigFile): Promise<boolean> {
         return;
       }
       failed += 1;
-      console.error(`[AionUi] Failed to disable curated-out expert '${cutIds[index]}':`, reason);
+      console.error(`[CentaurAI] Failed to disable curated-out expert '${cutIds[index]}':`, reason);
     }
   });
 
@@ -107,16 +107,16 @@ export async function curateExperts(configFile: ConfigFile): Promise<boolean> {
   // Nothing applied and everything 404'd → the experts aren't present yet (seed
   // pending). Don't burn the flag; retry next launch once seeding succeeds.
   if (applied === 0 && skipped === cutIds.length) {
-    console.warn('[AionUi] Expert curation deferred: no target experts present yet (seed pending?)');
+    console.warn('[CentaurAI] Expert curation deferred: no target experts present yet (seed pending?)');
     return false;
   }
 
   if (failed > 0) {
-    console.error(`[AionUi] Expert curation partial: ${failed}/${cutIds.length} failed, ${skipped} skipped`);
+    console.error(`[CentaurAI] Expert curation partial: ${failed}/${cutIds.length} failed, ${skipped} skipped`);
     return false;
   }
 
-  console.log(`[AionUi] Curated experts: disabled ${applied} (skipped ${skipped} not-present)`);
+  console.log(`[CentaurAI] Curated experts: disabled ${applied} (skipped ${skipped} not-present)`);
   await persistFlag(accessor);
   return true;
 }
@@ -126,6 +126,6 @@ async function persistFlag(accessor: ConfigAccessor): Promise<void> {
   try {
     await accessor.set(CURATE_FLAG, CURATE_VERSION);
   } catch (error) {
-    console.warn('[AionUi] Failed to persist expert curation flag', error);
+    console.warn('[CentaurAI] Failed to persist expert curation flag', error);
   }
 }

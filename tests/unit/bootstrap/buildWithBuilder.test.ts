@@ -22,7 +22,7 @@ describe('build-with-builder', () => {
       args: ['auto', '--mac', '--x64'],
       expectedArch: 'x64',
     },
-  ])('prepares bundled AionCore for $expectedArch with args $args', ({ args, expectedArch }) => {
+  ])('prepares bundled CentaurAI Core for $expectedArch with args $args', ({ args, expectedArch }) => {
     const tempDir = mkdtempSync(join(tmpdir(), 'aionui-build-test-'));
     const hookPath = join(tempDir, 'hook.cjs');
     const callsPath = join(tempDir, 'prepare-calls.json');
@@ -42,7 +42,7 @@ function recordPrepareCall(options) {
   const calls = fs.existsSync(callsPath) ? JSON.parse(fs.readFileSync(callsPath, 'utf8')) : [];
   calls.push(options ?? null);
   fs.writeFileSync(callsPath, JSON.stringify(calls));
-  return { prepared: true, dir: 'mock-bundled-aioncore', sourceType: 'mock' };
+  return { prepared: true, dir: 'mock-bundled-centaurai-core', sourceType: 'mock' };
 }
 
 Module._load = function patchedLoad(request, parent, isMain) {
@@ -50,12 +50,12 @@ Module._load = function patchedLoad(request, parent, isMain) {
     return recordPrepareCall;
   }
 
-  if (request.endsWith('packages/shared-scripts/src/prepare-aioncore.js')) {
-    return { prepareAioncore: recordPrepareCall };
+  if (request.endsWith('packages/shared-scripts/src/prepare-centaurai-core.js')) {
+    return { prepareCentauraiCore: recordPrepareCall };
   }
 
-  if (request === './resolveAioncoreVersion.js' || request.endsWith('/resolveAioncoreVersion.js')) {
-    return { resolveAioncoreVersion: () => 'v-test' };
+  if (request === './resolveCentauraiCoreVersion.js' || request.endsWith('/resolveCentauraiCoreVersion.js')) {
+    return { resolveCentauraiCoreVersion: () => 'v0.1.47' };
   }
 
   return originalLoad.call(this, request, parent, isMain);

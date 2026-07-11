@@ -9,7 +9,12 @@ import { BackendHttpError } from '@/common/adapter/httpBridge';
 import { ipcBridge } from '@/common';
 import type { TChatConversation } from '@/common/config/storage';
 import { mutate } from 'swr';
-import { getConversationOrNull, refreshConversationCache } from '@/renderer/pages/conversation/utils/conversationCache';
+import {
+  getConversationOrNull,
+  mergeConversationWorkspace,
+  refreshConversationCache,
+  sanitizeConversationWorkspace,
+} from '@/renderer/pages/conversation/utils/conversationCache';
 
 vi.mock('@/common', () => ({
   ipcBridge: {
@@ -119,6 +124,74 @@ describe('conversationCache', () => {
       await expect(refreshConversationCache('conv-1')).rejects.toBe(error);
 
       expect(mutate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('mergeConversationWorkspace', () => {
+    it('fills the workspace path from runtime events', () => {
+      const result = mergeConversationWorkspace(mockConversation, '/tmp/centaurai-workspaces/conv-1');
+
+      expect(result.extra?.workspace).toBe('/tmp/centaurai-workspaces/conv-1');
+      expect(result.extra?.is_temporary_workspace).toBe(true);
+      expect(mockConversation.extra?.workspace).toBeUndefined();
+    });
+
+    it('does not merge a home directory as a temporary runtime workspace', () => {
+      const result = mergeConversationWorkspace(mockConversation, '/home/user');
+
+      expect(result).toBe(mockConversation);
+      expect(result.extra?.workspace).toBeUndefined();
+    });
+
+    it('allows a user-picked home directory workspace', () => {
+      const result = mergeConversationWorkspace(
+        {
+          ...mockConversation,
+          extra: {
+            custom_workspace: true,
+            is_temporary_workspace: false,
+          },
+        } as TChatConversation,
+        '/home/user'
+      );
+
+      expect(result.extra?.workspace).toBe('/home/user');
+      expect(result.extra?.is_temporary_workspace).toBe(false);
+    });
+
+    it('preserves explicit temporary workspace classification for legacy rows without the flag', () => {
+      const result = mergeConversationWorkspace(
+        {
+          ...mockConversation,
+          extra: {
+            custom_workspace: false,
+          },
+        } as TChatConversation,
+        '/tmp/centaurai-workspaces/conv-1'
+      );
+
+      expect(result.extra?.workspace).toBe('/tmp/centaurai-workspaces/conv-1');
+      expect(result.extra?.is_temporary_workspace).toBe(true);
+    });
+
+    it('returns the original conversation when the runtime event has no workspace', () => {
+      expect(mergeConversationWorkspace(mockConversation, '   ')).toBe(mockConversation);
+    });
+  });
+
+  describe('sanitizeConversationWorkspace', () => {
+    it('hides an unsafe temporary workspace from API responses', () => {
+      const result = sanitizeConversationWorkspace({
+        ...mockConversation,
+        extra: {
+          workspace: '/home/user',
+          custom_workspace: false,
+          is_temporary_workspace: true,
+        },
+      } as TChatConversation);
+
+      expect(result.extra?.workspace).toBe('');
+      expect(result.extra?.is_temporary_workspace).toBe(true);
     });
   });
 });

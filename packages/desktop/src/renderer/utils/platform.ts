@@ -9,7 +9,7 @@
  * 平台检测工具函数
  */
 
-import { getBaseUrl } from '@/common/adapter/httpBridge';
+import { getBaseUrl, isRemoteClientBridgeMode } from '@/common/adapter/httpBridge';
 
 /**
  * Check if running in Electron desktop environment
@@ -85,7 +85,7 @@ export const resolveExtensionAssetUrl = (url: string | undefined): string | unde
 export const openExternalUrl = async (url: string): Promise<void> => {
   if (!url) return;
 
-  if (isElectronDesktop()) {
+  if (isElectronDesktop() && !isRemoteClientBridgeMode()) {
     const { ipcBridge } = await import('@/common');
     await ipcBridge.shell.openExternal.invoke(url);
   } else {

@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type { BrowserWindow } from 'electron';
+import type { BrowserWindow, WebContents } from 'electron';
 import { ipcMain } from 'electron';
 
 import { bridge } from '@office-ai/platform';
 import { ADAPTER_BRIDGE_EVENT_KEY } from './constant';
+import { isTrustedMainFrameIpcSender } from './ipcSenderTrust';
 import { registerWebSocketBroadcaster, getBridgeEmitter, setBridgeEmitter, broadcastToAll } from './registry';
 
 /**
@@ -21,6 +22,7 @@ interface BridgeEventData {
 }
 
 const adapterWindowList: Array<BrowserWindow> = [];
+const trustedAdapterWebContents = new Set<WebContents>();
 
 export { registerWebSocketBroadcaster, getBridgeEmitter };
 
@@ -90,7 +92,10 @@ bridge.adapter({
     // 保存 emitter 引用供 WebSocket 处理使用 / Save emitter reference for WebSocket handling
     setBridgeEmitter(emitter);
 
-    ipcMain.handle(ADAPTER_BRIDGE_EVENT_KEY, (_event, info) => {
+    ipcMain.handle(ADAPTER_BRIDGE_EVENT_KEY, (event, info) => {
+      if (!isTrustedMainFrameIpcSender(event, trustedAdapterWebContents)) {
+        throw new Error('Unauthorized native bridge sender');
+      }
       const { name, data } = JSON.parse(info) as BridgeEventData;
       return Promise.resolve(emitter.emit(name, data));
     });
@@ -99,9 +104,11 @@ bridge.adapter({
 
 export const initMainAdapterWithWindow = (win: BrowserWindow) => {
   adapterWindowList.push(win);
+  trustedAdapterWebContents.add(win.webContents);
   const off = () => {
     const index = adapterWindowList.indexOf(win);
     if (index > -1) adapterWindowList.splice(index, 1);
+    trustedAdapterWebContents.delete(win.webContents);
   };
   win.on('closed', off);
   return off;

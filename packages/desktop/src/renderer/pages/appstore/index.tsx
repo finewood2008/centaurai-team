@@ -31,7 +31,7 @@ const triggerDownload = (appId: string, file: string): void => {
 
 const pickText = (map: Record<string, string> | undefined, lang: string): string => {
   if (!map) return '';
-  return map[lang] ?? map['en-US'] ?? map['zh-CN'] ?? Object.values(map)[0] ?? '';
+  return map[lang] ?? map['zh-CN'] ?? map['zh-TW'] ?? map['en-US'] ?? Object.values(map)[0] ?? '';
 };
 
 const isVideoApp = (app: IAppStoreApp): boolean => app.type === 'local-service';

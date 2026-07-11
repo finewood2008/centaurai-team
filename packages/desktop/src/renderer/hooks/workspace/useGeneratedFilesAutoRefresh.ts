@@ -6,7 +6,11 @@
 
 import { ipcBridge } from '@/common';
 import type { IConversationTurnCompletedEvent } from '@/common/adapter/ipcBridge';
-import { registerGeneratedArtifactsFromPayload } from '@/renderer/utils/file/generatedArtifacts';
+import {
+  registerGeneratedArtifacts,
+  registerGeneratedArtifactsFromPayload,
+  registerGeneratedArtifactsFromToolPayload,
+} from '@/renderer/utils/file/generatedArtifacts';
 import { emitter } from '@/renderer/utils/emitter';
 import { useCallback, useEffect, useRef } from 'react';
 
@@ -53,35 +57,65 @@ export function useGeneratedFilesAutoRefresh(onChange: () => void): void {
 
   useEffect(() => {
     const handleGeneratedFilesChanged = () => throttled();
-    const handleTurnCompleted = (event: IConversationTurnCompletedEvent) => {
-      if (event.workspace) {
-        void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
-          workspace: event.workspace,
-          conversationId: event.session_id,
-          source: 'conversation',
-        });
+    const handleGeneratedWorkspaceFile = (event: { file_path?: string; workspace?: string; operation?: string }) => {
+      if (event.operation === 'delete') {
+        throttled();
+        return;
       }
+
+      if (!event.file_path) return;
+      void registerGeneratedArtifacts({
+        paths: [event.file_path],
+        workspace: event.workspace,
+        source: 'conversation',
+      });
       throttled();
     };
-    const handleResponse = (data: { type: string; data?: unknown }) => {
+    const handleTurnCompleted = (event: IConversationTurnCompletedEvent) => {
+      void registerGeneratedArtifactsFromPayload(event.last_message?.content, {
+        workspace: event.workspace,
+        conversationId: event.session_id,
+        source: 'conversation',
+      });
+      throttled();
+    };
+    const handleResponse = (data: { type: string; data?: unknown; conversation_id?: string }) => {
       if (data.type === 'acp_tool_call') {
         const acpData = data.data as { update?: { kind?: string; status?: string; title?: string } } | undefined;
         const kind = acpData?.update?.kind;
         const status = acpData?.update?.status;
         const shouldRefresh = kind === 'edit' || kind === 'execute' || (status === 'completed' && kind !== 'read');
-        if (shouldRefresh && !isNonFileSystemTool(acpData?.update?.title)) throttled();
+        if (shouldRefresh && !isNonFileSystemTool(acpData?.update?.title)) {
+          void registerGeneratedArtifactsFromToolPayload(data.data, {
+            conversationId: data.conversation_id,
+            source: 'conversation',
+          });
+          throttled();
+        }
       } else if (data.type === 'tool_call') {
         const toolData = data.data as { status?: string; name?: string } | undefined;
-        if (toolData?.status === 'completed' && !isNonFileSystemTool(toolData?.name)) throttled();
+        if (toolData?.status === 'completed' && !isNonFileSystemTool(toolData?.name)) {
+          void registerGeneratedArtifactsFromToolPayload(data.data, {
+            conversationId: data.conversation_id,
+            source: 'conversation',
+          });
+          throttled();
+        }
       }
     };
     emitter.on('generated-files.changed', handleGeneratedFilesChanged);
     const unsubscribe = ipcBridge.acpConversation.responseStream.on(handleResponse);
     const unsubscribeTurnCompleted = ipcBridge.conversation.turnCompleted.on(handleTurnCompleted);
+    const unsubscribeFileStream = ipcBridge.fileStream.contentUpdate.on(handleGeneratedWorkspaceFile);
+    const unsubscribeOfficeAdded = ipcBridge.workspaceOfficeWatch.fileAdded.on((event) => {
+      handleGeneratedWorkspaceFile({ file_path: event.file_path, workspace: event.workspace, operation: 'write' });
+    });
     return () => {
       emitter.off('generated-files.changed', handleGeneratedFilesChanged);
       unsubscribe();
       unsubscribeTurnCompleted();
+      unsubscribeFileStream();
+      unsubscribeOfficeAdded();
       if (throttleTimerRef.current) clearTimeout(throttleTimerRef.current);
     };
   }, [throttled]);

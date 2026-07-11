@@ -5,8 +5,10 @@ import { ipcBridge } from '@/common';
 import { retrieveKnowledgeContext } from '@/renderer/services/knowledgeBaseSearch';
 import { uploadFileViaHttp } from '@/renderer/services/FileService';
 import { emitter } from '@/renderer/utils/emitter';
-import { registerGeneratedArtifacts } from '@/renderer/utils/file/generatedArtifacts';
-import { isElectronDesktop } from '@/renderer/utils/platform';
+import {
+  extractGeneratedArtifactPathsFromToolPayload,
+  registerGeneratedArtifacts,
+} from '@/renderer/utils/file/generatedArtifacts';
 import type { IConversationTurnCompletedEvent, IResponseMessage } from '@/common/adapter/ipcBridge';
 import { joinPath, transformMessage } from '@/common/chat/chatLib';
 import type { TMessage, IMessageText } from '@/common/chat/chatLib';
@@ -102,7 +104,7 @@ export type MeetingOrchestrator = {
   cancel: () => void;
   /** Boss picks a final option. */
   decide: (optionId: string) => void;
-  /** Ask the leader to archive the 方案书 as docx/pptx/md into the Content Hub. */
+  /** Ask the leader to archive the 方案书 as docx/pptx/md into Workspace. */
   exportPlan: () => boolean;
   /** Reopen a past meeting's 方案书 from history. */
   openRecord: (rec: MeetingRecord) => void;
@@ -238,6 +240,8 @@ class MeetingEngine {
   /** conversation_id → current turn id (routes streamed chunks); turn id → accumulated text. */
   private readonly turnConv = new Map<string, string>();
   private readonly turnText = new Map<string, string>();
+  private readonly conversationWorkspaceCache = new Map<string, string>();
+  private readonly pendingArtifactArchives = new Set<Promise<void>>();
   private readonly loopUnsubs: Array<() => void> = [];
   /** Monotonic run id; bumped on start/cancel/reset so a stale loop frame goes inert. */
   private runSeq = 0;
@@ -341,15 +345,16 @@ class MeetingEngine {
   };
 
   /**
-   * Auto-archive the synthesized 方案书 as a markdown file into the team's
-   * workspace, which the Content Hub also indexes. Returns the written path or null.
+   * Auto-archive the synthesized 方案书 as a markdown file into the moderator
+   * conversation's temporary workspace. Explicit share/archive actions can
+   * publish it to the team later.
    */
   private async archivePlan(planText: string, topic: string): Promise<string | null> {
     const moderator = this.moderator;
     if (!planText.trim() || !moderator) return null;
     try {
       const conv = await ipcBridge.conversation.get.invoke({ id: moderator.conversation_id });
-      const workspace = this.team.workspace || (conv?.extra as { workspace?: string } | undefined)?.workspace;
+      const workspace = (conv?.extra as { workspace?: string } | undefined)?.workspace;
       if (!workspace) return null;
       const safe =
         (topic || '方案书')
@@ -374,20 +379,64 @@ class MeetingEngine {
     }
   }
 
-  /** The team workspace (where archives land → Content Hub), or null. */
+  /** The moderator conversation workspace, or null. */
   private async resolveWorkspace(): Promise<string | null> {
-    if (this.team.workspace) return this.team.workspace;
     const moderator = this.moderator;
     if (!moderator) return null;
+    return this.resolveConversationWorkspace(moderator.conversation_id);
+  }
+
+  private async resolveConversationWorkspace(conversationId: string): Promise<string | null> {
+    if (this.conversationWorkspaceCache.has(conversationId)) {
+      return this.conversationWorkspaceCache.get(conversationId) ?? null;
+    }
     try {
-      const conv = await ipcBridge.conversation.get.invoke({ id: moderator.conversation_id });
-      return (conv?.extra as { workspace?: string } | undefined)?.workspace ?? null;
+      const conv = await ipcBridge.conversation.get.invoke({ id: conversationId });
+      const workspace = (conv?.extra as { workspace?: string } | undefined)?.workspace;
+      const value = typeof workspace === 'string' && workspace.trim() ? workspace.trim() : null;
+      if (value) this.conversationWorkspaceCache.set(conversationId, value);
+      return value;
     } catch {
       return null;
     }
   }
 
-  /** Generate the final decision Word document into the meeting workspace. */
+  private trackToolArtifactArchive(payload: IResponseMessage): void {
+    const paths = extractGeneratedArtifactPathsFromToolPayload(payload.data);
+    if (paths.length === 0) return;
+    const task = this.archiveToolArtifactPaths(payload, paths);
+    this.pendingArtifactArchives.add(task);
+    void task.finally(() => {
+      this.pendingArtifactArchives.delete(task);
+    });
+  }
+
+  private async archiveToolArtifactPaths(payload: IResponseMessage, paths: string[]): Promise<void> {
+    try {
+      const targetWorkspace = await this.resolveWorkspace();
+      const sourceWorkspace = await this.resolveConversationWorkspace(payload.conversation_id);
+      const workspace = targetWorkspace || sourceWorkspace;
+      if (!workspace) return;
+      await registerGeneratedArtifacts({
+        paths,
+        workspace,
+        sourceWorkspace,
+        conversationId: this.moderator?.conversation_id || payload.conversation_id,
+        source: 'meeting',
+        standaloneLabel: `${this.team.name} · 圆桌会议`,
+      });
+    } catch (error) {
+      console.warn('[MeetingEngine] Failed to archive generated tool artifacts:', error);
+    }
+  }
+
+  private async waitForArtifactArchives(): Promise<void> {
+    const tasks = [...this.pendingArtifactArchives];
+    if (tasks.length === 0) return;
+    await Promise.allSettled(tasks);
+  }
+
+  /** Generate the final decision Word document into the moderator conversation workspace. */
   private async exportDecisionDocx(decision: MeetingResolutionOption | null): Promise<void> {
     const topic = this.state.topic;
     const plan = this.state.plan;
@@ -403,7 +452,7 @@ class MeetingEngine {
       });
       const fileName = decisionFileName(topic, this.team.name);
       const moderator = this.moderator;
-      let dir = await this.resolveWorkspace();
+      const dir = await this.resolveWorkspace();
       const inWorkspace = Boolean(dir && moderator?.conversation_id);
       let savedPath: string | null = null;
       let savedToWorkspace = false;
@@ -419,30 +468,13 @@ class MeetingEngine {
       }
 
       if (!dir) {
-        try {
-          const downloads = await ipcBridge.application.getPath.invoke({ name: 'downloads' });
-          dir = typeof downloads === 'string' && downloads ? downloads : null;
-        } catch {
-          dir = null;
-        }
-      }
-      if (!dir) {
-        Message.error('生成 Word 文档失败：未找到保存位置');
+        Message.error('生成 Word 文档失败：未找到当前会议的待整理生成物空间');
         return;
       }
 
       if (!savedPath) {
-        if (!isElectronDesktop()) {
-          Message.error('生成 Word 文档失败：未找到可用的临时空间');
-          return;
-        }
-        const res = await ipcBridge.application.saveBinaryFile.invoke({ dir, fileName, base64 });
-        if (res?.success && res.data?.path) {
-          savedPath = res.data.path;
-        } else {
-          Message.error(`生成 Word 文档失败${res?.msg ? '：' + res.msg : ''}`);
-          return;
-        }
+        Message.error('生成 Word 文档失败：未找到可用的待整理生成物空间');
+        return;
       }
 
       if (savedPath) {
@@ -454,9 +486,7 @@ class MeetingEngine {
           standaloneLabel: `${this.team.name} · 圆桌会议`,
         });
         if (savedToWorkspace) {
-          Message.success(`已生成 Word 决策文档：${fileName}（已存入内容中心）`);
-        } else {
-          Message.success(`已生成 Word 决策文档：${fileName}（已保存到下载文件夹）`);
+          Message.success(`已生成 Word 决策文档：${fileName}（已存入工作空间）`);
         }
       }
     } catch {
@@ -494,6 +524,9 @@ class MeetingEngine {
   handleStream(payload: IResponseMessage): void {
     const turnId = this.turnConv.get(payload.conversation_id);
     if (!turnId) return;
+    if (payload.type === 'tool_call' || payload.type === 'acp_tool_call') {
+      this.trackToolArtifactArchive(payload);
+    }
     const transformed = transformMessage(payload) as TMessage | undefined;
     if (!transformed || transformed.type !== 'text' || transformed.position !== 'left') return;
     const chunk = (transformed as IMessageText).content?.content;
@@ -543,11 +576,16 @@ class MeetingEngine {
   }
 
   /** Stop/remove a run's fresh hidden conversations and drop their stream routes. Idempotent. */
-  private releaseConvs(convs: Map<string, string>, stop: boolean): void {
-    for (const convId of convs.values()) {
+  private async releaseConvs(convs: Map<string, string>, stop: boolean): Promise<void> {
+    const conversationIds = [...convs.values()];
+    for (const convId of conversationIds) {
       STREAM_ROUTES.delete(convId);
       if (stop) void ipcBridge.conversation.stop.invoke({ conversation_id: convId }).catch(() => {});
+    }
+    await this.waitForArtifactArchives();
+    for (const convId of conversationIds) {
       void ipcBridge.conversation.remove.invoke({ id: convId }).catch(() => {});
+      this.conversationWorkspaceCache.delete(convId);
     }
     convs.clear();
   }
@@ -600,7 +638,7 @@ class MeetingEngine {
       const meta = metas.find((m) => (m.backend ?? m.agent_type) === src.agent_type);
       if (!meta) return null;
       try {
-        const params = await buildCliAgentParams(meta, this.team.workspace || '');
+        const params = await buildCliAgentParams(meta, '');
         params.name = `${src.isModerator ? '主持人' : '专家'}·${src.name}`;
         params.extra = { ...params.extra, team_id: this.team.id };
         if (src.provider_id && src.model_name) {
@@ -636,7 +674,7 @@ class MeetingEngine {
       isModerator: true,
     });
     if (!mod || stale()) {
-      this.releaseConvs(convs, true);
+      void this.releaseConvs(convs, true);
       return null;
     }
     const panel: Participant[] = [];
@@ -666,7 +704,7 @@ class MeetingEngine {
       if (p) panel.push(p);
     }
     if (stale()) {
-      this.releaseConvs(convs, true);
+      void this.releaseConvs(convs, true);
       return null;
     }
     return { mod, panel };
@@ -702,7 +740,9 @@ class MeetingEngine {
     // This run's own conversation map. Wire teardown to it BEFORE the build so a
     // cancel during the build window can still stop+remove whatever's created so far.
     const convs = new Map<string, string>();
-    this.activeTeardown = (stop: boolean) => this.releaseConvs(convs, stop);
+    this.activeTeardown = (stop: boolean) => {
+      void this.releaseConvs(convs, stop);
+    };
     try {
       const parts = await this.buildParticipants(myRun, convs);
       if (!parts || stale()) return;
@@ -858,7 +898,7 @@ class MeetingEngine {
         this.activeTeardown = null;
       }
       // Release this run's own conversations (idempotent; cancel may have already).
-      this.releaseConvs(convs, false);
+      await this.releaseConvs(convs, false);
     }
   }
 

@@ -11,6 +11,7 @@ import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { indexNasFolder } from '@aionui/web-host';
 import { ipcBridge } from '@/common';
+import { normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { ProcessConfig } from '@process/utils/initStorage';
 import { getZoomFactor, setZoomFactor } from '@process/utils/zoom';
 import { getCdpStatus, updateCdpConfig } from '@process/utils/configureChromium';
@@ -133,7 +134,8 @@ export function initApplicationBridge(): void {
     activeKnowledgeIndexByRoot.set(root, jobId);
     knowledgeIndexJobs.set(jobId, { phase: 'walking', total: 0, done: 0, failed: 0, skipped: 0, pruned: 0 });
     void indexNasFolder(root, '', {
-      endpoint: endpoint || 'http://127.0.0.1:8618',
+      endpoint: normalizeVectorDbEndpoint(endpoint),
+      manifestDir: path.join(app.getPath('userData'), 'nas-index-manifests'),
       includeVideo,
       onProgress: (progress) => {
         const cancelled = knowledgeIndexJobs.get(jobId)?.cancelled;

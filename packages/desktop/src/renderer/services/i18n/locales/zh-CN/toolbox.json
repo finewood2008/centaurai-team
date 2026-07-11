@@ -290,7 +290,7 @@
   "imageModelUnset": "未配置",
   "imageModelPlaceholder": "选择图像模型",
   "cancelRun": "中断生成",
-  "savedToContentHub": "已自动保存到内容中心：{{fileName}}",
+  "savedToContentHub": "已自动保存到工作空间：{{fileName}}",
   "generatedFiles": "生成文件",
   "openFile": "打开",
   "revealFile": "定位",
@@ -336,7 +336,7 @@
       "generatingWorkbench": "生成工作台内容",
       "generatingAgent": "Agent 生成内容",
       "collectingResults": "收集生成结果",
-      "savingContentHub": "保存到内容中心"
+      "savingContentHub": "保存到工作空间"
     },
     "stream": {
       "agentStarted": "Agent 已开始处理",

@@ -26,12 +26,7 @@ interface LoginParams {
 }
 
 type LoginErrorCode =
-  | 'invalidCredentials'
-  | 'tooManyAttempts'
-  | 'serverError'
-  | 'networkError'
-  | 'csrfError'
-  | 'unknown';
+  'invalidCredentials' | 'tooManyAttempts' | 'serverError' | 'networkError' | 'csrfError' | 'unknown';
 
 interface LoginResult {
   success: boolean;
@@ -289,6 +284,7 @@ export const AuthProvider: React.FC<React.PropsWithChildren> = ({ children }) =>
         // Logout also needs CSRF token / 登出同样需要 CSRF Token
         headers: {
           'Content-Type': 'application/json',
+          ...getWebuiGateHeaders(),
         },
         credentials: 'include',
         body: JSON.stringify(withCsrfToken({})),

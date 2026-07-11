@@ -6,6 +6,7 @@
 
 import { ipcBridge } from '@/common';
 import type { IGpuStatus, IStartOnBootStatus } from '@/common/adapter/ipcBridge';
+import { DEFAULT_VECTOR_DB_ENDPOINT, WEBUI_DEFAULT_PORT, normalizeVectorDbEndpoint } from '@/common/config/constants';
 import { configService } from '@/common/config/configService';
 import AionScrollArea from '@/renderer/components/base/AionScrollArea';
 import FeedbackButton from '@/renderer/components/base/FeedbackButton';
@@ -31,8 +32,11 @@ import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
 import { useSettingsViewMode } from '../../settingsViewContext';
 import DevSettings from './DevSettings';
+import AgentCapacityPanel from './AgentCapacityPanel';
 import DirInputItem from './DirInputItem';
 import PreferenceRow from './PreferenceRow';
+
+const DESKTOP_NAS_ROOT_KEY = 'webui.desktop.nasRootDir';
 
 /**
  * System settings content component
@@ -64,8 +68,9 @@ const SystemModalContent: React.FC = () => {
   const [agentIdleTimeout, setAgentIdleTimeout] = useState<number>(5);
   const [saveUploadToWorkspace, setSaveUploadToWorkspace] = useState(false);
   const [autoPreviewOfficeFiles, setAutoPreviewOfficeFiles] = useState(true);
+  const [nasRootDir, setNasRootDir] = useState<string>('');
   const [vectorDBEnabled, setVectorDBEnabled] = useState(false);
-  const [vectorDBEndpoint, setVectorDBEndpoint] = useState('http://127.0.0.1:8618');
+  const [vectorDBEndpoint, setVectorDBEndpoint] = useState(DEFAULT_VECTOR_DB_ENDPOINT);
   const [vectorDBSearchCount, setVectorDBSearchCount] = useState(5);
   const [vectorDBSearchMode, setVectorDBSearchMode] = useState<'text' | 'visual' | 'hybrid'>('text');
   const [vectorDBTesting, setVectorDBTesting] = useState(false);
@@ -120,8 +125,10 @@ const SystemModalContent: React.FC = () => {
     setCronNotificationEnabled(configService.get('system.cronNotificationEnabled') ?? false);
     setSaveUploadToWorkspace(configService.get('upload.saveToWorkspace') ?? false);
     setAutoPreviewOfficeFiles(configService.get('system.autoPreviewOfficeFiles') ?? true);
+    const savedNasRoot = configService.get(DESKTOP_NAS_ROOT_KEY);
+    setNasRootDir(typeof savedNasRoot === 'string' ? savedNasRoot : '');
     setVectorDBEnabled(configService.get('vectorDB.enabled') ?? false);
-    setVectorDBEndpoint(configService.get('vectorDB.endpoint') ?? 'http://127.0.0.1:8618');
+    setVectorDBEndpoint(normalizeVectorDbEndpoint(configService.get('vectorDB.endpoint')));
     setVectorDBSearchCount(configService.get('vectorDB.searchCount') ?? 5);
     setVectorDBSearchMode(configService.get('vectorDB.searchMode') ?? 'text');
     const pt = configService.get('acp.promptTimeout');
@@ -267,6 +274,42 @@ const SystemModalContent: React.FC = () => {
     });
   }, []);
 
+  const persistNasRoot = useCallback(
+    async (dir: string) => {
+      const previous = nasRootDir;
+      setNasRootDir(dir);
+      try {
+        await configService.set(DESKTOP_NAS_ROOT_KEY, dir);
+        const status = await ipcBridge.webui.getStatus.invoke().catch((): null => null);
+        if (status?.running) {
+          await ipcBridge.webui.start.invoke({
+            port: status.port || WEBUI_DEFAULT_PORT,
+            allowRemote: status.allowRemote === true,
+          });
+        }
+        Message.success(t('settings.nasRootSaved'));
+      } catch (caughtError) {
+        setNasRootDir(previous);
+        console.error('[SystemModalContent] Failed to persist NAS root:', caughtError);
+        Message.error(t('settings.nasRootSaveFailed'));
+      }
+    },
+    [nasRootDir, t]
+  );
+
+  const handlePickNasRoot = useCallback(() => {
+    ipcBridge.dialog.showOpen
+      .invoke({ defaultPath: nasRootDir || undefined, properties: ['openDirectory'] })
+      .then((paths) => {
+        if (paths?.[0]) void persistNasRoot(paths[0]);
+      })
+      .catch((caughtError) => console.error('[SystemModalContent] Failed to open NAS directory dialog:', caughtError));
+  }, [nasRootDir, persistNasRoot]);
+
+  const handleClearNasRoot = useCallback(() => {
+    void persistNasRoot('');
+  }, [persistNasRoot]);
+
   const handleVectorDBEnabledChange = useCallback((checked: boolean) => {
     setVectorDBEnabled(checked);
     configService.set('vectorDB.enabled', checked).catch(() => {
@@ -280,7 +323,9 @@ const SystemModalContent: React.FC = () => {
   }, []);
 
   const handleVectorDBEndpointBlur = useCallback(() => {
-    configService.set('vectorDB.endpoint', vectorDBEndpoint).catch(() => {});
+    const normalized = normalizeVectorDbEndpoint(vectorDBEndpoint);
+    setVectorDBEndpoint(normalized);
+    configService.set('vectorDB.endpoint', normalized).catch(() => {});
   }, [vectorDBEndpoint]);
 
   const handleVectorDBSearchCountChange = useCallback((val: number | undefined) => {
@@ -415,6 +460,32 @@ const SystemModalContent: React.FC = () => {
       description: t('settings.autoPreviewOfficeFilesDesc'),
       component: <Switch checked={autoPreviewOfficeFiles} onChange={handleAutoPreviewOfficeFilesChange} />,
     },
+    ...(isDesktop
+      ? [
+          {
+            key: 'nasRoot',
+            label: t('settings.nasRoot'),
+            description: t('settings.nasRootDesc'),
+            component: (
+              <div className='flex items-center gap-8px min-w-0'>
+                <Tooltip content={nasRootDir || t('settings.nasRootNotSet')}>
+                  <span className='text-12px text-t-secondary font-mono truncate max-w-220px'>
+                    {nasRootDir || t('settings.nasRootNotSet')}
+                  </span>
+                </Tooltip>
+                <Button size='small' className='rd-100px' onClick={handlePickNasRoot}>
+                  {t('settings.nasRootSelect')}
+                </Button>
+                {nasRootDir && (
+                  <Button size='small' type='text' onClick={handleClearNasRoot}>
+                    {t('settings.nasRootClear')}
+                  </Button>
+                )}
+              </div>
+            ),
+          },
+        ]
+      : []),
     {
       key: 'vectorDB',
       label: '向量数据库',
@@ -432,7 +503,7 @@ const SystemModalContent: React.FC = () => {
                 onChange={handleVectorDBEndpointChange}
                 onBlur={handleVectorDBEndpointBlur}
                 style={{ width: 260 }}
-                placeholder='http://127.0.0.1:8618'
+                placeholder={DEFAULT_VECTOR_DB_ENDPOINT}
               />
             ),
           },
@@ -649,6 +720,8 @@ const SystemModalContent: React.FC = () => {
               )}
             </Form>
           </div>
+
+          <AgentCapacityPanel />
 
           {/* Developer settings: DevTools + CDP (only visible in dev mode) */}
           <DevSettings />

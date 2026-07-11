@@ -19,12 +19,18 @@ import path from 'node:path';
 import { ipcBridge } from '@/common';
 import { getApps } from '@process/appstore/registry';
 import { listAppRecords, setAppInstalled } from '@process/appstore/appState';
+import { resolveAppstoreChildPath } from '@process/appstore/pathSecurity';
 import { ProcessConfig } from '@process/utils/initStorage';
 
 /** The Electron entry within each app's bundle (for managed launch). */
 const APP_ENTRY: Record<string, string> = {
   'centaur-image-workbench': 'electron/main.cjs',
 };
+const MANAGED_APP_IDS = new Set(Object.keys(APP_ENTRY));
+
+function isManagedAppId(id: string): boolean {
+  return MANAGED_APP_IDS.has(id);
+}
 
 /**
  * Apps hidden from the App Store catalog. The image workbench is now embedded
@@ -40,26 +46,37 @@ const STORE_HIDDEN_APP_IDS = new Set<string>(['centaur-image-workbench']);
  * admin desktop and the LAN client — "install" is a local copy, no server fetch.
  */
 function resolveAppstoreBundleDir(id: string): string | null {
+  if (!isManagedAppId(id)) return null;
   const candidates: string[] = [];
-  if (process.env.AIONUI_APPSTORE_BUNDLES_DIR) candidates.push(path.join(process.env.AIONUI_APPSTORE_BUNDLES_DIR, id));
+  if (process.env.AIONUI_APPSTORE_BUNDLES_DIR) {
+    const candidate = resolveAppstoreChildPath(process.env.AIONUI_APPSTORE_BUNDLES_DIR, id);
+    if (candidate) candidates.push(candidate);
+  }
   const rp = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (rp) candidates.push(path.join(rp, 'appstore-bundles', id));
-  candidates.push(path.join(process.cwd(), 'resources', 'appstore-bundles', id));
+  if (rp) {
+    const candidate = resolveAppstoreChildPath(path.join(rp, 'appstore-bundles'), id);
+    if (candidate) candidates.push(candidate);
+  }
+  const devCandidate = resolveAppstoreChildPath(path.join(process.cwd(), 'resources', 'appstore-bundles'), id);
+  if (devCandidate) candidates.push(devCandidate);
   for (const dir of candidates) {
     if (existsSync(dir)) return dir;
   }
   return null;
 }
 
-function appInstallDir(id: string): string {
-  return path.join(app.getPath('userData'), 'appstore-apps', id);
+function appInstallDir(id: string): string | null {
+  if (!isManagedAppId(id)) return null;
+  return resolveAppstoreChildPath(path.join(app.getPath('userData'), 'appstore-apps'), id);
 }
 
 /** Copy an app's bundled payload into its default install dir and mark it installed. */
 async function installBundle(id: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isManagedAppId(id)) return { ok: false, error: 'INVALID_APP_ID' };
   const src = resolveAppstoreBundleDir(id);
   if (!src) return { ok: false, error: 'NO_BUNDLE' };
   const dest = appInstallDir(id);
+  if (!dest) return { ok: false, error: 'INVALID_APP_ID' };
   await fs.rm(dest, { recursive: true, force: true });
   await fs.mkdir(path.dirname(dest), { recursive: true });
   await fs.cp(src, dest, { recursive: true });
@@ -94,6 +111,7 @@ export function initAppstoreBridge(): void {
 
   ipcBridge.appstore.setInstalled.provider(async ({ id, installed }) => {
     try {
+      if (!isManagedAppId(id)) return;
       await setAppInstalled(ProcessConfig, id, installed);
     } catch (error) {
       console.error('[AppStore] Failed to set installed state:', error);
@@ -117,7 +135,9 @@ export function initAppstoreBridge(): void {
     const entry = APP_ENTRY[id];
     if (!entry) return { ok: false, error: 'NO_BUNDLE' };
     try {
-      const entryPath = path.join(appInstallDir(id), entry);
+      const installDir = appInstallDir(id);
+      if (!installDir) return { ok: false, error: 'INVALID_APP_ID' };
+      const entryPath = path.join(installDir, entry);
       if (!existsSync(entryPath)) {
         const reinstall = await installBundle(id);
         if (!reinstall.ok) return reinstall;

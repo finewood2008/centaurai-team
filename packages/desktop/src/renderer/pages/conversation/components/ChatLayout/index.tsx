@@ -10,7 +10,7 @@ import { useContainerWidth } from '@/renderer/pages/conversation/hooks/useContai
 import { useLayoutConstraints } from '@/renderer/pages/conversation/hooks/useLayoutConstraints';
 import { useTitleRename } from '@/renderer/pages/conversation/hooks/useTitleRename';
 import { useWorkspaceCollapse } from '@/renderer/pages/conversation/hooks/useWorkspaceCollapse';
-import { PreviewPanel, usePreviewContext } from '@/renderer/pages/conversation/Preview';
+import { PreviewHost, usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import { dispatchWorkspaceToggleEvent } from '@/renderer/utils/workspace/workspaceEvents';
 import { useConversationAgents } from '@/renderer/pages/conversation/hooks/useConversationAgents';
 import classNames from 'classnames';
@@ -277,7 +277,8 @@ const ChatLayout: React.FC<{
             </div>
             {/* Preview panel - conditionally rendered */}
             {isPreviewOpen && (
-              <div
+              <PreviewHost
+                mode='inline'
                 className={classNames(
                   'preview-panel flex flex-col relative overflow-visible rounded-[15px]',
                   isDesktop ? 'mb-[12px] mr-[12px] ml-[8px]' : 'm-[8px]'
@@ -292,19 +293,18 @@ const ChatLayout: React.FC<{
                   width: isMobile ? 'calc(100% - 16px)' : undefined,
                   boxSizing: 'border-box',
                 }}
-              >
-                {isDesktop &&
-                  createPreviewDragHandle({
-                    className: 'absolute top-0 bottom-0 z-30',
-                    style: { width: '20px', left: '-20px' },
-                    linePlacement: 'end',
-                    lineClassName: 'opacity-30 group-hover:opacity-100 group-active:opacity-100',
-                    lineStyle: { width: '2px' },
-                  })}
-                <div className='h-full w-full overflow-hidden rounded-[15px]'>
-                  <PreviewPanel />
-                </div>
-              </div>
+                dragHandle={
+                  isDesktop
+                    ? createPreviewDragHandle({
+                        className: 'absolute top-0 bottom-0 z-30',
+                        style: { width: '20px', left: '-20px' },
+                        linePlacement: 'end',
+                        lineClassName: 'opacity-30 group-hover:opacity-100 group-active:opacity-100',
+                        lineStyle: { width: '2px' },
+                      })
+                    : null
+                }
+              />
             )}
           </div>
         </div>

@@ -355,7 +355,7 @@ const MeetingRoomView: React.FC<Props> = ({ team }) => {
                         if (orchestrator.exportPlan())
                           Message.success(
                             t('team.meeting.export.archiving', {
-                              defaultValue: '已请主持人导出 Word/PPT 并归档到内容中心，稍后可在内容中心查看',
+                              defaultValue: '已请主持人导出 Word/PPT 并归档到工作空间，稍后可在工作空间查看',
                             })
                           );
                       }}
@@ -370,7 +370,7 @@ const MeetingRoomView: React.FC<Props> = ({ team }) => {
                     <Notes theme='outline' size='13' fill='var(--success)' />
                     <span className='truncate'>
                       {t('team.meeting.export.archivedToWorkspace', {
-                        defaultValue: '已存入临时空间，并同步到内容中心',
+                        defaultValue: '已存入待整理生成物，并同步到工作空间',
                       })}
                     </span>
                     <Button
@@ -380,7 +380,7 @@ const MeetingRoomView: React.FC<Props> = ({ team }) => {
                       onClick={() => navigate('/files')}
                       data-testid='meeting-open-hub'
                     >
-                      {t('team.meeting.export.openHub', { defaultValue: '在内容中心查看' })}
+                      {t('team.meeting.export.openHub', { defaultValue: '在工作空间查看' })}
                     </Button>
                   </div>
                 )}

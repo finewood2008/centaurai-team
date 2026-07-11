@@ -38,6 +38,19 @@ const APP_META: AppMetadata = {
 
 const APP_META_PACKAGED: AppMetadata = { ...APP_META, isPackaged: true };
 
+function healthyCoreResponse(overrides: Record<string, unknown> = {}): Response {
+  return new Response(
+    JSON.stringify({
+      status: 'ok',
+      service: 'centaurai-core',
+      version: '0.1.47',
+      commit: 'a'.repeat(40),
+      ...overrides,
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } }
+  );
+}
+
 function makeFakeServer(port = 54321) {
   const server = new EventEmitter() as EventEmitter & {
     listen: (p: number, h: string, cb: () => void) => void;
@@ -216,8 +229,8 @@ describe('findAvailablePort', () => {
 
       expect(port).toBe(40404);
       expect(createServer).toHaveBeenCalledTimes(2);
-      expect(infoSpy).toHaveBeenCalledWith('[aioncore] skipped fetch-blocked backend port 1720');
-      expect(infoSpy).toHaveBeenCalledWith('[aioncore] selected backend port 40404 after 2 attempts');
+      expect(infoSpy).toHaveBeenCalledWith('[centaurai-core] skipped fetch-blocked backend port 1720');
+      expect(infoSpy).toHaveBeenCalledWith('[centaurai-core] selected backend port 40404 after 2 attempts');
     } finally {
       infoSpy.mockRestore();
     }
@@ -258,9 +271,9 @@ describe('BackendLifecycleManager.start (success path)', () => {
 
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+      .mockImplementation(async () => healthyCoreResponse());
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path', '/log/dir', {
       cacheDir: '/c',
       workDir: '/w',
@@ -303,10 +316,10 @@ describe('BackendLifecycleManager.start (success path)', () => {
 
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+      .mockResolvedValue(healthyCoreResponse());
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
-    const resolveBackend = vi.fn(() => '/abs/path/aioncore');
+    const resolveBackend = vi.fn(() => '/abs/path/centaurai-core');
     const mgr = new BackendLifecycleManager(APP_META_PACKAGED, resolveBackend);
 
     try {
@@ -327,7 +340,7 @@ describe('BackendLifecycleManager.start (success path)', () => {
       expect(spawn).toHaveBeenCalledTimes(1);
 
       const spawnCall = vi.mocked(spawn).mock.calls[0];
-      expect(spawnCall[0]).toBe('/abs/path/aioncore');
+      expect(spawnCall[0]).toBe('/abs/path/centaurai-core');
       expect(spawnCall[1]).toEqual([
         '--port',
         '0',
@@ -353,11 +366,47 @@ describe('BackendLifecycleManager.start (success path)', () => {
 
       expect(fetchSpy).toHaveBeenCalled();
       expect(infoSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[aioncore] health ready on port 55555 after 1 attempts, elapsed_ms=')
+        '[centaurai-core] health ready',
+        expect.objectContaining({
+          path: '/abs/path/centaurai-core',
+          service: 'centaurai-core',
+          version: '0.1.47',
+          commit: 'a'.repeat(40),
+          fallbackUsed: false,
+          port: 55555,
+        })
       );
     } finally {
       fetchSpy.mockRestore();
       infoSpy.mockRestore();
+    }
+  });
+
+  it('accepts a legacy health identity only in explicit fallback mode', async () => {
+    const previous = process.env.CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK;
+    process.env.CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK = '1';
+    const child = makeFakeChild();
+    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => healthyCoreResponse({ service: undefined, commit: undefined }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+
+    try {
+      const startPromise = mgr.start('/db/path');
+      await Promise.resolve();
+      emitListening(child, 55556);
+      await expect(startPromise).resolves.toBe(55556);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[centaurai-core] LEGACY FALLBACK selected',
+        expect.objectContaining({ fallbackUsed: true, legacyFallbackAllowed: true })
+      );
+    } finally {
+      if (previous === undefined) delete process.env.CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK;
+      else process.env.CENTAURAI_CORE_ALLOW_LEGACY_FALLBACK = previous;
+      fetchSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
 });
@@ -371,7 +420,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path', '/log/dir', {
       cacheDir: '/cache',
       workDir: '/work',
@@ -405,7 +454,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path', '/log/dir', {
       cacheDir: '/cache',
       workDir: '/work',
@@ -437,7 +486,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path');
     const expectedRejection = expect(startPromise).rejects.toMatchObject({
       name: 'BackendStartupError',
@@ -497,7 +546,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path', '/log/dir', {
       cacheDir: '/cache',
       workDir: '/work',
@@ -507,7 +556,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
       name: 'BackendStartupError',
       details: expect.objectContaining({
         stage: 'health_timeout',
-        binaryPath: '/abs/path/aioncore',
+        binaryPath: '/abs/path/centaurai-core',
         port: 33334,
         healthCheckAttempts: expect.any(Number),
         healthCheckLastError: 'ECONNREFUSED',
@@ -539,7 +588,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
       .spyOn(globalThis, 'fetch')
       .mockImplementation(() => Promise.resolve(new Response('starting', { status: 503 })));
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path');
     const expectedRejection = expect(startPromise).rejects.toMatchObject({
       name: 'BackendStartupError',
@@ -560,6 +609,33 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
     fetchSpy.mockRestore();
   }, 15_000);
 
+  it('rejects HTTP 200 from a backend without the CentaurAI Core identity', async () => {
+    vi.useFakeTimers();
+    const child = makeFakeChild();
+    vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => healthyCoreResponse({ service: 'aioncore', commit: undefined }));
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
+    const startPromise = mgr.start('/db/path');
+    const expectedRejection = expect(startPromise).rejects.toMatchObject({
+      name: 'BackendStartupError',
+      details: expect.objectContaining({
+        stage: 'health_timeout',
+        healthCheckLastStatus: 200,
+        healthCheckService: 'aioncore',
+        healthCheckIdentityMismatch: 'expected service=centaurai-core with version and commit',
+        legacyFallbackAllowed: false,
+      }),
+    });
+
+    await Promise.resolve();
+    emitListening(child, 33335);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await expectedRejection;
+    fetchSpy.mockRestore();
+  }, 15_000);
+
   it('records when server listening appears before health check times out', async () => {
     vi.useFakeTimers();
     vi.mocked(createServer).mockImplementation(
@@ -570,7 +646,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('fetch failed'));
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path');
     const expectedRejection = expect(startPromise).rejects.toMatchObject({
       name: 'BackendStartupError',
@@ -613,7 +689,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
     });
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(fetchError);
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path');
     const expectedRejection = expect(startPromise).rejects.toMatchObject({
       details: expect.objectContaining({
@@ -674,7 +750,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
         })
     );
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path');
     const expectedRejection = expect(startPromise).rejects.toMatchObject({
       details: expect.objectContaining({
@@ -716,7 +792,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('fetch failed'));
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path');
     const expectedRejection = expect(startPromise).rejects.toMatchObject({
       details: expect.objectContaining({
@@ -752,7 +828,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
     const onHealthTimeout = vi.fn();
     const onReady = vi.fn();
 
-    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/aioncore');
+    const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path', '/log/dir', undefined, {
       allowPendingOnHealthTimeout: true,
       onHealthTimeout,
@@ -776,7 +852,7 @@ describe('BackendLifecycleManager.start (health timeout)', () => {
       })
     );
 
-    fetchSpy.mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+    fetchSpy.mockResolvedValue(healthyCoreResponse());
     await vi.advanceTimersByTimeAsync(250);
     await Promise.resolve();
 
@@ -823,7 +899,7 @@ describe('BackendLifecycleManager.stop', () => {
 
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+      .mockResolvedValue(healthyCoreResponse());
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
@@ -854,7 +930,7 @@ describe('BackendLifecycleManager.stop', () => {
 
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+      .mockResolvedValue(healthyCoreResponse());
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
@@ -888,7 +964,7 @@ describe('BackendLifecycleManager crash restart', () => {
 
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+      .mockImplementation(async () => healthyCoreResponse());
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
     const startPromise = mgr.start('/db', undefined, undefined, { onReady });
@@ -924,7 +1000,7 @@ describe('BackendLifecycleManager crash restart', () => {
 
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response('ok', { status: 200 }) as unknown as Response);
+      .mockResolvedValue(healthyCoreResponse());
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
     const startPromise = mgr.start('/db');
@@ -935,7 +1011,7 @@ describe('BackendLifecycleManager crash restart', () => {
     (child1 as unknown as EventEmitter).emit('exit', 1, 'SIGABRT');
     await new Promise((r) => setTimeout(r, 1_200));
 
-    expect(warnSpy).toHaveBeenCalledWith('[aioncore] child exited unexpectedly; scheduling restart', {
+    expect(warnSpy).toHaveBeenCalledWith('[centaurai-core] child exited unexpectedly; scheduling restart', {
       exitCode: 1,
       signal: 'SIGABRT',
       port: 65303,
@@ -962,7 +1038,7 @@ describe('BackendLifecycleManager crash restart', () => {
     mgr.handleCrash(1, 'SIGABRT');
 
     expect(mgr.status).toBe('error');
-    expect(errorSpy).toHaveBeenCalledWith('[aioncore] child exited unexpectedly; restart limit exceeded', {
+    expect(errorSpy).toHaveBeenCalledWith('[centaurai-core] child exited unexpectedly; restart limit exceeded', {
       exitCode: 1,
       signal: 'SIGABRT',
       port: 0,

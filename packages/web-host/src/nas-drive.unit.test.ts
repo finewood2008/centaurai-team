@@ -129,6 +129,17 @@ describe('/api/nas/list', () => {
     expect(resp.status).toBe(403);
   });
 
+  it('returns 403 when a caller names a server-private NAS directory directly', async () => {
+    const root = await makeRoot();
+    roots.push(root);
+    await fs.mkdir(path.join(root, '.nas-trash'), { recursive: true });
+    await fs.writeFile(path.join(root, '.nas-trash', 'deleted-secret.txt'), 'deleted secret');
+    const port = await withServer(root);
+
+    const resp = await fetch(`http://127.0.0.1:${port}/api/nas/list?path=.nas-trash`);
+    expect(resp.status).toBe(403);
+  });
+
   it('reports disabled when no root is configured', async () => {
     const port = await withServer(undefined);
     const resp = await fetch(`http://127.0.0.1:${port}/api/nas/list`);
@@ -197,6 +208,25 @@ describe('/api/nas/download & preview', () => {
     const resp = await fetch(`http://127.0.0.1:${port}/api/nas/download?path=${encodeURIComponent('../../etc/hosts')}`);
     expect(resp.status).toBe(404);
   });
+
+  it('does not download recycle-bin or index metadata through an explicit path', async () => {
+    const root = await makeRoot();
+    roots.push(root);
+    await fs.mkdir(path.join(root, '.nas-trash'), { recursive: true });
+    await fs.mkdir(path.join(root, '.nas-index'), { recursive: true });
+    await fs.writeFile(path.join(root, '.nas-trash', 'deleted-secret.txt'), 'deleted secret');
+    await fs.writeFile(path.join(root, '.nas-index', 'manifest.json'), '{"private":true}');
+    const port = await withServer(root);
+
+    const trash = await fetch(
+      `http://127.0.0.1:${port}/api/nas/download?path=${encodeURIComponent('.nas-trash/deleted-secret.txt')}`
+    );
+    const index = await fetch(
+      `http://127.0.0.1:${port}/api/nas/preview?path=${encodeURIComponent('.nas-index/manifest.json')}`
+    );
+    expect(trash.status).toBe(404);
+    expect(index.status).toBe(404);
+  });
 });
 
 describe('NAS recycle-bin management (admin core)', () => {
@@ -259,6 +289,7 @@ describe('nasWalk (knowledge-base indexing enumeration)', () => {
     await fs.mkdir(path.join(root, '.nas-trash'), { recursive: true });
     await fs.writeFile(path.join(root, 'a.md'), '# a');
     await fs.writeFile(path.join(root, 'notes.txt'), 'n');
+    await fs.writeFile(path.join(root, 'slides.pptx'), 'pptx payload');
     await fs.writeFile(path.join(root, 'pic.png'), 'p');
     await fs.writeFile(path.join(root, 'ignore.log'), 'x'); // unsupported ext
     await fs.writeFile(path.join(root, 'docs/sub/deep.pdf'), 'd');
@@ -267,7 +298,7 @@ describe('nasWalk (knowledge-base indexing enumeration)', () => {
 
     const noVideo = await nasWalk(root, '');
     const rels = noVideo.map((f) => f.relPath).sort();
-    expect(rels).toEqual(['a.md', 'docs/sub/deep.pdf', 'notes.txt', 'pic.png']);
+    expect(rels).toEqual(['a.md', 'docs/sub/deep.pdf', 'notes.txt', 'pic.png', 'slides.pptx']);
     expect(rels).not.toContain('ignore.log');
     expect(rels.some((r) => r.includes('.nas-trash'))).toBe(false);
 

@@ -5,7 +5,7 @@
  */
 
 import { ipcBridge } from '@/common';
-import type { CreateAssistantRequest } from '@/common/types/agent/assistantTypes';
+import type { Assistant, CreateAssistantRequest, UpdateAssistantRequest } from '@/common/types/agent/assistantTypes';
 import { existsSync, promises as fs } from 'fs';
 import path from 'path';
 import type { ProcessConfig as ProcessConfigType } from './initStorage';
@@ -18,7 +18,7 @@ import type { ProcessConfig as ProcessConfigType } from './initStorage';
  *   - `experts.json` — array of {@link CreateAssistantRequest}-shaped rows
  *     (id, name, i18n, avatar/emoji, preset_agent_type, enabled_skills, …).
  *   - `rules/<id>.<locale>.md` — the expert prompt body, per locale
- *     (`zh-CN` translated, `en-US` original).
+ *     (`zh-CN` and `zh-TW` translated, `en-US` original).
  *
  * Both phases are content-aware so re-running is safe:
  *   1. `POST /api/assistants/import` is insert-only — already-present experts
@@ -30,9 +30,10 @@ import type { ProcessConfig as ProcessConfigType } from './initStorage';
  * when the bundled dataset changes to re-seed newly added experts.
  */
 
-const SEED_VERSION = 1;
+const SEED_VERSION = 2;
 const SEED_FLAG = 'migration.bundledExpertsSeeded';
-const RULE_LOCALES = ['zh-CN', 'en-US'] as const;
+const RULE_LOCALES = ['zh-CN', 'zh-TW', 'en-US'] as const;
+const METADATA_LOCALES = ['zh-CN', 'zh-TW', 'en-US'] as const;
 
 type ConfigFile = typeof ProcessConfigType;
 
@@ -71,6 +72,104 @@ export function resolveExpertsDir(): string | null {
 function toCreateRequest(entry: ExpertManifestEntry): CreateAssistantRequest {
   const { rule_file: _ruleFile, ...request } = entry;
   return request;
+}
+
+function pickSupportedStrings(value: Record<string, string> | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const locale of METADATA_LOCALES) {
+    const text = value?.[locale];
+    if (typeof text === 'string' && text.trim()) result[locale] = text;
+  }
+  return result;
+}
+
+function pickSupportedPromptArrays(value: Record<string, string[]> | undefined): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const locale of METADATA_LOCALES) {
+    const prompts = value?.[locale];
+    if (Array.isArray(prompts) && prompts.length > 0) result[locale] = prompts;
+  }
+  return result;
+}
+
+function mergeMissingStrings(
+  existing: Record<string, string> | undefined,
+  bundled: Record<string, string> | undefined
+): { value: Record<string, string>; changed: boolean } {
+  const value = pickSupportedStrings(existing);
+  let changed = Object.keys(existing ?? {}).some(
+    (locale) => !METADATA_LOCALES.includes(locale as (typeof METADATA_LOCALES)[number])
+  );
+  for (const locale of METADATA_LOCALES) {
+    if (value[locale]) continue;
+    const text = bundled?.[locale];
+    if (typeof text === 'string' && text.trim()) {
+      value[locale] = text;
+      changed = true;
+    }
+  }
+  return { value, changed };
+}
+
+function mergeMissingPromptArrays(
+  existing: Record<string, string[]> | undefined,
+  bundled: Record<string, string[]> | undefined
+): { value: Record<string, string[]>; changed: boolean } {
+  const value = pickSupportedPromptArrays(existing);
+  let changed = Object.keys(existing ?? {}).some(
+    (locale) => !METADATA_LOCALES.includes(locale as (typeof METADATA_LOCALES)[number])
+  );
+  for (const locale of METADATA_LOCALES) {
+    if (value[locale]?.length) continue;
+    const prompts = bundled?.[locale];
+    if (Array.isArray(prompts) && prompts.length > 0) {
+      value[locale] = prompts;
+      changed = true;
+    }
+  }
+  return { value, changed };
+}
+
+async function syncExpertMetadata(manifest: ExpertManifestEntry[]): Promise<boolean> {
+  let existingAssistants: Assistant[];
+  try {
+    existingAssistants = await ipcBridge.assistants.list.invoke();
+  } catch (error) {
+    console.error('[CentaurAI] Failed to read assistant catalog for expert metadata sync:', error);
+    return false;
+  }
+
+  const byId = new Map(existingAssistants.map((assistant) => [assistant.id, assistant]));
+  const updates: UpdateAssistantRequest[] = [];
+
+  for (const entry of manifest) {
+    if (!entry.id) continue;
+    const existing = byId.get(entry.id);
+    if (!existing) continue;
+
+    const name = mergeMissingStrings(existing.name_i18n, entry.name_i18n);
+    const description = mergeMissingStrings(existing.description_i18n, entry.description_i18n);
+    const prompts = mergeMissingPromptArrays(existing.prompts_i18n, entry.prompts_i18n);
+    if (!name.changed && !description.changed && !prompts.changed) continue;
+
+    updates.push({
+      id: entry.id,
+      name_i18n: name.value,
+      description_i18n: description.value,
+      prompts_i18n: prompts.value,
+    });
+  }
+
+  if (updates.length === 0) return true;
+
+  const results = await Promise.allSettled(updates.map((update) => ipcBridge.assistants.update.invoke(update)));
+  const failed = results.filter((result) => result.status === 'rejected');
+  if (failed.length > 0) {
+    console.error(`[CentaurAI] Expert metadata sync partial: ${failed.length}/${updates.length} failed`, failed[0]);
+    return false;
+  }
+  console.log(`[CentaurAI] Synced localized metadata for ${updates.length} bundled experts`);
+  return true;
 }
 
 /**
@@ -118,7 +217,7 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
 
   const expertsDir = resolveExpertsDir();
   if (!expertsDir) {
-    console.warn('[AionUi] Bundled experts dataset not found; skipping expert seed');
+    console.warn('[CentaurAI] Bundled experts dataset not found; skipping expert seed');
     return true;
   }
 
@@ -128,7 +227,7 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
     const parsed = JSON.parse(raw) as unknown;
     manifest = Array.isArray(parsed) ? (parsed as ExpertManifestEntry[]) : [];
   } catch (error) {
-    console.error('[AionUi] Failed to read bundled experts manifest:', error);
+    console.error('[CentaurAI] Failed to read bundled experts manifest:', error);
     return false;
   }
   if (manifest.length === 0) return true;
@@ -137,14 +236,18 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
   try {
     const result = await ipcBridge.assistants.import.invoke({ assistants: manifest.map(toCreateRequest) });
     if (result.failed !== 0) {
-      console.error(`[AionUi] Expert seed import partial: ${result.failed} failed`, result.errors);
+      console.error(`[CentaurAI] Expert seed import partial: ${result.failed} failed`, result.errors);
       return false;
     }
     if (result.imported > 0 || result.skipped > 0) {
-      console.log(`[AionUi] Seeded ${result.imported} experts (skipped ${result.skipped})`);
+      console.log(`[CentaurAI] Seeded ${result.imported} experts (skipped ${result.skipped})`);
     }
   } catch (error) {
-    console.error('[AionUi] Expert seed import failed:', error);
+    console.error('[CentaurAI] Expert seed import failed:', error);
+    return false;
+  }
+
+  if (!(await syncExpertMetadata(manifest))) {
     return false;
   }
 
@@ -156,11 +259,11 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
   outcomes.forEach((outcome, index) => {
     if (outcome.status === 'rejected') {
       ruleFailures += 1;
-      console.error(`[AionUi] Failed to seed rules for '${manifest[index].id}':`, outcome.reason);
+      console.error(`[CentaurAI] Failed to seed rules for '${manifest[index].id}':`, outcome.reason);
     }
   });
   if (ruleFailures > 0) {
-    console.error(`[AionUi] Expert rule seed partial: ${ruleFailures}/${manifest.length} failed`);
+    console.error(`[CentaurAI] Expert rule seed partial: ${ruleFailures}/${manifest.length} failed`);
     return false;
   }
 
@@ -168,7 +271,7 @@ export async function seedBundledExperts(configFile: ConfigFile): Promise<boolea
     try {
       await accessor.set(SEED_FLAG, SEED_VERSION);
     } catch (error) {
-      console.warn('[AionUi] Failed to persist expert seed flag', error);
+      console.warn('[CentaurAI] Failed to persist expert seed flag', error);
     }
   }
   return true;

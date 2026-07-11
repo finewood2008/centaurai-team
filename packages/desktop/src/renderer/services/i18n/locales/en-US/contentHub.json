@@ -1,29 +1,35 @@
 {
   "nav": {
-    "title": "Content Hub"
+    "title": "Workspace"
   },
-  "title": "Content Hub",
+  "title": "Workspace",
   "search": {
     "placeholder": "Search file name..."
   },
   "tabs": {
-    "mine": "My Files",
+    "mine": "Assets",
     "byConversation": "By Conversation",
     "byType": "By Type",
-    "shared": "Shared Library",
-    "knowledge": "Knowledge Base",
-    "nas": "Network Drive"
+    "shared": "Enterprise NAS",
+    "knowledge": "Super Knowledge Base",
+    "nas": "Enterprise NAS"
   },
   "mineView": {
-    "all": "All",
+    "all": "My Assets",
     "byConversation": "By Conversation",
-    "byType": "By Type"
+    "byType": "By Type",
+    "drafts": "To Organize",
+    "archived": "Archive"
   },
   "knowledge": {
     "chunks": "{{n}} chunks",
-    "readonly": "Knowledge Base · {{n}} files · read-only",
+    "readonly": "Super Knowledge Base · {{n}} files",
+    "upload": "Upload to Super Knowledge Base",
+    "uploading": "Uploading...",
+    "uploadDone": "{{count}} file(s) uploaded",
+    "uploadFailed": "Super Knowledge Base upload failed",
     "refresh": "Refresh",
-    "empty": "Knowledge base is empty",
+    "empty": "Super Knowledge Base is empty",
     "unreachable": "Cannot reach the vector DB — make sure the service is running",
     "openDesktopOnly": "Opening source files is desktop-only"
   },
@@ -39,15 +45,25 @@
     "waterfall": "Waterfall",
     "sizeSmall": "S",
     "sizeMedium": "M",
-    "sizeLarge": "L"
+    "sizeLarge": "L",
+    "list": "List"
   },
   "actions": {
     "open": "Open",
     "copyPath": "Copy path",
     "download": "Download",
     "showInFolder": "Show in folder",
-    "shareToTeam": "Share to team",
-    "saveToNas": "Save to network drive"
+    "shareToTeam": "Publish to Enterprise NAS",
+    "saveToNas": "Publish to Enterprise NAS",
+    "publishToNas": "Publish to Enterprise NAS",
+    "back": "Back",
+    "openSource": "Open source file",
+    "delete": "Delete",
+    "refresh": "Refresh",
+    "saveToContent": "Save to personal content",
+    "indexToKnowledge": "Add to Super Knowledge Base",
+    "archive": "Archive",
+    "discardDraft": "Discard draft"
   },
   "share": {
     "uploading": "Sharing...",
@@ -58,14 +74,16 @@
   "empty": {
     "noFiles": "No generated files yet",
     "noMatch": "No matching files",
-    "loading": "Loading..."
+    "loading": "Loading...",
+    "noAssets": "No saved assets yet",
+    "noDrafts": "No draft files to organize"
   },
   "shared": {
     "allVisible": "Visible to everyone on the LAN",
     "categories": "Categories",
     "all": "All",
     "uncategorized": "Uncategorized",
-    "upload": "Upload to shared library",
+    "upload": "Upload to Enterprise NAS",
     "download": "Download",
     "empty": "Shared library is empty",
     "comingSoon": "Shared library is coming soon"
@@ -80,8 +98,14 @@
     "root": "All Files",
     "empty": "This folder is empty",
     "loading": "Loading…",
-    "disabled": "No shared disk has been configured by the administrator yet",
-    "unavailable": "Network drive unavailable — the WebUI server is not running",
+    "disabled": "The administrator has not configured an Enterprise NAS storage path yet",
+    "unavailable": "Enterprise NAS unavailable — the WebUI server is not running",
+    "setupStorageDesc": "Configure the Enterprise NAS storage path in Settings → System → Enterprise NAS Storage Path. Choose a mounted Enterprise NAS directory or folder on this machine, then its files will appear here.",
+    "startWebuiHint": "Make sure the WebUI service is running, then configure the Enterprise NAS storage path in Settings → System.",
+    "openNasSettings": "Set Enterprise NAS Storage Path",
+    "aiGenerated": "AI Generated",
+    "allFiles": "All Files",
+    "aiEmpty": "No AI-generated assets have been published to Enterprise NAS yet",
     "refresh": "Refresh",
     "download": "Download",
     "colName": "Name",
@@ -112,18 +136,66 @@
     "purgeConfirm": "Permanently delete \"{{name}}\"? This cannot be undone.",
     "trashEmpty": "The recycle bin is empty",
     "deletedAt": "Deleted",
-    "index": "Index to KB",
-    "indexTitle": "Index folder to knowledge base",
-    "indexDesc": "Recursively index supported files under \"{{folder}}\" into the knowledge base so they become searchable. Re-running is safe (unchanged files are skipped).",
+    "index": "Index to Super KB",
+    "indexTitle": "Index folder to Super Knowledge Base",
+    "indexDesc": "Recursively index supported files under \"{{folder}}\" into the Super Knowledge Base so they become searchable. Re-running is safe (unchanged files are skipped).",
     "indexVideo": "Include videos (slow: transcription + OCR)",
     "indexScanning": "Scanning folder…",
-    "indexProgress": "Indexing to knowledge base… {{done}}/{{total}} (skipped {{skipped}}, failed {{failed}})",
+    "indexProgress": "Indexing to Super Knowledge Base… {{done}}/{{total}} (skipped {{skipped}}, failed {{failed}})",
     "indexDone": "Indexing complete: {{done}} indexed, {{skipped}} skipped, {{failed}} failed",
     "indexFailed": "Indexing failed",
     "pickFolderTitle": "Choose a network-drive folder",
     "saveHere": "Save here",
     "noSubfolders": "No subfolders",
-    "savedToNas": "Saved to the network drive",
-    "saveToNasFailed": "Could not save to the network drive"
+    "savedToNas": "Published to Enterprise NAS",
+    "saveToNasFailed": "Could not publish to Enterprise NAS",
+    "publishedToNas": "Published to Enterprise NAS",
+    "publishFailed": "Could not publish to Enterprise NAS"
+  },
+  "sort": {
+    "modified": "Recently modified",
+    "name": "Name",
+    "size": "Size",
+    "directionAsc": "Ascending",
+    "directionDesc": "Descending"
+  },
+  "list": {
+    "name": "Name",
+    "size": "Size",
+    "modified": "Modified"
+  },
+  "selection": {
+    "selected": "{{count}} selected",
+    "clear": "Clear selection"
+  },
+  "batch": {
+    "downloadDone": "Downloaded {{count}} file(s)",
+    "shareDone": "Shared {{count}} file(s)",
+    "publishDone": "Published {{count}} file(s) to Enterprise NAS",
+    "deleteTitle": "Delete selected items",
+    "deleteConfirm": "Delete the selected {{count}} item(s)? This cannot be undone.",
+    "deleteDone": "Deleted {{count}} item(s)",
+    "deleteFailed": "Delete failed"
+  },
+  "stats": {
+    "visible": "{{count}} visible",
+    "total": "{{count}} total"
+  },
+  "asset": {
+    "saveDone": "Saved {{count}} file(s) to personal content",
+    "saveFailed": "Could not save to personal content",
+    "indexDone": "Added {{count}} file(s) to the Super Knowledge Base",
+    "indexFailed": "Could not add to the Super Knowledge Base",
+    "archiveDone": "Archived",
+    "archiveFailed": "Archive failed"
+  },
+  "draft": {
+    "deleteTitle": "Discard draft file",
+    "deleteConfirm": "Discard \"{{name}}\" from the temporary workspace? Saved or Enterprise NAS copies are not affected.",
+    "batchDeleteTitle": "Discard draft files",
+    "batchDeleteConfirm": "Discard the selected {{count}} draft file(s) from the temporary workspace? Saved or Enterprise NAS copies are not affected.",
+    "deleted": "Draft discarded",
+    "batchDeleted": "{{count}} draft file(s) discarded",
+    "deleteFailed": "Could not discard draft"
   }
 }

@@ -4,49 +4,59 @@
  * WorkspaceContextMenu). Closes on outside click / Escape via the parent.
  */
 import React from 'react';
-import { Copy, Download, FolderClose, FolderOpen, PreviewOpen, Share } from '@icon-park/react';
+import { Button } from '@arco-design/web-react';
+import { Copy, Delete, Download, FolderOpen, InboxOut, PreviewOpen, Save, Share } from '@icon-park/react';
 import { useTranslation } from 'react-i18next';
-import type { FileEntry } from '../types';
+import type { ContentAsset, FileEntry } from '../types';
 
-export type HubMenuState = { x: number; y: number; file: FileEntry } | null;
+export type HubMenuState = { x: number; y: number; file: FileEntry; asset?: ContentAsset; draft?: boolean } | null;
 
 type HubContextMenuProps = {
   state: HubMenuState;
   onOpen: (file: FileEntry) => void;
+  onSaveToContent?: (file: FileEntry) => void;
   onCopyPath: (file: FileEntry) => void;
   onDownload: (file: FileEntry) => void;
   onReveal: (file: FileEntry) => void;
-  onShare: (file: FileEntry) => void;
-  /** Admin-only "save to network drive"; omitted (hidden) for non-admin clients. */
-  onSaveToNas?: (file: FileEntry) => void;
+  canReveal?: boolean;
+  onShare: (file: FileEntry, asset?: ContentAsset) => void;
+  onArchive?: (asset: ContentAsset) => void;
+  onDiscardDraft?: (file: FileEntry) => void;
   onClose: () => void;
 };
 
 const MENU_W = 200;
-const MENU_H = 270;
-const BTN =
-  'w-full flex items-center gap-8px px-14px py-6px text-13px text-left text-t-primary rounded-md transition-colors hover:bg-fill-2 border-none bg-transparent cursor-pointer';
+const MENU_H = 390;
+const BTN = '!w-full !justify-start !px-14px !py-6px !h-auto !text-13px !text-t-primary !rd-6px hover:!bg-fill-2';
 
 const HubContextMenu: React.FC<HubContextMenuProps> = ({
   state,
   onOpen,
+  onSaveToContent,
   onCopyPath,
   onDownload,
   onReveal,
+  canReveal = true,
   onShare,
-  onSaveToNas,
+  onArchive,
+  onDiscardDraft,
   onClose,
 }) => {
   const { t } = useTranslation();
   if (!state) return null;
-  const { file } = state;
+  const { asset, draft, file } = state;
 
   const top = typeof window !== 'undefined' ? Math.min(state.y, window.innerHeight - MENU_H) : state.y;
   const left = typeof window !== 'undefined' ? Math.min(state.x, window.innerWidth - MENU_W) : state.x;
 
-  const run = (fn: (f: FileEntry) => void) => () => {
+  const runFile = (fn: (f: FileEntry) => void) => () => {
     onClose();
     fn(file);
+  };
+  const runAsset = (fn: (a: ContentAsset) => void) => () => {
+    if (!asset) return;
+    onClose();
+    fn(asset);
   };
 
   return (
@@ -66,27 +76,47 @@ const HubContextMenu: React.FC<HubContextMenuProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div className='flex flex-col gap-4px'>
-          <button className={BTN} onClick={run(onOpen)}>
-            <PreviewOpen size='14' /> {t('contentHub.actions.open')}
-          </button>
-          <button className={BTN} onClick={run(onShare)}>
-            <Share size='14' /> {t('contentHub.actions.shareToTeam')}
-          </button>
-          {onSaveToNas && (
-            <button className={BTN} onClick={run(onSaveToNas)}>
-              <FolderClose size='14' /> {t('contentHub.actions.saveToNas')}
-            </button>
+          <Button type='text' className={BTN} icon={<PreviewOpen size='14' />} onClick={runFile(onOpen)}>
+            {t('contentHub.actions.open')}
+          </Button>
+          {draft && onSaveToContent && (
+            <Button type='text' className={BTN} icon={<Save size='14' />} onClick={runFile(onSaveToContent)}>
+              {t('contentHub.actions.saveToContent')}
+            </Button>
           )}
+          <Button
+            type='text'
+            className={BTN}
+            icon={<Share size='14' />}
+            onClick={() => {
+              onClose();
+              onShare(file, asset);
+            }}
+          >
+            {t('contentHub.actions.publishToNas')}
+          </Button>
           <div className='h-1px my-2px bg-[var(--color-border-2)]' />
-          <button className={BTN} onClick={run(onCopyPath)}>
-            <Copy size='14' /> {t('contentHub.actions.copyPath')}
-          </button>
-          <button className={BTN} onClick={run(onDownload)}>
-            <Download size='14' /> {t('contentHub.actions.download')}
-          </button>
-          <button className={BTN} onClick={run(onReveal)}>
-            <FolderOpen size='14' /> {t('contentHub.actions.showInFolder')}
-          </button>
+          <Button type='text' className={BTN} icon={<Copy size='14' />} onClick={runFile(onCopyPath)}>
+            {t('contentHub.actions.copyPath')}
+          </Button>
+          <Button type='text' className={BTN} icon={<Download size='14' />} onClick={runFile(onDownload)}>
+            {t('contentHub.actions.download')}
+          </Button>
+          {canReveal && (
+            <Button type='text' className={BTN} icon={<FolderOpen size='14' />} onClick={runFile(onReveal)}>
+              {t('contentHub.actions.showInFolder')}
+            </Button>
+          )}
+          {asset && !draft && onArchive && (
+            <Button type='text' className={BTN} icon={<InboxOut size='14' />} onClick={runAsset(onArchive)}>
+              {t('contentHub.actions.archive')}
+            </Button>
+          )}
+          {draft && onDiscardDraft && (
+            <Button type='text' className={BTN} icon={<Delete size='14' />} onClick={runFile(onDiscardDraft)}>
+              {t('contentHub.actions.discardDraft')}
+            </Button>
+          )}
         </div>
       </div>
     </>
