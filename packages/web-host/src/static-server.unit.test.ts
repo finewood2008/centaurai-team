@@ -1288,6 +1288,34 @@ describe('static-server', () => {
     await h2.stop();
   });
 
+  it('stop drains idle frontend sockets instead of waiting forever', async () => {
+    const backend = await startMockBackend((_req, res) => res.end('backend'));
+    stopBackend = backend.close;
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0, allowRemote: true });
+
+    const net = await import('node:net');
+    const socket = net.connect({ host: '127.0.0.1', port: handle.port });
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', resolve);
+      socket.once('error', reject);
+    });
+
+    const stopping = handle.stop();
+    handle = null;
+    await expect(
+      Promise.race([
+        stopping.then(() => 'stopped'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('timed-out'), 1_000)),
+      ])
+    ).resolves.toBe('stopped');
+    await new Promise<void>((resolve) => {
+      if (socket.destroyed) return resolve();
+      socket.once('close', () => resolve());
+      setTimeout(resolve, 250).unref();
+    });
+    expect(socket.destroyed).toBe(true);
+  });
+
   it('rejects plaintext non-loopback vector origins unless the administrator explicitly opts in', async () => {
     const backend = await startMockBackend((_req, res) => res.end('backend'));
     stopBackend = backend.close;

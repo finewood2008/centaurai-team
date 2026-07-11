@@ -46,9 +46,10 @@ function computeSourceHash() {
   const rootDir = path.resolve(__dirname, '..');
   // Edition is baked into the renderer/main bundles via a Vite `define`, but the
   // source files are byte-identical across editions — so the edition must be part
-  // of the cache key, else switching AIONUI_EDITION would silently reuse the wrong
+  // of the cache key, else switching CENTAURAI_EDITION would silently reuse the wrong
   // (previous edition's) bundle on an incremental build.
-  hash.update('edition:' + (process.env.AIONUI_EDITION === 'decision' ? 'decision' : process.env.AIONUI_EDITION === 'team' ? 'team' : 'full') + '\n');
+  const edition = process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION;
+  hash.update('edition:' + (edition === 'decision' ? 'decision' : edition === 'team' ? 'team' : 'full') + '\n');
   const filesToHash = [
     'package.json',
     'package-lock.json',
@@ -343,13 +344,14 @@ const forceBuild = args.includes('--force');
 // Optional electron-builder config override (e.g. the lightweight client variant).
 // Usage: --builder-config packages/desktop/electron-builder.client.yml
 const builderConfigIdx = args.indexOf('--builder-config');
-// When no explicit --builder-config is given, pick the config from AIONUI_EDITION
+// When no explicit --builder-config is given, pick the config from CENTAURAI_EDITION
 // so the downstream decision/team repos' inherited release pipeline produces the
-// right installer just by setting the AIONUI_EDITION repo variable (unset ⇒ full).
+// right installer while the old AIONUI_EDITION variable remains compatible.
+const buildEdition = process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION;
 const editionBuilderConfig =
-  process.env.AIONUI_EDITION === 'decision'
+  buildEdition === 'decision'
     ? 'packages/desktop/electron-builder.decision.yml'
-    : process.env.AIONUI_EDITION === 'team'
+    : buildEdition === 'team'
       ? 'packages/desktop/electron-builder.team.yml'
       : 'packages/desktop/electron-builder.yml';
 const builderConfig =

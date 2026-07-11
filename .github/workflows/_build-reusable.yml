@@ -28,9 +28,9 @@ env:
   BUN_INSTALL_REGISTRY: 'https://registry.npmjs.org/'
   AIONUI_HUB_TAG: 'dist-ebc6a2b'
   # Product edition for this repo's builds. Unset ⇒ 'full' (the core repo). The
-  # decision/team downstream repos set repo variable AIONUI_EDITION=decision|team,
+  # decision/team downstream repos set CENTAURAI_EDITION=decision|team,
   # which selects the matching electron-builder config + bakes the Vite __EDITION__.
-  AIONUI_EDITION: ${{ vars.AIONUI_EDITION }}
+  CENTAURAI_EDITION: ${{ vars.CENTAURAI_EDITION || vars.AIONUI_EDITION }}
 
 jobs:
   code-quality:

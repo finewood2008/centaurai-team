@@ -396,6 +396,21 @@ export type DesktopWebUIHandle = {
 };
 
 let currentHandle: (WebHostHandle & { allowRemote: boolean }) | null = null;
+// Serialize desktop WebUI lifecycle changes. Auto-restore, the enable switch,
+// and the allow-remote switch can otherwise overlap: start A begins, stop B
+// clears currentHandle, then start C binds while B is still draining sockets.
+// The resulting orphaned listeners made every later IPC invocation wait
+// forever. Keep the queue alive after failures so users can retry.
+let lifecycleTail: Promise<void> = Promise.resolve();
+
+function withWebUILifecycleLock<T>(operation: () => Promise<T>): Promise<T> {
+  const result = lifecycleTail.then(operation, operation);
+  lifecycleTail = result.then(
+    (): void => undefined,
+    (): void => undefined
+  );
+  return result;
+}
 // First-use plaintext password for the active handle. Set by webui.start IPC
 // handler before startDesktopWebUI() when the backend reports needs_setup=true,
 // so Settings can display the generated password exactly once. Cleared on stop.
@@ -521,88 +536,90 @@ const toDesktopHandle = (handle: WebHostHandle, allowRemote: boolean): DesktopWe
  * Settings → "Enable WebUI" IPC handler.
  */
 export async function startDesktopWebUI(opts: { port?: number; allowRemote?: boolean }): Promise<DesktopWebUIHandle> {
-  // If already running, tear down first so we honour the new port / allowRemote.
-  if (currentHandle) {
-    await stopDesktopWebUI();
-  }
+  return withWebUILifecycleLock(async () => {
+    // If already running, tear down first so we honour the new port / allowRemote.
+    if (currentHandle) {
+      await stopDesktopWebUIUnlocked();
+    }
 
-  // Decision edition is single-user and loopback-only: never expose the WebUI to
-  // the LAN, regardless of stored config. full + Team run as multi-user LAN servers.
-  const allowRemote = MULTI_USER_ENABLED && opts.allowRemote === true;
-  const preferredPort = parsePortValue(opts.port) ?? DEFAULT_WEBUI_PORT;
-  const sysDir = getSystemDir();
+    // Decision edition is single-user and loopback-only: never expose the WebUI to
+    // the LAN, regardless of stored config. full + Team run as multi-user LAN servers.
+    const allowRemote = MULTI_USER_ENABLED && opts.allowRemote === true;
+    const preferredPort = parsePortValue(opts.port) ?? DEFAULT_WEBUI_PORT;
+    const sysDir = getSystemDir();
 
-  // Reuse the backend already spawned by backendManager.start() in src/index.ts.
-  // Spawning a second backend here would race the first on the same SQLite file.
-  const backendPort = (globalThis as typeof globalThis & { __backendPort?: number }).__backendPort;
-  if (!backendPort) {
-    throw new Error('[WebUI] Cannot start: aioncore is not running (globalThis.__backendPort unset)');
-  }
+    // Reuse the backend already spawned by backendManager.start() in src/index.ts.
+    // Spawning a second backend here would race the first on the same SQLite file.
+    const backendPort = (globalThis as typeof globalThis & { __backendPort?: number }).__backendPort;
+    if (!backendPort) {
+      throw new Error('[WebUI] Cannot start: aioncore is not running (globalThis.__backendPort unset)');
+    }
 
-  const handle = await startWebHost({
-    app: {
-      version: app.getVersion(),
-      isPackaged: app.isPackaged,
-      resourcesPath: app.getAppPath(),
-      // webui.config.json must live next to the backend SQLite DB so --resetpass
-      // CLI and the runtime settings path read/write the same user record.
-      // getDataPath() returns ~/.aionui[-dev] symlink on macOS to sidestep
-      // path-with-spaces issues under Application Support.
-      userDataPath: getDataPath(),
-    },
-    // After bundling, this file is out/main/index.js — renderer assets live at ../renderer.
-    staticDir: path.join(__dirname, '../renderer'),
-    port: preferredPort,
-    allowRemote,
-    // Team server only: 403 the aioncore team/meeting API at the WebUI proxy so LAN
-    // employees can't run 智囊团 (decision meetings) by hitting /api/teams* directly,
-    // even though the bundled backend still exposes it. No-op on full + Decision (both keep 智囊团).
-    blockTeamRoutes: IS_TEAM,
-    // Native client installers bundled with the server, served at /api/downloads/*.
-    installerDir: resolveInstallerDir(),
-    // Enterprise LAN shared library, served at /api/shared-drive/*.
-    sharedDriveDir: path.join(getDataPath(), 'sharedDrive'),
-    // AI generated asset registry, served at /api/content-assets/*.
-    contentAssetsDir: path.join(getDataPath(), 'contentAssets'),
-    // Enterprise LAN network drive (the company's large shared disk), browsed
-    // read-only at /api/nas/*. Undefined when unconfigured → endpoints disabled.
-    nasRootDir: await resolveNasRootDir(),
-    // Resolve on the trusted main-process side; browser endpoint parameters
-    // must only confirm this origin, never choose an arbitrary destination.
-    vectorEndpoint: await resolveVectorEndpoint(),
-    // Image workbench for browser/LAN users. Mirror the desktop custom-protocol
-    // root (getImageWorkbenchRoot in index.ts): packaged → bundled under the
-    // renderer output; dev → the live public/ dist (out/renderer isn't copied
-    // until a build). The server injects the key into upstream calls so it never
-    // reaches the browser.
-    imageWorkbenchDir: app.isPackaged
-      ? path.join(__dirname, '../renderer/centaur-image-workbench')
-      : path.resolve(process.cwd(), 'public/centaur-image-workbench'),
-    imageWorkbenchConfig: await resolveImageWorkbenchConfig(),
-    imageWorkbenchConfigResolver: resolveImageWorkbenchConfig,
-    // Must align with the desktop IPC path's backend dataDir (src/index.ts), otherwise
-    // users see divergent SQLite state between desktop app and bundled WebUI.
-    dataDir: getDataPath(),
-    logDir: sysDir.logDir,
-    dirs: {
-      cacheDir: sysDir.cacheDir,
-      workDir: sysDir.workDir,
+    const handle = await startWebHost({
+      app: {
+        version: app.getVersion(),
+        isPackaged: app.isPackaged,
+        resourcesPath: app.getAppPath(),
+        // webui.config.json must live next to the backend SQLite DB so --resetpass
+        // CLI and the runtime settings path read/write the same user record.
+        // getDataPath() returns ~/.aionui[-dev] symlink on macOS to sidestep
+        // path-with-spaces issues under Application Support.
+        userDataPath: getDataPath(),
+      },
+      // After bundling, this file is out/main/index.js — renderer assets live at ../renderer.
+      staticDir: path.join(__dirname, '../renderer'),
+      port: preferredPort,
+      allowRemote,
+      // Team server only: 403 the aioncore team/meeting API at the WebUI proxy so LAN
+      // employees can't run 智囊团 (decision meetings) by hitting /api/teams* directly,
+      // even though the bundled backend still exposes it. No-op on full + Decision (both keep 智囊团).
+      blockTeamRoutes: IS_TEAM,
+      // Native client installers bundled with the server, served at /api/downloads/*.
+      installerDir: resolveInstallerDir(),
+      // Enterprise LAN shared library, served at /api/shared-drive/*.
+      sharedDriveDir: path.join(getDataPath(), 'sharedDrive'),
+      // AI generated asset registry, served at /api/content-assets/*.
+      contentAssetsDir: path.join(getDataPath(), 'contentAssets'),
+      // Enterprise LAN network drive (the company's large shared disk), browsed
+      // read-only at /api/nas/*. Undefined when unconfigured → endpoints disabled.
+      nasRootDir: await resolveNasRootDir(),
+      // Resolve on the trusted main-process side; browser endpoint parameters
+      // must only confirm this origin, never choose an arbitrary destination.
+      vectorEndpoint: await resolveVectorEndpoint(),
+      // Image workbench for browser/LAN users. Mirror the desktop custom-protocol
+      // root (getImageWorkbenchRoot in index.ts): packaged → bundled under the
+      // renderer output; dev → the live public/ dist (out/renderer isn't copied
+      // until a build). The server injects the key into upstream calls so it never
+      // reaches the browser.
+      imageWorkbenchDir: app.isPackaged
+        ? path.join(__dirname, '../renderer/centaur-image-workbench')
+        : path.resolve(process.cwd(), 'public/centaur-image-workbench'),
+      imageWorkbenchConfig: await resolveImageWorkbenchConfig(),
+      imageWorkbenchConfigResolver: resolveImageWorkbenchConfig,
+      // Must align with the desktop IPC path's backend dataDir (src/index.ts), otherwise
+      // users see divergent SQLite state between desktop app and bundled WebUI.
+      dataDir: getDataPath(),
       logDir: sysDir.logDir,
-    },
-    backend: {
-      kind: 'useExistingBackend',
-      port: backendPort,
-    },
-  });
+      dirs: {
+        cacheDir: sysDir.cacheDir,
+        workDir: sysDir.workDir,
+        logDir: sysDir.logDir,
+      },
+      backend: {
+        kind: 'useExistingBackend',
+        port: backendPort,
+      },
+    });
 
-  currentHandle = Object.assign(handle, { allowRemote });
-  return toDesktopHandle(handle, allowRemote);
+    currentHandle = Object.assign(handle, { allowRemote });
+    return toDesktopHandle(handle, allowRemote);
+  });
 }
 
 /**
  * Stop the currently running WebUI instance, if any. No-op when nothing is running.
  */
-export async function stopDesktopWebUI(): Promise<void> {
+async function stopDesktopWebUIUnlocked(): Promise<void> {
   const handle = currentHandle;
   if (!handle) return;
   currentHandle = null;
@@ -612,6 +629,10 @@ export async function stopDesktopWebUI(): Promise<void> {
   } catch (err) {
     console.error('[WebUI] stop error:', err);
   }
+}
+
+export async function stopDesktopWebUI(): Promise<void> {
+  return withWebUILifecycleLock(stopDesktopWebUIUnlocked);
 }
 
 /**

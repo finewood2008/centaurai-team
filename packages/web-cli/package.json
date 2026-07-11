@@ -2,9 +2,10 @@
   "name": "@aionui/web-cli",
   "version": "1.9.26",
   "private": true,
-  "description": "AionUi WebUI CLI - standalone web runtime (no Electron)",
+  "description": "CentaurAI WebUI CLI - standalone web runtime (no Electron)",
   "bin": {
-    "aionui-web": "./bin/aionui-web.js"
+    "aionui-web": "./bin/aionui-web.js",
+    "centaurai-web": "./bin/centaurai-web.js"
   },
   "type": "module",
   "exports": {

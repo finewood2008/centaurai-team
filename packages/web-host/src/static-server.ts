@@ -694,12 +694,7 @@ function rawGateToken(head: Buffer): string | undefined {
  * WebUI client. Accept-encoding is forced to identity so the body is plain JSON
  * to rewrite; on any non-JSON/parse failure the original bytes pass through.
  */
-function proxyAssistantsFiltered(
-  req: IncomingMessage,
-  res: ServerResponse,
-  backendPort: number,
-  lanSafeOnly = false
-): void {
+function proxyAssistantsFiltered(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
   const options: http.RequestOptions = {
     hostname: '127.0.0.1',
     port: backendPort,
@@ -722,8 +717,11 @@ function proxyAssistantsFiltered(
       if (status >= 200 && status < 300) {
         try {
           const parsed = JSON.parse(body.toString('utf-8')) as unknown;
-          const keep = (a: unknown): boolean =>
-            !lanSafeOnly && !ADMIN_ONLY_ASSISTANT_IDS.has((a as { id?: string })?.id ?? '');
+          // LAN authentication must not make the entire catalog disappear.
+          // Assistant definitions are read-only through WebHost; only the
+          // desktop/admin-only butlers are hidden. Runtime creation remains
+          // independently constrained by the conversation tenant boundary.
+          const keep = (a: unknown): boolean => !ADMIN_ONLY_ASSISTANT_IDS.has((a as { id?: string })?.id ?? '');
           if (Array.isArray(parsed)) {
             body = Buffer.from(JSON.stringify(parsed.filter(keep)), 'utf-8');
           } else if (parsed && typeof parsed === 'object') {
@@ -816,21 +814,9 @@ function projectLanAgent(value: unknown): Record<string, unknown> | null {
   return output;
 }
 
-function projectLanAgentPayload(value: unknown, lanSafeOnly = false): unknown | null {
+function projectLanAgentPayload(value: unknown): unknown | null {
   const projectList = (items: unknown[]): Record<string, unknown>[] =>
-    items
-      .filter(
-        (item) =>
-          !lanSafeOnly ||
-          Boolean(
-            item &&
-            typeof item === 'object' &&
-            !Array.isArray(item) &&
-            (item as Record<string, unknown>).agent_type === 'aionrs'
-          )
-      )
-      .map(projectLanAgent)
-      .filter((item): item is Record<string, unknown> => item !== null);
+    items.map(projectLanAgent).filter((item): item is Record<string, unknown> => item !== null);
   if (Array.isArray(value)) return projectList(value);
   if (!value || typeof value !== 'object') return null;
   const input = value as Record<string, unknown>;
@@ -845,12 +831,7 @@ function projectLanAgentPayload(value: unknown, lanSafeOnly = false): unknown | 
 }
 
 /** Return only runtime-selection metadata; never process commands, env or host paths. */
-function proxyAgentsSanitized(
-  req: IncomingMessage,
-  res: ServerResponse,
-  backendPort: number,
-  lanSafeOnly = false
-): void {
+function proxyAgentsSanitized(req: IncomingMessage, res: ServerResponse, backendPort: number): void {
   const proxy = http.request(
     {
       hostname: '127.0.0.1',
@@ -871,7 +852,7 @@ function proxyAgentsSanitized(
         let body = Buffer.concat(chunks);
         if (status >= 200 && status < 300) {
           try {
-            const projected = projectLanAgentPayload(JSON.parse(body.toString('utf-8')), lanSafeOnly);
+            const projected = projectLanAgentPayload(JSON.parse(body.toString('utf-8')));
             if (!projected) throw new Error('unexpected agents response');
             body = Buffer.from(JSON.stringify(projected), 'utf-8');
           } catch {
@@ -2672,7 +2653,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // Always applied in WebUI mode — the butler is desktop-only regardless of
       // LAN exposure. Desktop talks to the backend directly, bypassing this.
       if (req.method === 'GET' && (req.url === '/api/assistants' || req.url.startsWith('/api/assistants?'))) {
-        proxyAssistantsFiltered(req, res, opts.backendPort, requireAuth);
+        proxyAssistantsFiltered(req, res, opts.backendPort);
         return;
       }
 
@@ -2683,7 +2664,7 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
           req.url === '/api/agents/management' ||
           req.url.startsWith('/api/agents/management?'))
       ) {
-        proxyAgentsSanitized(req, res, opts.backendPort, requireAuth);
+        proxyAgentsSanitized(req, res, opts.backendPort);
         return;
       }
 
@@ -3168,6 +3149,18 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
   });
   tcp_server.maxConnections = MAX_FRONTEND_CONNECTIONS;
 
+  // server.close() stops accepting new connections, but its callback does not
+  // run until every existing TCP client has closed. Browsers keep WebUI HTTP
+  // and WebSocket connections alive for minutes, so waiting for graceful
+  // client shutdown used to leave Settings -> WebUI permanently stuck on
+  // "Starting..." when the service was toggled off and back on. Track the
+  // public sockets so stop() can actively drain them before the next bind.
+  const frontendSockets = new Set<Socket>();
+  tcp_server.on('connection', (socket: Socket) => {
+    frontendSockets.add(socket);
+    socket.once('close', () => frontendSockets.delete(socket));
+  });
+
   await new Promise<void>((resolve, reject) => {
     tcp_server.once('error', reject);
     tcp_server.listen(port, host, () => {
@@ -3189,11 +3182,28 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
     lanIP,
     stop: () =>
       new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(forceTimer);
+          resolve();
+        };
+        const forceTimer = setTimeout(() => {
+          // Last-resort guard for unusual half-open sockets. Both servers have
+          // already stopped accepting connections, so resolving here is safe
+          // and prevents lifecycle operations from hanging forever.
+          http_server.closeAllConnections?.();
+          for (const socket of frontendSockets) socket.destroy();
+          finish();
+        }, 2_000);
+        forceTimer.unref();
+
         tcp_server.close(() => {
-          http_server.close(() => {
-            resolve();
-          });
+          http_server.close(finish);
+          http_server.closeAllConnections?.();
         });
+        for (const socket of frontendSockets) socket.destroy();
       }),
     inspectEntry: entryGuard.inspect,
     repairEntry: entryGuard.repair,

@@ -6,6 +6,7 @@ copyright: Copyright © 2026 半人马人工智能（深圳）有限公司
 protocols:
   - name: CentaurAI Protocol
     schemes:
+      - centaurai
       - aionui
 
 asar:
@@ -197,7 +198,7 @@ linux:
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;
-      MimeType: x-scheme-handler/aionui;
+      MimeType: x-scheme-handler/centaurai;x-scheme-handler/aionui;
 
 npmRebuild: false
 buildDependenciesFromSource: false
@@ -236,7 +237,7 @@ electronDownload:
 
 publish:
   provider: github
-  owner: iOfficeAI
-  repo: AionUi
+  owner: finewood2008
+  repo: centaurai-team
   publishAutoUpdate: true
   releaseType: release

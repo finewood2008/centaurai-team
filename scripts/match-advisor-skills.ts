@@ -58,14 +58,21 @@ function parseArgs(argv: string[]): Map<string, string | boolean> {
 
 function resolveDefaultDataDir(): string {
   const suffix =
-    process.env.NODE_ENV === 'production' ? '' : process.env.AIONUI_MULTI_INSTANCE === '1' ? '-Dev-2' : '-Dev';
-  return path.join(os.homedir(), '.config', `CentaurAI${suffix}`, 'aionui');
+    process.env.NODE_ENV === 'production'
+      ? ''
+      : process.env.CENTAURAI_MULTI_INSTANCE === '1' || process.env.AIONUI_MULTI_INSTANCE === '1'
+        ? '-Dev-2'
+        : '-Dev';
+  const root = path.join(os.homedir(), '.config', `CentaurAI${suffix}`);
+  const canonical = path.join(root, 'centaurai');
+  const legacy = path.join(root, 'aionui');
+  return !fs.existsSync(canonical) && fs.existsSync(legacy) ? legacy : canonical;
 }
 
 function resolveDbPath(args: Map<string, string | boolean>): string {
   const explicitDb = args.get('--db');
   if (typeof explicitDb === 'string') return path.resolve(explicitDb);
-  const dataDir = args.get('--data-dir') ?? process.env.AIONUI_DATA_DIR;
+  const dataDir = args.get('--data-dir') ?? process.env.CENTAURAI_DATA_DIR ?? process.env.AIONUI_DATA_DIR;
   const resolvedDataDir = typeof dataDir === 'string' ? path.resolve(dataDir) : resolveDefaultDataDir();
   return path.join(resolvedDataDir, 'aionui-backend.db');
 }
@@ -82,7 +89,7 @@ function main() {
   const mapping: Mapping[] = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
 
   const dbPath = resolveDbPath(args);
-  if (!fs.existsSync(dbPath)) throw new Error(`AionUI backend database not found: ${dbPath}`);
+  if (!fs.existsSync(dbPath)) throw new Error(`CentaurAI Core database not found: ${dbPath}`);
 
   const db = new Database(dbPath);
   const now = Date.now();

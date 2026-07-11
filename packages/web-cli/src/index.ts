@@ -13,9 +13,9 @@ import {
   type CoreBinaryResolution,
 } from '../../shared-scripts/src/resolve-core-binary.js';
 
-// tarball layout:
-//   aionui-web/
-//   ├── aionui-web              ← bun-compiled standalone binary (process.execPath)
+// tarball layout (legacy release names remain supported):
+//   centaurai-web/
+//   ├── centaurai-web           ← bun-compiled standalone binary (process.execPath)
 //   ├── package.json             ← for runtime version lookup
 //   ├── bundled-centaurai-core/<plat-arch>/centaurai-core[.exe]
 //   └── static/                  ← SPA assets
@@ -25,11 +25,11 @@ import {
 // sibling files. In dev (tsx/node), process.execPath is the node/bun binary,
 // so fall back to import.meta.url there.
 function resolveCliRoot(): string {
-  // Heuristic: if the executable path ends in "aionui-web" or "aionui-web.exe",
+  // Heuristic: recognize both the canonical and legacy executable names.
   // treat it as the packaged single-file binary and return its directory.
   const exe = process.execPath;
   const exeName = path.basename(exe).toLowerCase();
-  if (exeName === 'aionui-web' || exeName === 'aionui-web.exe') {
+  if (['centaurai-web', 'centaurai-web.exe', 'aionui-web', 'aionui-web.exe'].includes(exeName)) {
     return path.dirname(exe);
   }
   // Dev mode (tsx/node/bun running from source): use import.meta.url
@@ -51,11 +51,11 @@ const cliRoot = resolveCliRoot();
 // binary itself can do about first-launch quarantine.
 const isPackaged = (() => {
   const exeName = path.basename(process.execPath).toLowerCase();
-  return exeName === 'aionui-web' || exeName === 'aionui-web.exe';
+  return ['centaurai-web', 'centaurai-web.exe', 'aionui-web', 'aionui-web.exe'].includes(exeName);
 })();
 
 const DEFAULT_PORT = 25808;
-const RESET_COMMAND = isPackaged ? 'aionui-web resetpass' : 'bun run resetpass';
+const RESET_COMMAND = isPackaged ? 'centaurai-web resetpass' : 'bun run resetpass';
 
 let currentHandle: WebHostHandle | StaticServerHandle | null = null;
 
@@ -77,14 +77,18 @@ function parseArgs(argv: string[]): { command: string; flags: Map<string, string
   return { command, flags };
 }
 
-function resolveBackendBinary(flags: Map<string, string | true>, allowMissing = false): CoreBinaryResolution | undefined {
+function resolveBackendBinary(
+  flags: Map<string, string | true>,
+  allowMissing = false
+): CoreBinaryResolution | undefined {
   const override = flags.get('backend-bin');
   const env = { ...process.env };
   if (typeof override === 'string') env.CENTAURAI_CORE_BIN = path.resolve(override);
   try {
     return resolveCoreBinary({ resourcesRoot: cliRoot, env });
   } catch (error) {
-    const hasExplicitOverride = typeof override === 'string' || Boolean(env.CENTAURAI_CORE_BIN || env.AIONUI_BACKEND_BIN);
+    const hasExplicitOverride =
+      typeof override === 'string' || Boolean(env.CENTAURAI_CORE_BIN || env.AIONUI_BACKEND_BIN);
     if (!allowMissing || hasExplicitOverride) throw error;
     if (error instanceof CoreBinaryResolveError) {
       console.warn('[centaurai-core] binary resolution failed', error.diagnostics);
@@ -118,15 +122,17 @@ function resolveStaticDir(flags: Map<string, string | true>): string {
 function resolveDataDir(flags: Map<string, string | true>): string {
   const override = flags.get('data-dir');
   if (typeof override === 'string') return path.resolve(override);
-  const envOverride = process.env.AIONUI_DATA_DIR;
+  const envOverride = process.env.CENTAURAI_DATA_DIR ?? process.env.AIONUI_DATA_DIR;
   if (envOverride) return path.resolve(envOverride);
-  return path.join(os.homedir(), '.aionui-web');
+  const canonicalDir = path.join(os.homedir(), '.centaurai-web');
+  const legacyDir = path.join(os.homedir(), '.aionui-web');
+  return !fs.existsSync(canonicalDir) && fs.existsSync(legacyDir) ? legacyDir : canonicalDir;
 }
 
 function resolveLogDir(flags: Map<string, string | true>, dataDir: string): string {
   const override = flags.get('log-dir');
   if (typeof override === 'string') return path.resolve(override);
-  const envOverride = process.env.AIONUI_LOG_DIR;
+  const envOverride = process.env.CENTAURAI_LOG_DIR ?? process.env.AIONUI_LOG_DIR;
   if (envOverride) return path.resolve(envOverride);
   return path.join(dataDir, 'logs');
 }
@@ -134,14 +140,14 @@ function resolveLogDir(flags: Map<string, string | true>, dataDir: string): stri
 function resolvePort(flags: Map<string, string | true>): number {
   const cli = flags.get('port');
   if (typeof cli === 'string' && /^\d+$/.test(cli)) return Number(cli);
-  const env = process.env.AIONUI_PORT ?? process.env.PORT;
+  const env = process.env.CENTAURAI_PORT ?? process.env.AIONUI_PORT ?? process.env.PORT;
   if (env && /^\d+$/.test(env)) return Number(env);
   return DEFAULT_PORT;
 }
 
 function resolveAllowRemote(flags: Map<string, string | true>): boolean {
   if (flags.has('remote')) return true;
-  const env = process.env.AIONUI_ALLOW_REMOTE ?? process.env.AIONUI_REMOTE;
+  const env = process.env.CENTAURAI_ALLOW_REMOTE ?? process.env.AIONUI_ALLOW_REMOTE ?? process.env.AIONUI_REMOTE;
   if (!env) return false;
   return ['1', 'true', 'yes', 'on'].includes(env.trim().toLowerCase());
 }
@@ -175,17 +181,17 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
   });
 
   if (!fs.existsSync(staticDir)) {
-    console.error(`[aionui-web] static dir not found: ${staticDir}`);
+    console.error(`[centaurai-web] static dir not found: ${staticDir}`);
     console.error(`  hint: pass --static-dir <path> pointing to the SPA build output`);
     process.exit(1);
   }
 
-  console.log(`[aionui-web] version    : ${version}`);
-  console.log(`[aionui-web] data dir   : ${dataDir}`);
-  console.log(`[aionui-web] log dir    : ${logDir}`);
-  console.log(`[aionui-web] static dir : ${staticDir}`);
-  console.log(`[aionui-web] backend bin: ${backendBin ?? '<not found>'}`);
-  console.log(`[aionui-web] launching  : port=${port} allowRemote=${allowRemote}`);
+  console.log(`[centaurai-web] version    : ${version}`);
+  console.log(`[centaurai-web] data dir   : ${dataDir}`);
+  console.log(`[centaurai-web] log dir    : ${logDir}`);
+  console.log(`[centaurai-web] static dir : ${staticDir}`);
+  console.log(`[centaurai-web] backend bin: ${backendBin ?? '<not found>'}`);
+  console.log(`[centaurai-web] launching  : port=${port} allowRemote=${allowRemote}`);
 
   if (!backendResolution) {
     // Graceful degradation: serve the SPA shell without spawning backend.
@@ -207,15 +213,15 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
     currentHandle = handle;
 
     console.log('');
-    console.log('AionUi WebUI (frontend only) is ready');
+    console.log('CentaurAI WebUI (frontend only) is ready');
     console.log(`  Local  : ${handle.localUrl}`);
     if (handle.networkUrl) console.log(`  Network: ${handle.networkUrl}`);
     if (autoOpenBrowser) {
       const openResult = openBrowserUrl(handle.localUrl);
       if (openResult.ok) {
-        console.log(`[aionui-web] opened ${handle.localUrl} in your browser.`);
+        console.log(`[centaurai-web] opened ${handle.localUrl} in your browser.`);
       } else {
-        console.warn(`[aionui-web] could not open the browser automatically: ${openResult.reason}`);
+        console.warn(`[centaurai-web] could not open the browser automatically: ${openResult.reason}`);
       }
     }
     console.log('');
@@ -250,7 +256,7 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
     currentHandle = handle;
 
     console.log('');
-    console.log('AionUi WebUI is ready');
+    console.log('CentaurAI WebUI is ready');
     console.log(`  Local  : ${handle.localUrl}`);
     if (handle.networkUrl) console.log(`  Network: ${handle.networkUrl}`);
 
@@ -271,9 +277,9 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
     if (autoOpenBrowser) {
       const openResult = openBrowserUrl(handle.localUrl);
       if (openResult.ok) {
-        console.log(`[aionui-web] opened ${handle.localUrl} in your browser.`);
+        console.log(`[centaurai-web] opened ${handle.localUrl} in your browser.`);
       } else {
-        console.warn(`[aionui-web] could not open the browser automatically: ${openResult.reason}`);
+        console.warn(`[centaurai-web] could not open the browser automatically: ${openResult.reason}`);
       }
     }
 
@@ -285,11 +291,11 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`\n[aionui-web] received ${signal}, stopping...`);
+    console.log(`\n[centaurai-web] received ${signal}, stopping...`);
     try {
       if (currentHandle) await currentHandle.stop();
     } catch (err) {
-      console.error('[aionui-web] stop failed:', err);
+      console.error('[centaurai-web] stop failed:', err);
     }
     process.exit(0);
   };
@@ -298,7 +304,7 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
 }
 
 /**
- * `aionui-web resetpass` — spin up the backend just long enough to POST
+ * `centaurai-web resetpass` — spin up the backend just long enough to POST
  * /api/webui/reset-password, print the new plaintext password, then tear down.
  * Uses the same data-dir resolution as `start`, so the reset targets whichever
  * DB the user normally runs against.
@@ -306,7 +312,7 @@ async function runStart(flags: Map<string, string | true>): Promise<void> {
 async function runResetPassword(flags: Map<string, string | true>): Promise<void> {
   const backendResolution = resolveBackendBinary(flags);
   if (!backendResolution) {
-    console.error('[aionui-web] CentaurAI Core binary not found');
+    console.error('[centaurai-web] CentaurAI Core binary not found');
     console.error('  hint: pass --backend-bin <path> or set CENTAURAI_CORE_BIN');
     process.exit(1);
   }
@@ -319,7 +325,7 @@ async function runResetPassword(flags: Map<string, string | true>): Promise<void
   const staticDir = resolveStaticDir(flags);
   const version = readPackageVersion();
 
-  console.log(`[aionui-web] resetting admin password in ${dataDir}`);
+  console.log(`[centaurai-web] resetting admin password in ${dataDir}`);
 
   const handle = await startWebHost({
     app: {
@@ -358,7 +364,7 @@ async function runResetPassword(flags: Map<string, string | true>): Promise<void
       await delay(500);
     }
     if (!ready) {
-      console.error('[aionui-web] backend did not become ready within 15s');
+      console.error('[centaurai-web] backend did not become ready within 15s');
       process.exit(1);
     }
 
@@ -366,7 +372,7 @@ async function runResetPassword(flags: Map<string, string | true>): Promise<void
       method: 'POST',
     });
     if (!res.ok) {
-      console.error(`[aionui-web] /api/webui/reset-password returned ${res.status}`);
+      console.error(`[centaurai-web] /api/webui/reset-password returned ${res.status}`);
       process.exit(1);
     }
     const payload = (await res.json()) as {
@@ -377,12 +383,12 @@ async function runResetPassword(flags: Map<string, string | true>): Promise<void
     const newPassword = payload.data?.new_password ?? payload.new_password;
     const username = payload.data?.username ?? payload.username ?? 'admin';
     if (!newPassword) {
-      console.error('[aionui-web] reset-password response missing new_password');
+      console.error('[centaurai-web] reset-password response missing new_password');
       process.exit(1);
     }
-    console.log(`[aionui-web] username: ${username}`);
-    console.log(`[aionui-web] new password: ${newPassword}`);
-    console.log('[aionui-web] existing sessions have been invalidated.');
+    console.log(`[centaurai-web] username: ${username}`);
+    console.log(`[centaurai-web] new password: ${newPassword}`);
+    console.log('[centaurai-web] existing sessions have been invalidated.');
   } finally {
     try {
       await handle.stop();
@@ -402,7 +408,7 @@ async function main(): Promise<void> {
   }
 
   if (command === '--help' || command === 'help' || command === '-h') {
-    console.log(`Usage: aionui-web <command> [options]
+    console.log(`Usage: centaurai-web <command> [options]
 
 Commands:
   start              Start the WebUI (default)
@@ -415,19 +421,20 @@ Options for start:
   --remote                Bind 0.0.0.0 instead of 127.0.0.1
   --open                  Force opening the local URL in a browser
   --no-open               Disable automatic browser opening
-  --data-dir <path>       Override data dir (default: ~/.aionui-web)
+  --data-dir <path>       Override data dir (default: ~/.centaurai-web)
   --log-dir <path>        Override log dir (default: <data-dir>/logs)
   --static-dir <path>     Override static assets dir
   --backend-bin <path>    Override backend binary path
 
 Options for resetpass:
-  --data-dir <path>       Which data dir to reset (default: ~/.aionui-web)
+  --data-dir <path>       Which data dir to reset (default: ~/.centaurai-web)
   --backend-bin <path>    Override backend binary path
 
 Environment variables:
-  AIONUI_PORT, AIONUI_ALLOW_REMOTE, AIONUI_DATA_DIR, AIONUI_LOG_DIR,
+  CENTAURAI_PORT, CENTAURAI_ALLOW_REMOTE, CENTAURAI_DATA_DIR, CENTAURAI_LOG_DIR,
+  CENTAURAI_OPEN_BROWSER,
   CENTAURAI_CORE_BIN, CENTAURAI_CORE_BUNDLED_DIR,
-  AIONUI_BACKEND_BIN, AIONUI_BACKEND_BUNDLED_DIR, AIONUI_OPEN_BROWSER
+  Legacy AIONUI_* aliases remain supported.
 `);
     return;
   }
@@ -439,7 +446,7 @@ Environment variables:
 
   if (command !== 'start') {
     console.error(`Unknown command: ${command}`);
-    console.error('Usage: aionui-web [start|resetpass|version|help]');
+    console.error('Usage: centaurai-web [start|resetpass|version|help]');
     process.exit(1);
   }
 
@@ -447,7 +454,7 @@ Environment variables:
 }
 
 main().catch((err: Error) => {
-  console.error('[aionui-web] fatal:', err.message);
+  console.error('[centaurai-web] fatal:', err.message);
   if (currentHandle) void currentHandle.stop().catch(() => undefined);
   process.exit(1);
 });

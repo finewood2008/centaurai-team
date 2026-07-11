@@ -13,16 +13,12 @@ import { ipcBridge } from '@/common';
 import { uuid } from '@/common/utils';
 import type { IProvider } from '@/common/config/storage';
 import { useProvidersQuery } from '@/renderer/hooks/agent/useModelProviderList';
+import { isLocalOllamaUrl, OLLAMA_BASE_URL } from '@/renderer/utils/model/localModelProvider';
 import { Alert, Button, Checkbox, Empty, Message, Spin, Tag } from '@arco-design/web-react';
 import { Components, Plus, Refresh } from '@icon-park/react';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import SettingsPageWrapper from './components/SettingsPageWrapper';
-
-/** OpenAI-compatible endpoint exposed by the local ollama daemon. */
-const OLLAMA_BASE_URL = 'http://127.0.0.1:11434/v1';
-/** Recognise a provider as "the local ollama one" by its URL (no schema change). */
-const OLLAMA_URL_RE = /(127\.0\.0\.1|localhost):11434/;
 
 type DetectState = 'detecting' | 'online' | 'onlineEmpty' | 'offline';
 
@@ -43,7 +39,7 @@ const LocalModelsContent: React.FC = () => {
   const [launching, setLaunching] = useState(false);
 
   const existingProvider = useMemo<IProvider | undefined>(
-    () => (providers || []).find((p) => OLLAMA_URL_RE.test(p.base_url || '')),
+    () => (providers || []).find((provider) => isLocalOllamaUrl(provider.base_url)),
     [providers]
   );
   const alreadyAdded = useMemo(() => new Set(existingProvider?.models ?? []), [existingProvider]);

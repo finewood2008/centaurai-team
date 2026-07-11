@@ -39,13 +39,22 @@ describe('shouldAutoOpenBrowser', () => {
     ).toBe(false);
   });
 
-  it('honors AIONUI_OPEN_BROWSER=false for local launches', () => {
+  it('honors CENTAURAI_OPEN_BROWSER=false for local launches', () => {
     expect(
       shouldAutoOpenBrowser({
         allowRemote: false,
-        env: { AIONUI_OPEN_BROWSER: 'false' },
+        env: { CENTAURAI_OPEN_BROWSER: 'false' },
       })
     ).toBe(false);
+  });
+
+  it('keeps AIONUI_OPEN_BROWSER as a legacy fallback', () => {
+    expect(
+      shouldAutoOpenBrowser({
+        allowRemote: true,
+        env: { AIONUI_OPEN_BROWSER: 'true' },
+      })
+    ).toBe(true);
   });
 });
 

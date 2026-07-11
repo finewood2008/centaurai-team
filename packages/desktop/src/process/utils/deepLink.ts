@@ -7,18 +7,24 @@
 import type { BrowserWindow } from 'electron';
 import { ipcBridge } from '@/common';
 
-export const PROTOCOL_SCHEME = 'aionui';
+export const PROTOCOL_SCHEME = 'centaurai';
+export const LEGACY_PROTOCOL_SCHEME = 'aionui';
+export const PROTOCOL_SCHEMES = [PROTOCOL_SCHEME, LEGACY_PROTOCOL_SCHEME] as const;
+
+export const findDeepLinkUrl = (args: string[]): string | undefined =>
+  args.find((arg) => PROTOCOL_SCHEMES.some((scheme) => arg.startsWith(`${scheme}://`)));
 
 /**
- * Parse an aionui:// URL into action and params.
+ * Parse a CentaurAI URL into action and params.
  * Supports two formats:
- *   1. aionui://add-provider?base_url=xxx&api_key=xxx
- *   2. aionui://provider/add?v=1&data=<base64 JSON>  (one-api / new-api style)
+ *   1. centaurai://add-provider?base_url=xxx&api_key=xxx
+ *   2. centaurai://provider/add?v=1&data=<base64 JSON>  (one-api / new-api style)
+ * The legacy aionui:// scheme remains accepted for existing integrations.
  */
 export const parseDeepLinkUrl = (url: string): { action: string; params: Record<string, string> } | null => {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== `${PROTOCOL_SCHEME}:`) return null;
+    if (!PROTOCOL_SCHEMES.some((scheme) => parsed.protocol === `${scheme}:`)) return null;
 
     const hostname = parsed.hostname || '';
     const pathname = parsed.pathname.replace(/^\/+/, '');
@@ -49,7 +55,7 @@ export const parseDeepLinkUrl = (url: string): { action: string; params: Record<
 };
 
 let mainWindowRef: BrowserWindow | null = null;
-let pendingDeepLinkUrl: string | null = process.argv.find((arg) => arg.startsWith(`${PROTOCOL_SCHEME}://`)) || null;
+let pendingDeepLinkUrl: string | null = findDeepLinkUrl(process.argv) || null;
 
 export const setDeepLinkMainWindow = (win: BrowserWindow): void => {
   mainWindowRef = win;

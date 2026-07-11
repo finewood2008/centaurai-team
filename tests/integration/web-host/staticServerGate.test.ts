@@ -127,6 +127,8 @@ describe('static-server auth gate (allowRemote)', () => {
 
     const authed = await fetch(`${base}/api/assistants`, { headers: { cookie: gateCookie! } });
     expect(authed.status).toBe(200);
+    const body = (await authed.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((assistant) => assistant.id)).toEqual(['normal-assistant']);
   });
 
   it('authorizes native clients with the gate token header', async () => {

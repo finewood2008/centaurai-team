@@ -113,7 +113,9 @@ function inspectCoreProvenance(binaryPath: string): CoreProvenance {
     sha256: getManifestString(manifest, 'sha256'),
     sourceType: getManifestString(manifest, 'sourceType'),
     fallbackUsed:
-      manifest?.fallbackUsed === true || /^aioncore(?:\.exe)?$/i.test(binaryName) || binaryPath.includes('bundled-aioncore'),
+      manifest?.fallbackUsed === true ||
+      /^aioncore(?:\.exe)?$/i.test(binaryName) ||
+      binaryPath.includes('bundled-aioncore'),
   };
 }
 
@@ -251,7 +253,7 @@ export class BackendStartupError extends Error {
 }
 
 export class BackendStartupCancelledError extends Error {
-  constructor(message = 'aioncore startup cancelled') {
+  constructor(message = 'CentaurAI Core startup cancelled') {
     super(message);
     this.name = 'BackendStartupCancelledError';
   }
@@ -551,7 +553,7 @@ export class BackendLifecycleManager {
     } catch (error) {
       const diagnostics = getResolveDiagnostics(error);
       throw new BackendStartupError(
-        'aioncore startup failed while resolving backend binary',
+        'CentaurAI Core startup failed while resolving backend binary',
         {
           stage: 'resolve_binary',
           appVersion,
@@ -569,7 +571,7 @@ export class BackendLifecycleManager {
     const allowLegacyFallback = legacyCoreFallbackAllowed();
     this.lastCoreProvenance = provenance;
     if (provenance.fallbackUsed && !allowLegacyFallback) {
-      throw new BackendStartupError('legacy aioncore fallback is disabled', {
+      throw new BackendStartupError('legacy core fallback is disabled', {
         stage: 'resolve_binary',
         appVersion,
         isPackaged: this.appMeta.isPackaged,
@@ -655,7 +657,7 @@ export class BackendLifecycleManager {
       });
     } catch (error) {
       this._status = 'error';
-      throw makeStartupError('spawn', 'aioncore process spawn threw before startup', error);
+      throw makeStartupError('spawn', 'CentaurAI Core process spawn threw before startup', error);
     }
 
     this.childProcess.stdin?.end();
@@ -686,7 +688,7 @@ export class BackendLifecycleManager {
       this.childProcess?.once('error', (error) => {
         if (startupSettled) return;
         this._status = 'error';
-        rejectOnce(makeStartupError('spawn_error', 'aioncore process emitted an error before startup', error));
+        rejectOnce(makeStartupError('spawn_error', 'CentaurAI Core process emitted an error before startup', error));
       });
 
       this.childProcess?.once('exit', (code, signal) => {
@@ -710,11 +712,11 @@ export class BackendLifecycleManager {
         const exitSignal = pendingStartupExit.signal ?? signal;
         if (!pendingStartupExit.startupSettledAtExit) {
           if (pendingStartupExit.statusAtExit === 'stopped') {
-            rejectOnce(new BackendStartupCancelledError('aioncore startup cancelled before health check passed'));
+            rejectOnce(new BackendStartupCancelledError('CentaurAI Core startup cancelled before health check passed'));
             return;
           }
           rejectOnce(
-            makeStartupError('early_exit', 'aioncore exited before health check passed', undefined, {
+            makeStartupError('early_exit', 'CentaurAI Core exited before health check passed', undefined, {
               exitCode: exitCode ?? undefined,
               signal: exitSignal ?? undefined,
             })
@@ -724,7 +726,7 @@ export class BackendLifecycleManager {
         if (pendingStartupExit.statusAtExit === 'starting') {
           void Promise.resolve(
             options?.onPendingExit?.(
-              makeStartupError('early_exit', 'aioncore exited after startup health timeout', undefined, {
+              makeStartupError('early_exit', 'CentaurAI Core exited after startup health timeout', undefined, {
                 exitCode: exitCode ?? undefined,
                 signal: exitSignal ?? undefined,
               })
@@ -754,10 +756,15 @@ export class BackendLifecycleManager {
       };
       reportedPortTimer = setTimeout(() => {
         rejectReportedPort(
-          makeStartupError('listen_timeout', 'aioncore did not report its listening port before timeout', undefined, {
-            healthCheckTimeoutMs: BACKEND_PORT_REPORT_TIMEOUT_MS,
-            healthCheckElapsedMs: Date.now() - startupStartedAt,
-          })
+          makeStartupError(
+            'listen_timeout',
+            'CentaurAI Core did not report its listening port before timeout',
+            undefined,
+            {
+              healthCheckTimeoutMs: BACKEND_PORT_REPORT_TIMEOUT_MS,
+              healthCheckElapsedMs: Date.now() - startupStartedAt,
+            }
+          )
         );
       }, BACKEND_PORT_REPORT_TIMEOUT_MS);
     });
@@ -809,7 +816,7 @@ export class BackendLifecycleManager {
     if (!health.ok) {
       const healthTimeoutError = makeStartupError(
         'health_timeout',
-        'aioncore failed to start within timeout',
+        'CentaurAI Core failed to start within timeout',
         undefined,
         {
           ...health.diagnostics,

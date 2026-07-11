@@ -286,11 +286,13 @@ const WebuiModalContent: React.FC = () => {
         await configService.set(DESKTOP_WEBUI_ENABLED_KEY, true);
         Message.success(t('settings.webui.startSuccess'));
       } else {
-        // 立即更新UI，异步停止服务器 / Update UI immediately, stop server async
+        // Keep the switch busy until the main process has drained the active
+        // HTTP/WebSocket clients. Starting again while stop() is still pending
+        // creates overlapping listeners and can strand the next start IPC.
         setStatus((prev) => (prev ? { ...prev, running: false } : null));
+        await webui.stop.invoke();
         await configService.set(DESKTOP_WEBUI_ENABLED_KEY, false);
         Message.success(t('settings.webui.stopSuccess'));
-        webui.stop.invoke().catch((err) => console.error('WebUI stop error:', err));
       }
     } catch (error) {
       // 回滚 UI 状态 / Rollback UI state
@@ -317,11 +319,7 @@ const WebuiModalContent: React.FC = () => {
       setStartLoading(true);
       try {
         // 1. 先停止服务器 / First stop the server
-        try {
-          await Promise.race([webui.stop.invoke(), new Promise((resolve) => setTimeout(resolve, 1500))]);
-        } catch (err) {
-          console.error('WebUI stop error:', err);
-        }
+        await webui.stop.invoke();
 
         // Await the real result — a 3s race fallback used to mask backend
         // failures as success (see handleToggle).
@@ -832,7 +830,6 @@ const WebuiModalContent: React.FC = () => {
           >
             <Switch checked={allowRemotePreference} onChange={handleAllowRemoteChange} />
           </PreferenceRow>
-
         </div>
 
         {/* 登录信息卡片 / Login Info Card */}
