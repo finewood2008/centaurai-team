@@ -1,4 +1,4 @@
-# 半人马AI超级知识库 build variant.
+# 团队AI工作台 build variant.
 # Differs from electron-builder.yml ONLY by branding (appId / productName /
 # executableName / linux launcher name). Same full payload as the base (keeps the
 # bundled aioncore backend — the team box is the multi-user LAN server).
@@ -6,8 +6,8 @@
 # CENTAURAI_EDITION=team (Vite `define` → common/config/constants.ts), NOT here.
 # Keep in sync with electron-builder.yml for any shared files/target changes.
 appId: com.centaurai.team
-productName: CentaurAI Knowledge Base
-executableName: CentaurAI Knowledge Base
+productName: CentaurAI Team Workspace
+executableName: CentaurAI Team Workspace
 copyright: Copyright © 2026 半人马人工智能（深圳）有限公司
 
 protocols:
@@ -201,7 +201,7 @@ linux:
   description: ${description}
   desktop:
     entry:
-      Name: CentaurAI 超级知识库
+      Name: 团队AI工作台
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;

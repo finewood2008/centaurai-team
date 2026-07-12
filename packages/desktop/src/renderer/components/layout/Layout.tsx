@@ -356,7 +356,7 @@ const Layout: React.FC<{
                 </div>
                 <div className='collapsed-hidden flex flex-col justify-center leading-tight'>
                   <span className='text-12px text-t-secondary'>
-                    半人马AI{IS_DECISION ? '-超级参谋' : IS_TEAM ? '超级知识库' : ''}
+                    半人马AI{IS_DECISION ? '-超级AI参谋团' : IS_TEAM ? '团队AI工作台' : ''}
                   </span>
                   <span className='text-16px text-t-primary font-semibold'>CentaurAI</span>
                 </div>
