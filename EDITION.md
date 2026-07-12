@@ -1,4 +1,4 @@
-# 团队AI工作台 · CentaurAI Team Workspace
+# 团队工作台 · CentaurAI Team Workspace
 
 This is a **downstream distribution** of
 [centaurai-station](https://github.com/finewood2008/centaurai-station) — the core / full app.

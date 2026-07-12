@@ -1,4 +1,4 @@
-# 团队AI工作台 build variant.
+# 团队工作台 build variant.
 # Differs from electron-builder.yml ONLY by branding (appId / productName /
 # executableName / linux launcher name). Same full payload as the base (keeps the
 # bundled aioncore backend — the team box is the multi-user LAN server).
@@ -201,7 +201,7 @@ linux:
   description: ${description}
   desktop:
     entry:
-      Name: 团队AI工作台
+      Name: 团队工作台
       Comment: ${description}
       Icon: centaurai
       Categories: Office;Utility;
