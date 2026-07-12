@@ -102,7 +102,7 @@ describe('agent management HTTP adapter', () => {
         available_commands: [{ name: 'help' }],
       },
     });
-    expect(agents[0]).not.toHaveProperty('installed');
+    expect(agents[0]).toHaveProperty('installed');
     expect(agents[0]).not.toHaveProperty('status');
   });
 

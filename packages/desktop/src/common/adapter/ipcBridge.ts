@@ -2412,30 +2412,24 @@ function supportsNewConversation(row: AgentManagementApiRow): boolean {
 
 function toAgentMetadata(row: AgentManagementApiRow): AgentMetadata {
   const {
-    installed: _installed,
-    status: _status,
     config_options,
     available_modes,
     available_models,
     available_commands,
-    last_check_status: _lastCheckStatus,
-    last_check_kind: _lastCheckKind,
-    last_check_error_code: _lastCheckErrorCode,
-    last_check_error_message: _lastCheckErrorMessage,
-    last_check_error_details: _lastCheckErrorDetails,
-    last_check_guidance: _lastCheckGuidance,
-    last_check_latency_ms: _lastCheckLatencyMs,
-    last_check_at: _lastCheckAt,
-    last_success_at: _lastSuccessAt,
-    last_failure_at: _lastFailureAt,
-    has_command_override: _hasCommandOverride,
-    env_override_key_count: _envOverrideKeyCount,
+    status: _status,
     ...metadata
   } = row;
   return {
     ...metadata,
-    available: isUsableManagementAgent(row),
+    installed: row.installed,
     management_status: row.status,
+    last_check_status: row.last_check_status,
+    last_check_error_code: row.last_check_error_code,
+    last_check_error_message: row.last_check_error_message,
+    last_check_guidance: row.last_check_guidance,
+    last_check_latency_ms: row.last_check_latency_ms,
+    last_check_at: row.last_check_at,
+    available: isUsableManagementAgent(row),
     handshake: {
       config_options,
       available_modes,

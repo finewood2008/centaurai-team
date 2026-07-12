@@ -90,6 +90,20 @@ export type AgentMetadata = {
   available: boolean;
   /** Diagnostics-first state from Core's management catalog. */
   management_status?: 'online' | 'unchecked' | 'missing' | 'offline';
+  /** Whether the CLI binary was found on PATH (from backend). */
+  installed?: boolean;
+  /** Last health check status. */
+  last_check_status?: 'online' | 'offline';
+  /** Last health check error code. */
+  last_check_error_code?: string;
+  /** Last health check error message (user-facing). */
+  last_check_error_message?: string;
+  /** Last health check guidance (actionable fix hint). */
+  last_check_guidance?: string;
+  /** Last health check latency in ms. */
+  last_check_latency_ms?: number;
+  /** Timestamp of last health check. */
+  last_check_at?: number;
   /** True when the agent supports team mode (MCP stdio capable). Computed by backend. */
   team_capable?: boolean;
 
