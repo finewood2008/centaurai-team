@@ -3067,7 +3067,6 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
       // static files + SPA fallback
       await serveHandler(req, res, {
         public: opts.staticDir,
-        rewrites: [{ source: '**', destination: '/index.html' }],
       });
     } catch (error) {
       console.error('[WebUI] Request handling failed', {

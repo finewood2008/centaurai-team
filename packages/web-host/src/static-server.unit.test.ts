@@ -117,6 +117,15 @@ describe('static-server', () => {
     expect(body).toContain('hi');
   });
 
+  it('returns 404 for a missing static asset instead of SPA HTML', async () => {
+    const backend = await startMockBackend((_req, res) => res.end('nope'));
+    stopBackend = backend.close;
+    handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
+    const r = await fetch(`${handle.localUrl}/assets/missing.js`);
+    expect(r.status).toBe(404);
+    expect(await r.text()).not.toContain('<title>root</title>');
+  });
+
   it('/api/* reverse-proxies to backend', async () => {
     const backend = await startMockBackend((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
