@@ -158,6 +158,32 @@ describe('CentaurAI Core HTTP contract adapter', () => {
     expect(result.model_info?.available_models).toEqual([]);
   });
 
+  it('omits masked provider API keys from partial updates', async () => {
+    mocks.httpRequest.mockResolvedValue({});
+    const { mode } = await import('@/common/adapter/ipcBridge');
+
+    await mode.updateProvider.invoke({
+      id: 'ollama-local',
+      api_key: 'masked:v1:********',
+      model_enabled: { 'qwen2.5:latest': false },
+    });
+
+    expect(mocks.httpRequest).toHaveBeenCalledWith('PUT', '/api/providers/ollama-local', {
+      model_enabled: { 'qwen2.5:latest': false },
+    });
+  });
+
+  it('keeps a new plaintext provider API key in updates', async () => {
+    mocks.httpRequest.mockResolvedValue({});
+    const { mode } = await import('@/common/adapter/ipcBridge');
+
+    await mode.updateProvider.invoke({ id: 'provider-1', api_key: 'new-plaintext-key' });
+
+    expect(mocks.httpRequest).toHaveBeenCalledWith('PUT', '/api/providers/provider-1', {
+      api_key: 'new-plaintext-key',
+    });
+  });
+
   it('derives auto-injected skills from the unified skill catalog', async () => {
     mocks.httpRequest.mockResolvedValue([
       { name: 'auto', description: 'Auto', location: '/auto', is_auto_inject: true },

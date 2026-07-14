@@ -1060,6 +1060,14 @@ export const mode = {
     (p) => `/api/providers/${p.id}`,
     (p) => {
       const { id: _id, ...body } = p;
+      // Provider reads intentionally return a masked placeholder instead of
+      // the stored secret. Partial updates (for example toggling a model) may
+      // spread that response object back into this adapter. Never send the
+      // placeholder as a replacement API key; omitting it preserves the
+      // existing secret while still allowing a new plaintext key through.
+      if (typeof body.api_key === 'string' && /^masked:v\d+:/.test(body.api_key)) {
+        delete body.api_key;
+      }
       return body;
     }
   ),
