@@ -26,7 +26,12 @@ interface LoginParams {
 }
 
 type LoginErrorCode =
-  'invalidCredentials' | 'tooManyAttempts' | 'serverError' | 'networkError' | 'csrfError' | 'unknown';
+  | 'invalidCredentials'
+  | 'tooManyAttempts'
+  | 'serverError'
+  | 'networkError'
+  | 'csrfError'
+  | 'unknown';
 
 interface LoginResult {
   success: boolean;

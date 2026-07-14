@@ -38,10 +38,7 @@
         "zh-TW": "圖像模型 API Key"
       },
       "providerCapability": "image-generation",
-      "sources": [
-        "byok",
-        "platform"
-      ],
+      "sources": ["byok", "platform"],
       "inject": {
         "via": "header",
         "name": "Authorization",
@@ -77,9 +74,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "prompt"
-          ]
+          "required": ["prompt"]
         },
         "requiresAppOpen": false,
         "timeoutMs": 120000

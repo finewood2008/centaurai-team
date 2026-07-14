@@ -3,11 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const {
-  findBinaryInDir,
-  parseChecksumFile,
-  prepareCentauraiCore,
-} = require('./prepare-centaurai-core.js');
+const { findBinaryInDir, parseChecksumFile, prepareCentauraiCore } = require('./prepare-centaurai-core.js');
 
 const tempRoots = [];
 
@@ -134,7 +130,11 @@ describe('prepareCentauraiCore', () => {
       version: 'v0.1.47',
       deps: fixtureDeps({ sourceBinaryName: 'aioncore' }),
     });
-    expect(result.manifest).toMatchObject({ sourceBinaryName: 'aioncore', binaryName: 'centaurai-core', fallbackUsed: true });
+    expect(result.manifest).toMatchObject({
+      sourceBinaryName: 'aioncore',
+      binaryName: 'centaurai-core',
+      fallbackUsed: true,
+    });
     expect(fs.existsSync(path.join(result.dir, 'centaurai-core'))).toBe(true);
   });
 

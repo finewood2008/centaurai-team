@@ -21,9 +21,9 @@ describe('native bridge IPC sender trust', () => {
 
     const destroyedFrame = {};
     const destroyed = { mainFrame: destroyedFrame, isDestroyed: vi.fn(() => true) };
-    expect(
-      isTrustedMainFrameIpcSender({ sender: destroyed, senderFrame: destroyedFrame }, new Set([destroyed]))
-    ).toBe(false);
+    expect(isTrustedMainFrameIpcSender({ sender: destroyed, senderFrame: destroyedFrame }, new Set([destroyed]))).toBe(
+      false
+    );
   });
 
   it('fails closed when sender frame metadata is absent', () => {

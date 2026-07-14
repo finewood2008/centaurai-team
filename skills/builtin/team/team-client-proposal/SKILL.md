@@ -1,6 +1,6 @@
 ---
 name: 客户方案
-description: "Use when creating client-facing proposals, solution briefs, or quotations for AI products and services. Generates structured proposals with problem analysis, solution design, pricing, timeline, and case studies. Trigger on: proposal, 方案, 提案, 报价, solution brief, 客户方案, project proposal, RFP response."
+description: 'Use when creating client-facing proposals, solution briefs, or quotations for AI products and services. Generates structured proposals with problem analysis, solution design, pricing, timeline, and case studies. Trigger on: proposal, 方案, 提案, 报价, solution brief, 客户方案, project proposal, RFP response.'
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -17,6 +17,7 @@ Create professional AI solution proposals and quotations for CentaurAI clients.
 ## Overview
 
 Structured proposal generation for AI product sales scenarios:
+
 - AI workstation deployment
 - AI model customization (LoRA)
 - Technical consulting
@@ -50,12 +51,15 @@ The proposal follows a 6-section structure:
 ## 1. 项目背景与需求分析
 
 ### 1.1 客户现状
+
 <客户当前AI能力、痛点、业务场景>
 
 ### 1.2 核心需求
+
 1. **需求:** <描述>
 
 ### 1.3 预期目标
+
 - 目标: <量化指标>
 
 ---
@@ -63,22 +67,24 @@ The proposal follows a 6-section structure:
 ## 2. 解决方案
 
 ### 2.1 方案概述
+
 <一句话描述方案核心思路>
 
 ### 2.2 技术架构
-
 ```
+
 ┌─────────────────────────────────────────┐
-│              应用层                      │
-│  CentaurAI 超级工作台 (Web/Desktop)      │
+│ 应用层 │
+│ CentaurAI 超级工作台 (Web/Desktop) │
 ├─────────────────────────────────────────┤
-│              AI引擎层                    │
-│  SDXL图像 │ LLM对话 │ RAG检索 │ STT语音  │
+│ AI引擎层 │
+│ SDXL图像 │ LLM对话 │ RAG检索 │ STT语音 │
 ├─────────────────────────────────────────┤
-│              算力层                      │
-│  GPU: RTX 5070 12GB × N台               │
-│  模型: 本地推理 + 云端API混合            │
+│ 算力层 │
+│ GPU: RTX 5070 12GB × N台 │
+│ 模型: 本地推理 + 云端API混合 │
 └─────────────────────────────────────────┘
+
 ```
 
 ### 2.3 功能清单
@@ -175,16 +181,17 @@ Lightweight, 1-page pricing for known products:
 ```markdown
 # CentaurAI 超级工作台 — 报价单
 
-| 配置 | 规格 | 单价 |
-|------|------|------|
-| 标准版 | 1台工作站 + 团队版软件 | ¥XX,XXX |
+| 配置   | 规格                      | 单价    |
+| ------ | ------------------------- | ------- |
+| 标准版 | 1台工作站 + 团队版软件    | ¥XX,XXX |
 | 增强版 | 2台工作站(双GPU) + 团队版 | ¥XX,XXX |
-| 旗舰版 | 3台+ 定制化部署 | 面议 |
+| 旗舰版 | 3台+ 定制化部署           | 面议    |
 ```
 
 ### Type 2: Technical POC (技术验证方案)
 
 For prospects testing before buying:
+
 - Scope: 1-2 core features, 1 week
 - Hardware: loaner workstation or remote demo
 - Deliverable: POC report with metrics
@@ -192,6 +199,7 @@ For prospects testing before buying:
 ### Type 3: RFP Response (投标响应)
 
 For formal procurement:
+
 - Follow RFP structure requirements
 - Include company qualifications (营业执照, 软著)
 - Formal pricing with validity period
@@ -200,6 +208,7 @@ For formal procurement:
 ## Customization Points
 
 Fill from context or ask:
+
 1. **Client name + industry** — tailors language and case studies
 2. **Team size** — determines hardware count and pricing
 3. **Primary use case** — image/chat/knowledge base focus

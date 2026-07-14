@@ -1,6 +1,6 @@
 ---
 name: 会议纪要
-description: "Use when recording, structuring, or extracting action items from team meetings. Creates standardized meeting minutes with decisions, action items with owners and deadlines, and follow-up tracking. Trigger on: meeting notes, 会议纪要, meeting minutes, 开会记录, standup notes, decision log, 会议记录."
+description: 'Use when recording, structuring, or extracting action items from team meetings. Creates standardized meeting minutes with decisions, action items with owners and deadlines, and follow-up tracking. Trigger on: meeting notes, 会议纪要, meeting minutes, 开会记录, standup notes, decision log, 会议记录.'
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -17,6 +17,7 @@ Record, structure, and track team meetings with actionable output.
 ## Overview
 
 Standardized markdown meeting minutes format with:
+
 - Decisions logged with rationale
 - Action items with owner + deadline
 - Follow-up tracking across meetings
@@ -67,21 +68,21 @@ All minutes stored at `~/团队/会议/YYYY-MM-DD-<topic>.md`.
 
 ## 📋 决议
 
-| # | 决议 | 理由 | 提出人 |
-|---|------|------|--------|
-| R1 | v1.5优先做权限系统, 工作流编排推迟到v1.6 | 客户Demo急需权限功能 | 李四 |
-| R2 | 统一登录采用OIDC协议, 先支持企业微信 | 客户多为企业微信用户 | 王五 |
-| R3 | 每周五下午4点技术分享, 轮流主讲 | 团队知识沉淀需要 | 张三 |
+| #   | 决议                                     | 理由                 | 提出人 |
+| --- | ---------------------------------------- | -------------------- | ------ |
+| R1  | v1.5优先做权限系统, 工作流编排推迟到v1.6 | 客户Demo急需权限功能 | 李四   |
+| R2  | 统一登录采用OIDC协议, 先支持企业微信     | 客户多为企业微信用户 | 王五   |
+| R3  | 每周五下午4点技术分享, 轮流主讲          | 团队知识沉淀需要     | 张三   |
 
 ## ✅ 待办事项
 
-| # | 事项 | 负责人 | 截止 | 状态 |
-|---|------|--------|------|------|
-| A1 | ComfyUI显存优化到7GB | 张三 | 7/16 | ⏳ |
-| A2 | 权限系统开发 | 李四 | 7/20 | ⏳ |
-| A3 | SSO方案调研报告 | 王五 | 7/14 | ⏳ |
-| A4 | 准备7/15客户Demo环境 | 张三 | 7/14 | ⏳ |
-| A5 | 发会议纪要给全员 | 张三 | 7/12 | ⏳ |
+| #   | 事项                 | 负责人 | 截止 | 状态 |
+| --- | -------------------- | ------ | ---- | ---- |
+| A1  | ComfyUI显存优化到7GB | 张三   | 7/16 | ⏳   |
+| A2  | 权限系统开发         | 李四   | 7/20 | ⏳   |
+| A3  | SSO方案调研报告      | 王五   | 7/14 | ⏳   |
+| A4  | 准备7/15客户Demo环境 | 张三   | 7/14 | ⏳   |
+| A5  | 发会议纪要给全员     | 张三   | 7/12 | ⏳   |
 
 ## 📎 附件
 
@@ -136,6 +137,7 @@ grep -h "张三" ~/团队/会议/*.md | grep "A[0-9].*⏳"
 ### Link to task board
 
 For significant action items that become sprint tasks, add a reference:
+
 ```markdown
 **待办:** 权限系统开发 → 看板 [T003]
 ```
@@ -143,6 +145,7 @@ For significant action items that become sprint tasks, add a reference:
 ### Pre-meeting prep
 
 Before the next meeting:
+
 1. Open the previous meeting's minutes
 2. Check which action items are still ⏳
 3. Mark completed ones as ✅

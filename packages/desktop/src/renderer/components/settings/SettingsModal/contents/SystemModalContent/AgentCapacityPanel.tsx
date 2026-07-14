@@ -39,7 +39,11 @@ const asNumber = (value: number | string | null | undefined, fallback: number) =
 /** Administrator-only controls for the persistent agent scheduler. */
 const AgentCapacityPanel: React.FC = () => {
   const { data: policy, error: policyError, mutate: refreshPolicy } = useSWR('agent-runtime-policy', getPolicy);
-  const { data: status, error: statusError, mutate: refreshStatus } = useSWR('agent-runtime-status', getStatus, {
+  const {
+    data: status,
+    error: statusError,
+    mutate: refreshStatus,
+  } = useSWR('agent-runtime-status', getStatus, {
     refreshInterval: 5000,
   });
   const [draft, setDraft] = useState<RuntimePolicy | null>(null);
@@ -132,13 +136,21 @@ const AgentCapacityPanel: React.FC = () => {
       {loadError && !forbidden ? (
         <Alert type='error' content='无法读取容量策略。请确认 Core 已升级到包含多用户容量控制的版本。' />
       ) : !draft ? (
-        <div className='py-16px flex justify-center'><Spin /></div>
+        <div className='py-16px flex justify-center'>
+          <Spin />
+        </div>
       ) : (
         <>
           <div className='grid grid-cols-2 md:grid-cols-4 gap-8px'>
-            <StatusCard label='运行中' value={`${status?.active_count ?? '--'} / ${status?.effective_active_limit ?? '--'}`} />
+            <StatusCard
+              label='运行中'
+              value={`${status?.active_count ?? '--'} / ${status?.effective_active_limit ?? '--'}`}
+            />
             <StatusCard label='等待队列' value={status?.queued_count ?? '--'} />
-            <StatusCard label='驻留进程' value={`${status?.resident_task_count ?? '--'} / ${draft.resident_task_limit}`} />
+            <StatusCard
+              label='驻留进程'
+              value={`${status?.resident_task_count ?? '--'} / ${draft.resident_task_limit}`}
+            />
             <StatusCard
               label='内存状态'
               value={`${status?.memory_used_percent?.toFixed(1) ?? '--'}%`}
@@ -148,40 +160,83 @@ const AgentCapacityPanel: React.FC = () => {
 
           <div className='grid grid-cols-1 md:grid-cols-2 gap-x-32px divide-y md:divide-y-0 divide-border-2'>
             <Control label='调度模式' hint='关闭只用于紧急回退；影子模式仅记录；强制模式执行限额。'>
-              <Radio.Group size='small' type='button' value={draft.mode} onChange={(value) => update('mode', value as SchedulerMode)}>
-                <Radio value='off'>关闭</Radio><Radio value='shadow'>影子</Radio><Radio value='enforce'>强制</Radio>
+              <Radio.Group
+                size='small'
+                type='button'
+                value={draft.mode}
+                onChange={(value) => update('mode', value as SchedulerMode)}
+              >
+                <Radio value='off'>关闭</Radio>
+                <Radio value='shadow'>影子</Radio>
+                <Radio value='enforce'>强制</Radio>
               </Radio.Group>
             </Control>
-            <Control label='全局并发 turn' hint='所有用户合计可同时运行的智能体 turn 数。'>{numberControl('global_active_limit', 1, 64)}</Control>
-            <Control label='单用户运行 turn' hint='一个用户同时运行的最大 turn 数。'>{numberControl('per_user_active_limit', 1, 8)}</Control>
-            <Control label='单用户排队 turn' hint='一个用户等待执行的最大 turn 数。'>{numberControl('per_user_queue_limit', 1, 8)}</Control>
-            <Control label='全局队列上限' hint='超过此数量的新 turn 将被拒绝。'>{numberControl('global_queue_limit', 1, 1000)}</Control>
-            <Control label='队列超时（分钟）' hint='等待超过该时间会取消，原消息保留。'>{durationControl('queue_timeout_ms')}</Control>
-            <Control label='确认占槽超时（分钟）' hint='等待人工确认的 turn 最多占用一个执行槽。'>{durationControl('confirmation_timeout_ms')}</Control>
-            <Control label='驻留智能体进程' hint='达到上限时回收最久未使用的空闲 task。'>{numberControl('resident_task_limit', 1, 64)}</Control>
-            <Control label='空闲回收（分钟）' hint='空闲达到此时间后回收驻留 agent task。'>{durationControl('resident_idle_timeout_ms')}</Control>
-            <Control label='内存降并发阈值' hint='到达后新任务并发自动降低到最多 2。'>{numberControl('memory_constrained_percent', 50, 97, 0.5)}</Control>
-            <Control label='内存暂停阈值' hint='到达后暂停派发新任务，已有任务不中断。'>{numberControl('memory_pause_percent', 51, 98, 0.5)}</Control>
-            <Control label='内存拒绝阈值' hint='到达后拒绝新任务；取消和管理接口仍可用。'>{numberControl('memory_reject_percent', 52, 100, 0.5)}</Control>
+            <Control label='全局并发 turn' hint='所有用户合计可同时运行的智能体 turn 数。'>
+              {numberControl('global_active_limit', 1, 64)}
+            </Control>
+            <Control label='单用户运行 turn' hint='一个用户同时运行的最大 turn 数。'>
+              {numberControl('per_user_active_limit', 1, 8)}
+            </Control>
+            <Control label='单用户排队 turn' hint='一个用户等待执行的最大 turn 数。'>
+              {numberControl('per_user_queue_limit', 1, 8)}
+            </Control>
+            <Control label='全局队列上限' hint='超过此数量的新 turn 将被拒绝。'>
+              {numberControl('global_queue_limit', 1, 1000)}
+            </Control>
+            <Control label='队列超时（分钟）' hint='等待超过该时间会取消，原消息保留。'>
+              {durationControl('queue_timeout_ms')}
+            </Control>
+            <Control label='确认占槽超时（分钟）' hint='等待人工确认的 turn 最多占用一个执行槽。'>
+              {durationControl('confirmation_timeout_ms')}
+            </Control>
+            <Control label='驻留智能体进程' hint='达到上限时回收最久未使用的空闲 task。'>
+              {numberControl('resident_task_limit', 1, 64)}
+            </Control>
+            <Control label='空闲回收（分钟）' hint='空闲达到此时间后回收驻留 agent task。'>
+              {durationControl('resident_idle_timeout_ms')}
+            </Control>
+            <Control label='内存降并发阈值' hint='到达后新任务并发自动降低到最多 2。'>
+              {numberControl('memory_constrained_percent', 50, 97, 0.5)}
+            </Control>
+            <Control label='内存暂停阈值' hint='到达后暂停派发新任务，已有任务不中断。'>
+              {numberControl('memory_pause_percent', 51, 98, 0.5)}
+            </Control>
+            <Control label='内存拒绝阈值' hint='到达后拒绝新任务；取消和管理接口仍可用。'>
+              {numberControl('memory_reject_percent', 52, 100, 0.5)}
+            </Control>
           </div>
           {saveError && <Alert type='error' content={saveError} />}
-          <div className='flex justify-end'><Button type='primary' loading={saving} onClick={() => void save()}>保存容量策略</Button></div>
+          <div className='flex justify-end'>
+            <Button type='primary' loading={saving} onClick={() => void save()}>
+              保存容量策略
+            </Button>
+          </div>
         </>
       )}
     </section>
   );
 };
 
-const StatusCard: React.FC<{ label: string; value: React.ReactNode; suffix?: React.ReactNode }> = ({ label, value, suffix }) => (
+const StatusCard: React.FC<{ label: string; value: React.ReactNode; suffix?: React.ReactNode }> = ({
+  label,
+  value,
+  suffix,
+}) => (
   <div className='bg-[var(--fill-1)] rd-8px px-12px py-10px'>
     <div className='text-12px text-t-tertiary'>{label}</div>
-    <div className='flex items-center gap-6px mt-4px text-16px text-1 font-600'>{value}{suffix}</div>
+    <div className='flex items-center gap-6px mt-4px text-16px text-1 font-600'>
+      {value}
+      {suffix}
+    </div>
   </div>
 );
 
 const Control: React.FC<{ label: string; hint: string; children: React.ReactNode }> = ({ label, hint, children }) => (
   <div className='flex items-center justify-between gap-16px py-12px'>
-    <div><div className='text-14px text-2'>{label}</div><div className='text-12px text-t-tertiary mt-3px'>{hint}</div></div>
+    <div>
+      <div className='text-14px text-2'>{label}</div>
+      <div className='text-12px text-t-tertiary mt-3px'>{hint}</div>
+    </div>
     <div className='flex-shrink-0'>{children}</div>
   </div>
 );

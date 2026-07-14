@@ -21,7 +21,9 @@ class CoreBinaryResolveError extends Error {
 }
 
 function trimText(value) {
-  return String(value ?? '').trim().slice(0, MAX_LOOKUP_TEXT_LENGTH);
+  return String(value ?? '')
+    .trim()
+    .slice(0, MAX_LOOKUP_TEXT_LENGTH);
 }
 
 function listDirEntries(dirPath, readdirSync) {

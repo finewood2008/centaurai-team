@@ -32,10 +32,7 @@ test.describe('Electron privileged renderer boundaries', () => {
         return guest;
       };
 
-      const workbench = await mountGuest(
-        'centaur-image-workbench://app/index.html',
-        'persist:centaur-image-workbench'
-      );
+      const workbench = await mountGuest('centaur-image-workbench://app/index.html', 'persist:centaur-image-workbench');
       const exactProbe = await workbench.executeJavaScript(`
         fetch('centaur-image-workbench://app/__backend/api/settings/client', {
           method: 'PUT',

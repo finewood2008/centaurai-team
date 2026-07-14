@@ -1,6 +1,6 @@
 ---
 name: 中英互译
-description: "Use when translating content between Chinese and English for business, technical, or marketing purposes. Handles docs, emails, UI strings, marketing copy, and technical documentation with domain-aware terminology. Trigger on: 翻译, translate, 中译英, 英译中, i18n, localization, English version, 中文版."
+description: 'Use when translating content between Chinese and English for business, technical, or marketing purposes. Handles docs, emails, UI strings, marketing copy, and technical documentation with domain-aware terminology. Trigger on: 翻译, translate, 中译英, 英译中, i18n, localization, English version, 中文版.'
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -17,6 +17,7 @@ Translate content between Chinese and English for business and technical context
 ## Overview
 
 Domain-aware translation for AI/tech company workflows:
+
 - Technical documentation (API docs, README, architecture docs)
 - Marketing copy (官网, 产品介绍, 宣传文案)
 - Business communication (邮件, 提案, 合同摘要)
@@ -40,6 +41,7 @@ The skill provides conventions, terminology, and quality checks.
 ### Mode 1: Full Translation
 
 Produce a complete translation. Preserve formatting (markdown, code blocks, tables).
+
 ```bash
 # Input: Chinese README
 # Output: English README with same structure
@@ -48,6 +50,7 @@ Produce a complete translation. Preserve formatting (markdown, code blocks, tabl
 ### Mode 2: Bilingual Side-by-Side
 
 Useful for proposals, contracts, and documents where both languages are needed:
+
 ```markdown
 ## 产品概述 / Product Overview
 
@@ -63,6 +66,7 @@ CentaurAI Super Workstation is an all-in-one AI workstation...
 ### Mode 3: i18n String Translation
 
 For CentaurAI locale JSON files. Preserve keys, translate values only:
+
 ```json
 // zh-CN/settings.json
 { "users": { "title": "用户管理", "createUser": "新建用户" } }
@@ -74,6 +78,7 @@ For CentaurAI locale JSON files. Preserve keys, translate values only:
 ### Mode 4: Review Only
 
 Review an existing translation for:
+
 - Accuracy (no meaning loss)
 - Terminology consistency
 - Natural phrasing (not machine-translated sounding)
@@ -83,29 +88,30 @@ Review an existing translation for:
 
 Consistent terminology across all CentaurAI translations:
 
-| Chinese | English | Context |
-|---------|---------|---------|
-| 半人马AI | CentaurAI | Brand name, never translate |
-| 超级工作台 | Super Workstation | Product name |
-| 超级参谋 | Super Advisor | Product name |
-| 向量数据库 | Vector Database | Technical |
-| 知识库 | Knowledge Base | Product feature |
-| 推理 | Inference | Technical (not "reasoning" for ML context) |
-| 微调 | Fine-tuning | Technical |
-| 工作流 | Workflow | Product feature |
-| 插件 | Plugin | General |
-| 模型提供商 | Model Provider | Product term |
-| 令牌 | Token | Product (API context) |
-| 算力 | Compute / Computing Power | Business |
-| 私有化部署 | On-premise Deployment | Business |
-| 开箱即用 | Out-of-the-box | Marketing |
-| 一站式 | All-in-one | Marketing |
+| Chinese    | English                   | Context                                    |
+| ---------- | ------------------------- | ------------------------------------------ |
+| 半人马AI   | CentaurAI                 | Brand name, never translate                |
+| 超级工作台 | Super Workstation         | Product name                               |
+| 超级参谋   | Super Advisor             | Product name                               |
+| 向量数据库 | Vector Database           | Technical                                  |
+| 知识库     | Knowledge Base            | Product feature                            |
+| 推理       | Inference                 | Technical (not "reasoning" for ML context) |
+| 微调       | Fine-tuning               | Technical                                  |
+| 工作流     | Workflow                  | Product feature                            |
+| 插件       | Plugin                    | General                                    |
+| 模型提供商 | Model Provider            | Product term                               |
+| 令牌       | Token                     | Product (API context)                      |
+| 算力       | Compute / Computing Power | Business                                   |
+| 私有化部署 | On-premise Deployment     | Business                                   |
+| 开箱即用   | Out-of-the-box            | Marketing                                  |
+| 一站式     | All-in-one                | Marketing                                  |
 
 ## AI Industry Conventions
 
 ### English technical terms (don't translate)
 
 Keep these in English even in Chinese documents:
+
 - API, SDK, CLI, GUI, UI/UX
 - GPU, CPU, RAM, SSD
 - LoRA, SDXL, GGUF, RAG
@@ -115,16 +121,16 @@ Keep these in English even in Chinese documents:
 
 ### Chinese technical conventions
 
-| English | Good Chinese | Bad Chinese |
-|---------|-------------|-------------|
-| inference | 推理 | 推断 |
-| prompt | 提示词 | 提示 |
-| embedding | 向量嵌入 | 嵌入 |
-| hallucination | 幻觉 | 幻想 |
-| agent | 智能体/Agent | 代理 |
-| token | Token/令牌 | 标记 |
-| fine-tuning | 微调 | 精调 |
-| deployment | 部署 | 展开 |
+| English       | Good Chinese | Bad Chinese |
+| ------------- | ------------ | ----------- |
+| inference     | 推理         | 推断        |
+| prompt        | 提示词       | 提示        |
+| embedding     | 向量嵌入     | 嵌入        |
+| hallucination | 幻觉         | 幻想        |
+| agent         | 智能体/Agent | 代理        |
+| token         | Token/令牌   | 标记        |
+| fine-tuning   | 微调         | 精调        |
+| deployment    | 部署         | 展开        |
 
 ### Marketing tone
 

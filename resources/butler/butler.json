@@ -1,9 +1,6 @@
 {
   "version": 1,
-  "skills": [
-    "aionui-config",
-    "aionui-troubleshooting"
-  ],
+  "skills": ["aionui-config", "aionui-troubleshooting"],
   "assistant": {
     "id": "centaurai-butler",
     "name": "CentaurAI 管家",
@@ -21,10 +18,7 @@
     "avatar": "🤵",
     "preset_agent_type": "aionrs",
     "enabled_skills": [],
-    "custom_skill_names": [
-      "aionui-config",
-      "aionui-troubleshooting"
-    ],
+    "custom_skill_names": ["aionui-config", "aionui-troubleshooting"],
     "disabled_builtin_skills": [],
     "prompts": [
       "添加一个新的 LLM 模型和 API Key,并设为默认模型",

@@ -191,7 +191,9 @@ export default defineConfig(({ mode }) => {
         'process.env.SENTRY_DSN': JSON.stringify(process.env.SENTRY_DSN ?? ''),
         // Build-time product edition (full | decision | team), baked per installer.
         // See common/config/constants.ts. Unset ⇒ 'full' (the unsplit app).
-        __EDITION__: JSON.stringify(buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'),
+        __EDITION__: JSON.stringify(
+          buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'
+        ),
       },
     },
 
@@ -370,7 +372,9 @@ export default defineConfig(({ mode }) => {
         // Build-time product edition (full | decision | team), baked per installer.
         // Both define blocks read the SAME AIONUI_EDITION env → single build-time
         // source of truth across main + renderer. Unset ⇒ 'full' (the unsplit app).
-        __EDITION__: JSON.stringify(buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'),
+        __EDITION__: JSON.stringify(
+          buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'
+        ),
         global: 'globalThis',
       },
       optimizeDeps: {

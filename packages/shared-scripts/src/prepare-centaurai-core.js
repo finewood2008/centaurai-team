@@ -288,7 +288,8 @@ function prepareCentauraiCore(options) {
     ensureExecutableMode(path.join(targetDir, canonicalBinaryName), platform);
     console.log(`  Prepared resources/${CORE_ARTIFACT_CONFIG.bundleDirectory}/${runtimeKey}/${canonicalBinaryName}`);
     console.log(`  Provenance ${CORE_ARTIFACT_CONFIG.repository}@${tag} commit=${commit} sha256=${artifactSha256}`);
-    if (fallbackUsed) console.warn(`  Compatibility binary name ${found.name} was normalized to ${canonicalBinaryName}`);
+    if (fallbackUsed)
+      console.warn(`  Compatibility binary name ${found.name} was normalized to ${canonicalBinaryName}`);
     return { prepared: true, dir: targetDir, sourceType: 'github-release', manifest };
   } catch (error) {
     removeDirectorySafe(targetDir);

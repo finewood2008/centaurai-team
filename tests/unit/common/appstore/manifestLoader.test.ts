@@ -14,7 +14,11 @@ const validRaw = (): Record<string, unknown> => ({
   id: 'centaur-image-workbench',
   version: '1.0.0',
   name: { 'zh-CN': '半人马 AI 图形工作台', 'zh-TW': '半人馬 AI 圖形工作台', 'en-US': 'Centaur Image Studio' },
-  description: { 'zh-CN': '提示词出图与图像编辑', 'zh-TW': '提示詞出圖與圖像編輯', 'en-US': 'Prompt-to-image and editing' },
+  description: {
+    'zh-CN': '提示词出图与图像编辑',
+    'zh-TW': '提示詞出圖與圖像編輯',
+    'en-US': 'Prompt-to-image and editing',
+  },
   icon: 'icon.svg',
   category: 'media',
   trust: 'first-party',

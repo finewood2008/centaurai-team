@@ -1,6 +1,6 @@
 ---
 name: 新人入职
-description: "Use when onboarding a new team member to the company, project, or development environment. Covers environment setup, account provisioning, access permissions, first-day tasks, and knowledge base orientation. Trigger on: onboarding, 入职, new employee, 新人, setup workstation, 环境配置, first day."
+description: 'Use when onboarding a new team member to the company, project, or development environment. Covers environment setup, account provisioning, access permissions, first-day tasks, and knowledge base orientation. Trigger on: onboarding, 入职, new employee, 新人, setup workstation, 环境配置, first day.'
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -17,6 +17,7 @@ Structured onboarding for new CentaurAI team members — from environment setup 
 ## Overview
 
 Standardized onboarding checklist covering:
+
 - Account provisioning (email, GitHub, Tailscale, internal tools)
 - Development environment setup (Linux, CentaurAI stack)
 - Access permissions (servers, repos, APIs)
@@ -155,13 +156,13 @@ sudo apt install -y sqlite3 sqlitebrowser
 
 Every new hire gets a buddy (mentor) for the first 2 weeks:
 
-| Task | Buddy |
-|------|-------|
-| Day 1 walkthrough | Show around the codebase |
-| First PR review | Approve + explain feedback |
-| First standup | Help prepare status update |
-| End of week 1 | 15-min check-in |
-| End of week 2 | Handoff — new hire should be self-sufficient |
+| Task              | Buddy                                        |
+| ----------------- | -------------------------------------------- |
+| Day 1 walkthrough | Show around the codebase                     |
+| First PR review   | Approve + explain feedback                   |
+| First standup     | Help prepare status update                   |
+| End of week 1     | 15-min check-in                              |
+| End of week 2     | Handoff — new hire should be self-sufficient |
 
 ## Templates
 

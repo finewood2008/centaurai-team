@@ -83,6 +83,7 @@ Store at `~/团队/发版/CHANGELOG.md` (project root) or per-product:
 ---
 
 ## [1.4.1] — 2026-07-10
+
 ...
 ```
 
@@ -104,17 +105,17 @@ git log $LAST_TAG..HEAD --format="%s" --no-merges | \
 
 ### Conventional commit mapping
 
-| Commit prefix | Changelog section |
-|--------------|-------------------|
-| `feat:` | 🚀 新增功能 |
-| `fix:` | 🐛 修复 |
-| `perf:` | 🔧 改进 |
-| `refactor:` | 🔧 改进 |
-| `style:` | (omit — no user impact) |
-| `docs:` | 📝 文档 |
-| `test:` | (omit — internal) |
-| `chore:` | (omit — internal) |
-| `BREAKING CHANGE:` | ⚠️ 破坏性变更 |
+| Commit prefix      | Changelog section       |
+| ------------------ | ----------------------- |
+| `feat:`            | 🚀 新增功能             |
+| `fix:`             | 🐛 修复                 |
+| `perf:`            | 🔧 改进                 |
+| `refactor:`        | 🔧 改进                 |
+| `style:`           | (omit — no user impact) |
+| `docs:`            | 📝 文档                 |
+| `test:`            | (omit — internal)       |
+| `chore:`           | (omit — internal)       |
+| `BREAKING CHANGE:` | ⚠️ 破坏性变更           |
 
 ## Release Workflow
 
@@ -176,13 +177,13 @@ For customer-facing channels (官网, 钉钉群, 邮件):
 
 ## Product-Facing vs Internal
 
-| Aspect | Product Changelog | Internal Release Notes |
-|--------|------------------|----------------------|
-| Audience | 客户/用户 | 开发团队 |
-| Tone | 简洁, 突出价值 | 技术细节, 可操作 |
-| Content | 新功能 + 改进 | + 部署步骤 + 回滚方案 |
-| Language | Chinese (客户群) | Chinese (团队) |
-| Length | 5-10 items, scan-friendly | Full diff, all changes |
+| Aspect   | Product Changelog         | Internal Release Notes |
+| -------- | ------------------------- | ---------------------- |
+| Audience | 客户/用户                 | 开发团队               |
+| Tone     | 简洁, 突出价值            | 技术细节, 可操作       |
+| Content  | 新功能 + 改进             | + 部署步骤 + 回滚方案  |
+| Language | Chinese (客户群)          | Chinese (团队)         |
+| Length   | 5-10 items, scan-friendly | Full diff, all changes |
 
 ## Common Pitfalls
 

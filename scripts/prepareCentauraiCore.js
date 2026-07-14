@@ -5,7 +5,11 @@ const { resolveCentauraiCoreVersion } = require('./resolveCentauraiCoreVersion.j
 
 const projectRoot = path.resolve(__dirname, '..');
 const platform = process.platform;
-const arch = process.env.CENTAURAI_CORE_ARCH || process.env.AIONUI_BACKEND_ARCH || process.env.npm_config_target_arch || process.arch;
+const arch =
+  process.env.CENTAURAI_CORE_ARCH ||
+  process.env.AIONUI_BACKEND_ARCH ||
+  process.env.npm_config_target_arch ||
+  process.arch;
 const version = resolveCentauraiCoreVersion(projectRoot);
 
 function prepare() {

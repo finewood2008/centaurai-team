@@ -7,7 +7,10 @@ import useSWR from 'swr';
 import ChatConversation from './components/ChatConversation';
 import { usePreviewContext } from '@/renderer/pages/conversation/Preview';
 import { useAutoTitle } from '@/renderer/hooks/chat/useAutoTitle';
-import { getConversationOrNull, mergeConversationWorkspace } from '@/renderer/pages/conversation/utils/conversationCache';
+import {
+  getConversationOrNull,
+  mergeConversationWorkspace,
+} from '@/renderer/pages/conversation/utils/conversationCache';
 import {
   registerGeneratedArtifactsFromPayload,
   registerGeneratedArtifactsFromToolPayload,

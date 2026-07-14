@@ -42,15 +42,7 @@ function requireManagedNode(baseDir, runtimeKey, platform, checked, missing) {
 
 function requireManagedAcpTool(baseDir, runtimeKey, toolId, checked, missing) {
   const toolRoot = path.join(baseDir, 'managed-resources', 'acp', toolId);
-  const manifestPattern = bundledPath(
-    runtimeKey,
-    'managed-resources',
-    'acp',
-    toolId,
-    '*',
-    runtimeKey,
-    'manifest.json'
-  );
+  const manifestPattern = bundledPath(runtimeKey, 'managed-resources', 'acp', toolId, '*', runtimeKey, 'manifest.json');
   checked.push(manifestPattern);
   let valid = false;
   for (const version of readDirectories(toolRoot)) {

@@ -269,9 +269,7 @@ describe('BackendLifecycleManager.start (success path)', () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
 
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async () => healthyCoreResponse());
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => healthyCoreResponse());
 
     const mgr = new BackendLifecycleManager(APP_META_PACKAGED, () => '/abs/path/centaurai-core');
     const startPromise = mgr.start('/db/path', '/log/dir', {
@@ -314,9 +312,7 @@ describe('BackendLifecycleManager.start (success path)', () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
 
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(healthyCoreResponse());
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(healthyCoreResponse());
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
 
     const resolveBackend = vi.fn(() => '/abs/path/centaurai-core');
@@ -897,9 +893,7 @@ describe('BackendLifecycleManager.stop', () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
 
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(healthyCoreResponse());
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(healthyCoreResponse());
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
@@ -928,9 +922,7 @@ describe('BackendLifecycleManager.stop', () => {
     const child = makeFakeChild();
     vi.mocked(spawn).mockReturnValue(child as unknown as ChildProcess);
 
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(healthyCoreResponse());
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(healthyCoreResponse());
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
@@ -962,9 +954,7 @@ describe('BackendLifecycleManager crash restart', () => {
       .mockReturnValueOnce(child2 as unknown as ChildProcess);
     const onReady = vi.fn();
 
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async () => healthyCoreResponse());
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => healthyCoreResponse());
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
     const startPromise = mgr.start('/db', undefined, undefined, { onReady });
@@ -998,9 +988,7 @@ describe('BackendLifecycleManager crash restart', () => {
       .mockReturnValueOnce(child2 as unknown as ChildProcess);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const fetchSpy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(healthyCoreResponse());
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(healthyCoreResponse());
 
     const mgr = new BackendLifecycleManager(APP_META, () => '/x');
     const startPromise = mgr.start('/db');

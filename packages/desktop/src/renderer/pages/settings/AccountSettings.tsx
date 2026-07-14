@@ -923,7 +923,9 @@ const AccountSettings: React.FC = () => {
                 <div className='mb-10px flex flex-wrap items-center justify-between gap-10px'>
                   <div>
                     <div className='text-14px font-600 text-t-primary'>团队共享记忆</div>
-                    <div className='mt-2px text-12px text-t-tertiary'>普通 LAN 用户只读，管理员在用户管理或向量库记忆中心维护。</div>
+                    <div className='mt-2px text-12px text-t-tertiary'>
+                      普通 LAN 用户只读，管理员在用户管理或向量库记忆中心维护。
+                    </div>
                   </div>
                   <Button size='small' icon={<Refresh />} loading={memoryOverviewLoading} onClick={loadMemoryOverview}>
                     {t('common.refresh')}
@@ -945,7 +947,9 @@ const AccountSettings: React.FC = () => {
                     ) : (
                       <div className='mb-10px text-13px text-t-tertiary'>暂无团队共享记忆</div>
                     )}
-                    <div className='mt-10px'>{readonlyContent(selectedSharedMemoryContent, 'settings.account.emptyMemoryFiles')}</div>
+                    <div className='mt-10px'>
+                      {readonlyContent(selectedSharedMemoryContent, 'settings.account.emptyMemoryFiles')}
+                    </div>
                   </div>
                   <div>
                     {sharedJournals.length > 0 ? (
@@ -962,7 +966,9 @@ const AccountSettings: React.FC = () => {
                     ) : (
                       <div className='mb-10px text-13px text-t-tertiary'>暂无团队自动日记</div>
                     )}
-                    <div className='mt-10px'>{readonlyContent(selectedSharedJournalContent, 'settings.account.emptyJournal')}</div>
+                    <div className='mt-10px'>
+                      {readonlyContent(selectedSharedJournalContent, 'settings.account.emptyJournal')}
+                    </div>
                   </div>
                 </div>
               </section>

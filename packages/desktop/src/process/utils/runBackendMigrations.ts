@@ -450,6 +450,9 @@ export async function runBackendMigrations(configFile: ConfigFile): Promise<void
     await syncBuiltinMcpConfig(configFile);
     console.info(`[CentaurAI] Backend migration step completed: syncBuiltinMcpConfig (${Date.now() - syncStart}ms)`);
   } catch (error) {
-    console.error(`[CentaurAI] Backend migration step failed: syncBuiltinMcpConfig (${Date.now() - syncStart}ms)`, error);
+    console.error(
+      `[CentaurAI] Backend migration step failed: syncBuiltinMcpConfig (${Date.now() - syncStart}ms)`,
+      error
+    );
   }
 }

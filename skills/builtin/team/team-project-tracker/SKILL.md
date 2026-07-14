@@ -1,6 +1,6 @@
 ---
 name: 项目任务看板
-description: "Use when managing team projects, tasks, or sprint tracking with a lightweight markdown kanban board. Create, update, assign, and track tasks across team members without external tools. Trigger on: task board, kanban, sprint planning, assign task, task status, project progress."
+description: 'Use when managing team projects, tasks, or sprint tracking with a lightweight markdown kanban board. Create, update, assign, and track tasks across team members without external tools. Trigger on: task board, kanban, sprint planning, assign task, task status, project progress.'
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -98,11 +98,13 @@ Each project board lives at `~/团队/项目/<project-slug>/board.md`:
 ### HTML Comment Metadata
 
 Every task MUST have an HTML comment line right before its `###` heading:
+
 ```
 <!-- TASK: id=TXXX status=<status> priority=<P0|P1|P2|P3> assignee=<name> -->
 ```
 
 This makes the board parseable by `grep`:
+
 ```bash
 # All in-progress tasks
 grep "status=in_progress" ~/团队/项目/*/board.md
@@ -120,12 +122,12 @@ grep -h "priority=P[01]" ~/团队/项目/*/board.md
 
 ### Priority Levels
 
-| Level | Meaning | Example |
-|-------|---------|---------|
-| P0 | 紧急阻塞 | 生产环境宕机、客户交付Deadline今天 |
-| P1 | 本迭代必须 | Sprint承诺、本周Deadline |
-| P2 | 应该做 | 下个迭代、有规避方案 |
-| P3 | 锦上添花 | 有空再做、技术债清理 |
+| Level | Meaning    | Example                            |
+| ----- | ---------- | ---------------------------------- |
+| P0    | 紧急阻塞   | 生产环境宕机、客户交付Deadline今天 |
+| P1    | 本迭代必须 | Sprint承诺、本周Deadline           |
+| P2    | 应该做     | 下个迭代、有规避方案               |
+| P3    | 锦上添花   | 有空再做、技术债清理               |
 
 ### Status Flow
 
@@ -144,6 +146,7 @@ Create the directory and write `board.md` from the template above.
 ### Add a task
 
 Add to the Backlog section:
+
 1. Insert `<!-- TASK: ... -->` comment
 2. Add `### [TXXX] Title` heading
 3. Fill in description, assignee, priority, deadline, tags
@@ -181,6 +184,7 @@ done
 ## Integration with Weekly Report
 
 The `team-weekly-report` skill reads board.md files to auto-populate:
+
 - "本周完成" from tasks with `status=done` and `completed=this_week`
 - "进行中" from tasks with `status=in_progress`
 - Blockers from task body containing "阻塞" or "blocked"

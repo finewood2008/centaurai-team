@@ -83,7 +83,7 @@ function normalizeEdition(value: string | undefined): Edition {
 }
 
 const ENV_EDITION: Edition = normalizeEdition(
-  typeof process !== 'undefined' ? process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION : undefined
+  typeof process !== 'undefined' ? (process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION) : undefined
 );
 
 export const EDITION: Edition = typeof __EDITION__ !== 'undefined' ? normalizeEdition(__EDITION__) : ENV_EDITION;

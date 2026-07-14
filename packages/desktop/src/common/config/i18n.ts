@@ -26,7 +26,12 @@ export function normalizeLanguageCode(language: string): SupportedLanguage {
   }
 
   const lower = normalized.toLowerCase();
-  if (lower.startsWith('zh-hant') || lower.startsWith('zh-tw') || lower.startsWith('zh-hk') || lower.startsWith('zh-mo')) {
+  if (
+    lower.startsWith('zh-hant') ||
+    lower.startsWith('zh-tw') ||
+    lower.startsWith('zh-hk') ||
+    lower.startsWith('zh-mo')
+  ) {
     return 'zh-TW';
   }
   if (lower.startsWith('zh')) return 'zh-CN';

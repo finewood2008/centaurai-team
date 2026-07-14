@@ -52,7 +52,10 @@ describe('resolveCoreBinary', () => {
 
   it('does not silently use legacy bundled or PATH binaries', () => {
     const legacy = '/app/resources/bundled-aioncore/linux-x64/aioncore';
-    const fixture = mockResolver({ existing: [legacy, '/usr/bin/aioncore'], pathResults: { aioncore: '/usr/bin/aioncore' } });
+    const fixture = mockResolver({
+      existing: [legacy, '/usr/bin/aioncore'],
+      pathResults: { aioncore: '/usr/bin/aioncore' },
+    });
     expect(fixture.resolve).toThrow('legacy fallback is disabled');
     expect(fixture.execFileSync).toHaveBeenCalledTimes(1);
   });

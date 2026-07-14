@@ -17,6 +17,7 @@ Structured internal knowledge management for the CentaurAI team.
 ## Overview
 
 A markdown-based knowledge base at `~/团队/知识库/` covering:
+
 - System architecture and design decisions
 - Development standards and conventions
 - On-call runbooks and troubleshooting guides
@@ -86,11 +87,13 @@ When making a significant technical decision, create an ADR:
 ## 考虑的方案
 
 ### 方案A: <名称>
+
 - 优点: ...
 - 缺点: ...
 - 风险: ...
 
 ### 方案B: <名称>
+
 - 优点: ...
 - 缺点: ...
 - 风险: ...
@@ -125,23 +128,27 @@ When making a significant technical decision, create an ADR:
 # 半人马AI 开发规范
 
 ## 语言与框架
+
 - 后端: Rust (aioncore), Python (ML/向量服务)
 - 前端: TypeScript + React + Arco Design
 - 桌面: Electron + Bun
 - 禁止: 新代码用JavaScript(用TS), 新服务用Node.js(用Bun)
 
 ## Git 工作流
+
 - 主分支: main (保护分支, 禁止直接push)
 - 功能分支: feature/<描述> 或 fix/<描述>
 - Commit: 遵循 Conventional Commits
 - PR: 至少1人审核, CI全绿才能合并
 
 ## 代码风格
+
 - Rust: cargo fmt + cargo clippy (0 warnings)
 - TypeScript: oxfmt + ESLint (0 errors)
 - Python: ruff format + ruff check
 
 ## 命名规范
+
 - 文件: kebab-case (user-management.ts)
 - 组件: PascalCase (UserManagement.tsx)
 - 函数: camelCase (getUserById)
@@ -158,64 +165,75 @@ When making a significant technical decision, create an ADR:
 ## CentaurAI 超级工作台
 
 ### Q: 新用户登录后看不到历史对话？
+
 A: 这是AionCore的auth middleware bug — 在local模式下JWT被绕过。
 已修复，确保aioncore版本 >= 0.1.25。
 
 ### Q: ACP Agent显示"未安装"？
+
 A: PATH缺少 `~/.hermes/node/bin`。在启动脚本(centaurai-team.sh)中添加。
 
 ## 向量数据库
 
 ### Q: 检索结果为空？
-A: 1) 确认服务运行: `curl 127.0.0.1:8618/api/health`
-   2) 确认文档已入库: `curl 127.0.0.1:8618/api/stats`
-   3) 检查CORS: Electron需设置 `webSecurity: false`
+
+A: 1) 确认服务运行: `curl 127.0.0.1:8618/api/health` 2) 确认文档已入库: `curl 127.0.0.1:8618/api/stats` 3) 检查CORS: Electron需设置 `webSecurity: false`
 ```
 
 ## On-Call Runbooks
 
 Each runbook follows this structure:
 
-```markdown
+````markdown
 # <场景>: <故障现象>
 
 ## 触发条件
+
 - 告警关键词: ...
 - 监控指标: ...
 
 ## 影响范围
+
 - 受影响的服务/用户: ...
 
 ## 排查步骤
 
 ### Step 1: 确认问题
+
 ```bash
 # 检查命令
 ```
+````
 
 ### Step 2: 定位根因
+
 ```bash
 # 诊断命令
 ```
 
 ### Step 3: 修复
+
 ```bash
 # 修复命令
 ```
 
 ### Step 4: 验证
+
 ```bash
 # 验证命令
 ```
 
 ## 回滚方案 (如果修复失败)
+
 ...
 
 ## 事后跟进
+
 - [ ] 创建issue跟踪根因修复
 - [ ] 更新监控告警规则
 - [ ] 补充自动化测试
-```
+
+````
 
 ## Search and Navigation
 
@@ -230,7 +248,7 @@ grep -r "向量数据库" ~/团队/知识库/ADR/ -l
 
 # List recent updates
 find ~/团队/知识库/ -name "*.md" -mtime -7
-```
+````
 
 ### Knowledge base health check
 

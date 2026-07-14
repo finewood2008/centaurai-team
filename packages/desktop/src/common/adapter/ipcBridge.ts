@@ -2411,14 +2411,7 @@ function supportsNewConversation(row: AgentManagementApiRow): boolean {
 }
 
 function toAgentMetadata(row: AgentManagementApiRow): AgentMetadata {
-  const {
-    config_options,
-    available_modes,
-    available_models,
-    available_commands,
-    status: _status,
-    ...metadata
-  } = row;
+  const { config_options, available_modes, available_models, available_commands, status: _status, ...metadata } = row;
   return {
     ...metadata,
     installed: row.installed,

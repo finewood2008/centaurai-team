@@ -175,8 +175,7 @@ export function collectBackendInstallDiagnostics(
       ? pathApi.join(resourcesPath, BUNDLED_CENTAURAI_CORE_DIR)
       : undefined;
   const binaryPath =
-    checkedBundledPath ??
-    (runtimeDirPath && binaryName ? pathApi.join(runtimeDirPath, binaryName) : undefined);
+    checkedBundledPath ?? (runtimeDirPath && binaryName ? pathApi.join(runtimeDirPath, binaryName) : undefined);
   const manifestPath = runtimeDirPath ? pathApi.join(runtimeDirPath, MANIFEST_FILE_NAME) : undefined;
 
   const diagnostics: BackendInstallDiagnostics = {

@@ -288,10 +288,7 @@ export const useGuidAgentSelection = ({
   const is_presetAgent = Boolean(selectedAgentInfo?.is_preset);
 
   // --- SWR: Fetch detected execution engines (enabled only; disabled merged from cache) ---
-  const { data: availableAgentsData } = useSWR<AgentMetadata[]>(
-    DETECTED_AGENTS_SWR_KEY,
-    fetchDetectedAgents
-  );
+  const { data: availableAgentsData } = useSWR<AgentMetadata[]>(DETECTED_AGENTS_SWR_KEY, fetchDetectedAgents);
 
   // Fetch remote agents from DB and merge into available agents
   const { data: remoteAgentsData } = useSWR('remote-agents.list', () => ipcBridge.remoteAgent.list.invoke());

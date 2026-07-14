@@ -1,6 +1,6 @@
 ---
 name: 社媒规划
-description: "Use when planning, drafting, or scheduling social media content for WeChat Official Account, Twitter/X, and Xiaohongshu. Generates content calendars with platform-adapted copy, publishing schedules, and performance tracking. Trigger on: social media, 公众号, 推文, content calendar, 社媒, 发布计划."
+description: 'Use when planning, drafting, or scheduling social media content for WeChat Official Account, Twitter/X, and Xiaohongshu. Generates content calendars with platform-adapted copy, publishing schedules, and performance tracking. Trigger on: social media, 公众号, 推文, content calendar, 社媒, 发布计划.'
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -30,11 +30,11 @@ Structured content calendar with multi-platform copy adaptation for WeChat Offic
 
 ### Brand Voice by Platform
 
-| Platform | Tone | Content Mix | Frequency |
-|----------|------|-------------|-----------|
-| 公众号 | Professional + approachable | Product updates, tech deep-dives, case studies | 1-2/week |
-| Twitter/X | Concise + technical | Product news, industry takes, engagement | 3-5/week |
-| 小红书 | Visual + tutorial | How-tos, results showcase, behind-the-scenes | 2-3/week |
+| Platform  | Tone                        | Content Mix                                    | Frequency |
+| --------- | --------------------------- | ---------------------------------------------- | --------- |
+| 公众号    | Professional + approachable | Product updates, tech deep-dives, case studies | 1-2/week  |
+| Twitter/X | Concise + technical         | Product news, industry takes, engagement       | 3-5/week  |
+| 小红书    | Visual + tutorial           | How-tos, results showcase, behind-the-scenes   | 2-3/week  |
 
 ### Content Pillars
 
@@ -57,18 +57,21 @@ Maintain an idea pool at the bottom
 ## Platform Writing Guides
 
 ### WeChat Official Account (公众号)
+
 - 1500-3000 characters, sub-headers every 300-500 chars
 - Leading summary (2-3 sentences) to hook readers
 - Visual breaks: pull quotes for actionable tips
 - End with: follow CTA, related articles, QR code
 
 ### Twitter/X
+
 - Thread format: 4-8 tweets, first tweet standalone
 - 2-3 hashtags max
 - Include image/screenshot
 - Each tweet makes sense independently
 
 ### 小红书
+
 - Cover image is most important (50% of effort)
 - Title: emoji + number + pain point
 - Conversational tone, like sharing with friends

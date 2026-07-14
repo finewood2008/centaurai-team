@@ -34,8 +34,7 @@ describe('collectBackendInstallDiagnostics', () => {
         runtimeKey: 'win32-x64',
         binaryName: 'centaurai-core.exe',
         resourcesPath: 'C:\\AionUi\\resources',
-        checkedBundledPath:
-          'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64\\centaurai-core.exe',
+        checkedBundledPath: 'C:\\AionUi\\resources\\bundled-centaurai-core\\win32-x64\\centaurai-core.exe',
       },
       {
         appVersion: '2.1.7',
