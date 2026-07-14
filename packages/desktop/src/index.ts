@@ -66,7 +66,7 @@ import {
   resolveVectorEndpoint,
   resolveRemoteAccess,
   resolveWebUIPort,
-  restoreDesktopWebUIFromPreferences,
+  requestDesktopWebUIRestore,
 } from './process/utils/webuiConfig';
 import {
   createOrUpdateTray,
@@ -97,8 +97,7 @@ import electronSquirrelStartup from 'electron-squirrel-startup';
 // When a second instance starts (e.g. from protocol URL), it sends its data
 // to the first instance via second-instance event, then quits.
 const isE2ETestMode = process.env.AIONUI_E2E_TEST === '1';
-const skipSingleInstanceLock =
-  isE2ETestMode || process.env.AIONUI_MULTI_INSTANCE === '1';
+const skipSingleInstanceLock = isE2ETestMode || process.env.AIONUI_MULTI_INSTANCE === '1';
 const deepLinkFromArgv = findDeepLinkUrl(process.argv);
 const gotTheLock = skipSingleInstanceLock ? true : app.requestSingleInstanceLock({ deepLinkUrl: deepLinkFromArgv });
 if (!gotTheLock) {
@@ -536,6 +535,13 @@ function ensureAdminUserOnce(backendPort: number): Promise<void> {
   return ensureAdminUserPromise;
 }
 
+function requestDesktopWebUIAutoRestore(source: string): void {
+  if (isE2ETestMode || isWebUIMode || isResetPasswordMode || isClientMode) return;
+  void requestDesktopWebUIRestore({ onRestored: announceDesktopWebUIStarted }).catch((error) => {
+    console.error(`[WebUI] Failed to auto-restore (${source}):`, error);
+  });
+}
+
 function markBackendReady(backendPort: number, source: string): void {
   if (backendStartedOk) return;
   console.log(`[CentaurAI] ${source} ready (port=${backendPort})`);
@@ -547,6 +553,10 @@ function markBackendReady(backendPort: number, source: string): void {
   (globalThis as typeof globalThis & { __backendStartupFailed?: boolean }).__backendStartupFailed = false;
   void ensureAdminUserOnce(backendPort);
   scheduleBackendMigrations();
+  // The first restore request may have exhausted its startup wait while a slow
+  // backend was still unavailable. Queue another attempt as soon as late health
+  // readiness is confirmed, without requiring an application restart.
+  if (appReadyDone) requestDesktopWebUIAutoRestore(source);
 }
 
 function openExternalHttpUrl(url: string): void {
@@ -1228,12 +1238,9 @@ const handleAppReady = async (): Promise<void> => {
       void refreshTrayMenu();
     });
 
-    if (!isE2ETestMode) {
-      // 窗口创建后异步恢复 WebUI，不阻塞 UI / Restore WebUI async after window creation, non-blocking
-      restoreDesktopWebUIFromPreferences({ onRestored: announceDesktopWebUIStarted }).catch((error) => {
-        console.error('[WebUI] Failed to auto-restore:', error);
-      });
-    }
+    // Restore WebUI after window creation without blocking the renderer. A
+    // later backend-ready event queues another attempt if this one times out.
+    requestDesktopWebUIAutoRestore('window-ready');
 
     // Flush pending deep-link URL (received before window was ready)
     const pendingUrl = getPendingDeepLinkUrl();
