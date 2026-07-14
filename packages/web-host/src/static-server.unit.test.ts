@@ -112,8 +112,9 @@ describe('static-server', () => {
     stopBackend = backend.close;
     handle = await startStaticServer({ staticDir, backendPort: backend.port, port: 0 });
     const r = await fetch(`${handle.localUrl}/assets/main.js`);
-    expect(r.status).toBe(200);
-    expect(await r.text()).toContain('hi');
+    const body = await r.text();
+    expect(r.status, body).toBe(200);
+    expect(body).toContain('hi');
   });
 
   it('/api/* reverse-proxies to backend', async () => {

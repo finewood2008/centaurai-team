@@ -3069,7 +3069,12 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
         public: opts.staticDir,
         rewrites: [{ source: '**', destination: '/index.html' }],
       });
-    } catch {
+    } catch (error) {
+      console.error('[WebUI] Request handling failed', {
+        method: req.method,
+        path: req.url,
+        error,
+      });
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'INTERNAL_ERROR' }));
