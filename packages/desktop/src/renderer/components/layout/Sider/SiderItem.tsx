@@ -111,6 +111,7 @@ const SiderItem: React.FC<SiderItemProps> = ({
                   {menuItems.map((item) => (
                     <Menu.Item key={item.key}>
                       <div
+                        data-testid={`sider-menu-item-${item.key}`}
                         className={classNames('flex items-center gap-8px', {
                           'text-[rgb(var(--warning-6))]': item.danger,
                         })}

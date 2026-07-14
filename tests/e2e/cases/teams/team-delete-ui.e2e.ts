@@ -32,15 +32,18 @@ test.describe('Team Delete - Full UI Flow', () => {
     await page.screenshot({ path: 'tests/e2e/results/case5-01-before-delete.png' });
 
     // Step 1: Locate the team row in the Sider
-    const teamRow = page
-      .locator('div.group')
-      .filter({ has: page.locator('[data-testid="sider-item-menu-trigger"]') })
-      .filter({ has: page.getByText(TEAM_NAME, { exact: true }) })
-      .first();
+    const teamRow = page.locator(`[data-testid="team-sider-item-${teamId}"]`);
     await teamRow.waitFor({ state: 'visible', timeout: 10_000 });
 
     // Step 2: Hover to reveal the three-dot menu trigger, then click it
-    await teamRow.hover();
+    let teamRowBox = await teamRow.boundingBox();
+    await expect
+      .poll(async () => {
+        teamRowBox = await teamRow.boundingBox();
+        return teamRowBox !== null;
+      })
+      .toBe(true);
+    await page.mouse.move(teamRowBox!.x + teamRowBox!.width / 2, teamRowBox!.y + teamRowBox!.height / 2);
     const menuTrigger = teamRow.locator('[data-testid="sider-item-menu-trigger"]');
     await menuTrigger.waitFor({ state: 'visible', timeout: 5_000 });
     await menuTrigger.click();

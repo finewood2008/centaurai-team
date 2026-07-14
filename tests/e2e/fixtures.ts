@@ -119,6 +119,7 @@ async function launchApp(): Promise<ElectronApplication> {
     AIONUI_DISABLE_AUTO_UPDATE: '1',
     AIONUI_DISABLE_DEVTOOLS: '1',
     AIONUI_E2E_TEST: '1',
+    AIONUI_E2E_USER_DATA_DIR: process.env.AIONUI_E2E_USER_DATA_DIR || e2eStateSandboxDir,
     AIONUI_CDP_PORT: '0',
   };
 
@@ -166,6 +167,8 @@ async function launchApp(): Promise<ElectronApplication> {
     env: {
       ...commonEnv,
       NODE_ENV: 'development',
+      CENTAURAI_CORE_BUNDLED_DIR:
+        process.env.CENTAURAI_CORE_BUNDLED_DIR || path.join(projectRoot, 'resources', 'bundled-centaurai-core'),
     },
     timeout: 60_000,
   });

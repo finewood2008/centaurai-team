@@ -4,11 +4,16 @@
  * Flow: sidebar "+" button -> Create Team modal -> fill form -> create -> verify navigation
  */
 import { test, expect } from '../../fixtures';
-import { TEAM_SUPPORTED_BACKENDS, cleanupTeamsByName } from '../../helpers';
+import {
+  TEAM_SUPPORTED_BACKENDS,
+  cleanupTeamsByName,
+  ensureTeamAgentOptionSelected,
+  submitTeamCreation,
+} from '../../helpers';
 
 /**
  * UI label patterns for each backend. Used to match the agent option in the
- * Create Team dropdown. Falls back to a case-insensitive backend name match.
+ * Create Team member list. Falls back to a case-insensitive backend name match.
  */
 const BACKEND_UI_PATTERN: Record<string, RegExp> = {
   claude: /Claude Code/i,
@@ -19,8 +24,8 @@ const BACKEND_UI_PATTERN: Record<string, RegExp> = {
 test.describe('Team Create', () => {
   test('sidebar shows team section with create button', async ({ page }) => {
     // Wait for sidebar to render — no fixed timeout, listen for element
-    const teamSection = page.locator('text=Teams').or(page.locator('text=团队'));
-    await expect(teamSection.first()).toBeVisible({ timeout: 15000 });
+    const teamSection = page.locator('[data-testid="team-section-toggle"]');
+    await expect(teamSection).toBeVisible({ timeout: 15000 });
 
     // Screenshot: initial state
     await page.screenshot({ path: 'tests/e2e/results/team-01-initial.png' });
@@ -40,28 +45,28 @@ test.describe('Team Create', () => {
     await page.screenshot({ path: 'tests/e2e/results/team-02-modal.png' });
 
     // Verify Modal is visible with "Create Team" title
-    const modalTitle = page.locator('.arco-modal h3').filter({ hasText: /Create Team|创建团队/ });
+    const modalTitle = page.locator('.team-create-modal h3');
     await expect(modalTitle).toBeVisible({ timeout: 5000 });
 
     // Verify Team name input exists
-    const modal = page.locator('.arco-modal');
-    const nameInput = modal.getByRole('textbox').first();
+    const modal = page.locator('.team-create-modal');
+    const nameInput = modal.locator('[data-testid="team-create-name-input"]');
     await expect(nameInput).toBeVisible();
 
-    // Verify the leader AionSelect trigger exists (agent picker is a searchable dropdown)
-    const leaderSelect = page.locator('[data-testid="team-create-leader-select"]');
-    const noAgentsMsg = page.locator('.arco-modal').getByText(/No supported agents installed|没有支持的 agent/i);
-    const hasSelect = await leaderSelect.isVisible({ timeout: 3000 }).catch(() => false);
+    // Verify the current multi-select agent list exists, or the empty-state is shown.
+    const agentOption = modal.locator('[data-testid^="team-create-agent-option-"]').first();
+    const noAgentsMsg = modal.getByText(/No supported agents installed|没有支持的 agent/i);
+    const hasAgentOption = await agentOption.isVisible({ timeout: 3000 }).catch(() => false);
     const hasNoAgentsMsg = await noAgentsMsg.isVisible({ timeout: 1000 }).catch(() => false);
-    expect(hasSelect || hasNoAgentsMsg).toBeTruthy();
+    expect(hasAgentOption || hasNoAgentsMsg).toBeTruthy();
 
     // Verify Create button exists (disabled until agent is selected and name is filled)
-    const confirmBtn = page.locator('.arco-modal .arco-btn-primary');
+    const confirmBtn = modal.locator('.arco-btn-primary');
     await expect(confirmBtn).toBeVisible();
 
     // Close modal via Cancel button
-    await page.locator('.arco-modal .arco-btn-text').first().click();
-    await expect(page.locator('.arco-modal')).toBeHidden({ timeout: 5000 });
+    await modal.locator('.arco-btn-text').first().click();
+    await expect(modal).toBeHidden({ timeout: 5000 });
   });
 
   test('can fill form and create team', async ({ page }) => {
@@ -71,39 +76,33 @@ test.describe('Team Create', () => {
     await createBtn.click();
 
     // Wait for modal to appear
-    const modalTitle = page.locator('.arco-modal h3').filter({ hasText: /Create Team|创建团队/ });
+    const modalTitle = page.locator('.team-create-modal h3');
     await expect(modalTitle).toBeVisible({ timeout: 5000 });
 
     // Fill team name
-    const modal = page.locator('.arco-modal');
-    const nameInput = modal.getByRole('textbox').first();
+    const modal = page.locator('.team-create-modal');
+    const nameInput = modal.locator('[data-testid="team-create-name-input"]');
     await nameInput.fill('E2E Test Team');
 
-    // Open the leader select dropdown (AionSelect portals to document.body)
-    const leaderSelect = modal.locator('[data-testid="team-create-leader-select"]');
-    const hasSelect = await leaderSelect.isVisible({ timeout: 3000 }).catch(() => false);
+    const firstOption = modal.locator('[data-testid^="team-create-agent-option-"]').first();
+    const hasAgentOption = await firstOption.isVisible({ timeout: 3000 }).catch(() => false);
 
     // Screenshot: select trigger visible
     await page.screenshot({ path: 'tests/e2e/results/team-03-agent-dropdown.png' });
 
-    if (hasSelect) {
-      await leaderSelect.click();
-
-      // Options are portaled to document.body — query at page scope
-      const firstOption = page.locator('[data-testid^="team-create-agent-option-"]').first();
+    if (hasAgentOption) {
       await expect(firstOption).toBeVisible({ timeout: 5000 });
-      await firstOption.click();
+      await ensureTeamAgentOptionSelected(firstOption);
 
       // Wait for select value to reflect the chosen option (Create btn becomes enabled)
-      const confirmBtn = page.locator('.arco-modal .arco-btn-primary');
+      const confirmBtn = modal.locator('.arco-btn-primary');
       await expect(confirmBtn).toBeEnabled({ timeout: 5000 });
 
       // Screenshot: form filled
       await page.screenshot({ path: 'tests/e2e/results/team-04-filled.png' });
 
       // Click Create and wait for navigation
-      await confirmBtn.click();
-      await page.waitForURL(/\/team\//, { timeout: 15000 });
+      await submitTeamCreation(page, modal, confirmBtn);
 
       // Screenshot: after creation
       await page.screenshot({ path: 'tests/e2e/results/team-05-created.png' });
@@ -140,20 +139,15 @@ async function createTeamWithAgent(
   await createBtn.click();
 
   // Wait for modal to appear
-  const modalTitle = page.locator('.arco-modal h3').filter({ hasText: /Create Team|创建团队/ });
+  const modalTitle = page.locator('.team-create-modal h3');
   await expect(modalTitle).toBeVisible({ timeout: 5000 });
 
   // Fill team name
-  const modal = page.locator('.arco-modal');
-  const nameInput = modal.getByRole('textbox').first();
+  const modal = page.locator('.team-create-modal');
+  const nameInput = modal.locator('[data-testid="team-create-name-input"]');
   await nameInput.fill(teamName);
 
-  // Open the leader select dropdown (AionSelect portals options to document.body)
-  const leaderSelect = modal.locator('[data-testid="team-create-leader-select"]');
-  await expect(leaderSelect).toBeVisible({ timeout: 5000 });
-  await leaderSelect.click();
-
-  await page.screenshot({ path: `tests/e2e/results/${screenshotPrefix}-dropdown.png` });
+  await page.screenshot({ path: `tests/e2e/results/${screenshotPrefix}-agents.png` });
 
   // Find the agent option matching the text pattern (options are at page scope, not inside .arco-modal)
   const allOptions = page.locator('[data-testid^="team-create-agent-option-"]');
@@ -173,16 +167,15 @@ async function createTeamWithAgent(
   }
 
   if (!matchingOption) {
-    // Agent not installed — close dropdown and modal, skip test
-    await page.keyboard.press('Escape').catch(() => {});
-    await page.locator('.arco-modal .arco-btn-text').first().click({ force: true });
-    await expect(page.locator('.arco-modal')).toBeHidden({ timeout: 5000 });
+    // Agent not installed — close the modal and skip the test.
+    await modal.locator('.arco-btn-text').first().click({ force: true });
+    await expect(modal).toBeHidden({ timeout: 5000 });
     console.log(`[E2E] Agent matching ${agentTextPattern} not found — skipping`);
     test.skip();
     return;
   }
 
-  await matchingOption.click();
+  await ensureTeamAgentOptionSelected(matchingOption);
 
   // Wait for Create button to become enabled (select value applied)
   const confirmBtn = page.locator('.arco-modal .arco-btn-primary');
@@ -191,8 +184,7 @@ async function createTeamWithAgent(
   await page.screenshot({ path: `tests/e2e/results/${screenshotPrefix}-filled.png` });
 
   // Submit and wait for navigation
-  await confirmBtn.click();
-  await page.waitForURL(/\/team\//, { timeout: 15000 });
+  await submitTeamCreation(page, modal, confirmBtn);
 
   await page.screenshot({ path: `tests/e2e/results/${screenshotPrefix}-created.png` });
 

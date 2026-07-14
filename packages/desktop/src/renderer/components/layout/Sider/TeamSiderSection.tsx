@@ -207,7 +207,7 @@ const TeamSiderSection: React.FC<TeamSiderSectionProps> = ({
               ];
               const teamBadge = teamBadgeCounts.get(team.id) ?? 0;
               return (
-                <div key={team.id} className='relative group'>
+                <div key={team.id} className='relative group' data-testid={`team-sider-item-${team.id}`}>
                   <SiderItem
                     icon={<StackedAgentAvatars agents={team.agents} size={20} max={3} />}
                     name={team.name}
@@ -261,6 +261,7 @@ const TeamSiderSection: React.FC<TeamSiderSectionProps> = ({
         visible={createTeamVisible}
         onClose={() => setCreateTeamVisible(false)}
         onCreated={(team) => {
+          setExpanded(true);
           void refreshTeams();
           Promise.resolve(navigate(`/team/${team.id}`)).catch(console.error);
         }}

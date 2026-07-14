@@ -9,7 +9,7 @@ import http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import os from 'os';
-import { getDevAppName } from '@/common/platform';
+import { getDevAppName, getDevUserDataPath } from '@/common/platform';
 import { applyGpuRecoveryFlags } from './gpuRecovery';
 
 // ============ Environment Separation ============
@@ -22,8 +22,7 @@ if (!app.isPackaged) {
   app.setName(devAppName);
   // In Electron 28+, setName alone no longer updates userData path on macOS.
   // Explicitly override userData to the dev directory.
-  const appSupportDir = path.dirname(app.getPath('userData'));
-  app.setPath('userData', path.join(appSupportDir, devAppName));
+  app.setPath('userData', getDevUserDataPath(app.getPath('userData')));
 }
 
 // app.disableHardwareAcceleration() must run before app is ready.

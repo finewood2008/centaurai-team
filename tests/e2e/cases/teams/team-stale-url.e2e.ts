@@ -73,7 +73,6 @@ test.describe('Team Stale URL', () => {
     await page.screenshot({ path: 'tests/e2e/results/team-stale-02.png' });
 
     // [assert] Sidebar remains interactive — Teams label must still be visible
-    const teamsLabel = page.locator('text=Teams').or(page.locator('text=团队'));
-    await expect(teamsLabel.first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="team-section-toggle"]')).toBeVisible({ timeout: 10_000 });
   });
 });

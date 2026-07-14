@@ -48,12 +48,13 @@ export function cliAgentToOption(agent: AgentMetadata): TeamAgentOption {
 }
 
 export function assistantToOption(assistant: Assistant, teamCapableKeys?: Set<string>): TeamAgentOption {
+  const backend = assistant.agent?.acp_backend || assistant.agent?.type || assistant.preset_agent_type;
   return {
     id: assistant.id,
     name: assistant.name,
-    backend: assistant.preset_agent_type,
+    backend,
     icon: assistant.avatar,
-    team_capable: teamCapableKeys ? teamCapableKeys.has(assistant.preset_agent_type) : undefined,
+    team_capable: assistant.team_selectable ?? (teamCapableKeys ? teamCapableKeys.has(backend) : undefined),
   };
 }
 

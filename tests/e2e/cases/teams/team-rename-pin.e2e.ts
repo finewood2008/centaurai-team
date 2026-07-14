@@ -16,7 +16,7 @@ async function clickTeamMenuItem(
   menuKey: string
 ): Promise<void> {
   // 找到包含 team 名称的 SiderItem 行
-  const row = page.locator('.group').filter({ hasText: teamName }).first();
+  const row = page.locator('[data-testid^="team-sider-item-"]').filter({ hasText: teamName }).first();
   await expect(row).toBeVisible({ timeout: 10_000 });
 
   // hover 让三点菜单出现
@@ -25,12 +25,8 @@ async function clickTeamMenuItem(
   await expect(trigger).toBeVisible({ timeout: 3_000 });
   await trigger.click();
 
-  // 等 dropdown 菜单弹出，点击对应 key 的 menu item（用文本匹配）
-  const item = page
-    .locator('.arco-dropdown-menu-item')
-    .or(page.locator('.arco-menu-item'))
-    .filter({ hasText: new RegExp(menuKey, 'i') })
-    .first();
+  // Use the menu action key so this stays stable across locales.
+  const item = page.locator(`[data-testid="sider-menu-item-${menuKey}"]`);
   await expect(item).toBeVisible({ timeout: 3_000 });
   await item.click();
 }
@@ -40,11 +36,11 @@ async function clickTeamMenuItem(
  */
 async function getSidebarTeamNames(page: import('@playwright/test').Page): Promise<string[]> {
   // 等 Teams section 加载
-  const section = page.locator('text=Teams').or(page.locator('text=团队'));
-  await expect(section.first()).toBeVisible({ timeout: 10_000 });
+  const section = page.locator('[data-testid="team-section-toggle"]');
+  await expect(section).toBeVisible({ timeout: 10_000 });
 
   // 每个 SiderItem 行里的名称文本
-  const items = page.locator('.group .text-ellipsis span');
+  const items = page.locator('[data-testid^="team-sider-item-"] .text-ellipsis span');
   const count = await items.count();
   const names: string[] = [];
   for (let i = 0; i < count; i++) {
@@ -96,9 +92,9 @@ test.describe('Team Rename & Pin', () => {
     await expect(modal).toBeHidden({ timeout: 5_000 });
 
     // 5. 验证侧边栏显示新名字，旧名字消失
-    const newName = page.locator('.group').filter({ hasText: RENAME_NEW });
+    const newName = page.locator('[data-testid^="team-sider-item-"]').filter({ hasText: RENAME_NEW });
     await expect(newName.first()).toBeVisible({ timeout: 10_000 });
-    const oldName = page.locator('.group').filter({ hasText: RENAME_ORIG });
+    const oldName = page.locator('[data-testid^="team-sider-item-"]').filter({ hasText: RENAME_ORIG });
     await expect(oldName).toHaveCount(0, { timeout: 5_000 });
   });
 

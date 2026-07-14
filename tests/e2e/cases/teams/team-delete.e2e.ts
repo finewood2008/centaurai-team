@@ -7,14 +7,8 @@
 import { test, expect } from '../../fixtures';
 import { invokeBridge, navigateTo, createTeam, cleanupTeamsByName } from '../../helpers';
 
-async function deleteTeamBySiderMenu(page: Parameters<typeof createTeam>[0], teamName: string) {
-  // Scope to the sidebar team row: a `.group` ancestor that contains the three-dot trigger AND
-  // the exact team-name text. Exactness avoids "E2E Delete Team" matching "E2E Delete Sidebar Team".
-  const teamRow = page
-    .locator('div.group')
-    .filter({ has: page.locator('[data-testid="sider-item-menu-trigger"]') })
-    .filter({ has: page.getByText(teamName, { exact: true }) })
-    .first();
+async function deleteTeamBySiderMenu(page: Parameters<typeof createTeam>[0], teamId: string) {
+  const teamRow = page.locator(`[data-testid="team-sider-item-${teamId}"]`);
   await teamRow.waitFor({ state: 'visible', timeout: 10_000 });
   await teamRow.hover();
 
@@ -59,7 +53,7 @@ test.describe('Team Delete', () => {
 
     await page.screenshot({ path: 'tests/e2e/results/team-delete-01-before.png' });
 
-    await deleteTeamBySiderMenu(page, teamName);
+    await deleteTeamBySiderMenu(page, teamId);
 
     // [assert-ui] URL should no longer contain the deleted teamId
     await page.waitForFunction((id) => !window.location.hash.includes(id), teamId, { timeout: 10_000 });
@@ -95,7 +89,7 @@ test.describe('Team Delete', () => {
     const sidebarEntry = page.getByText(teamName, { exact: true }).first();
     await expect(sidebarEntry).toBeVisible({ timeout: 10_000 });
 
-    await deleteTeamBySiderMenu(page, teamName);
+    await deleteTeamBySiderMenu(page, teamId);
 
     // Wait for the confirm dialog to close. Scope to `.arco-modal-simple` because
     // Modal.confirm renders with the `simple` modifier — this avoids matching a lingering

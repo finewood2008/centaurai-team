@@ -11,6 +11,7 @@ const projectRoot = path.resolve(__dirname, '..');
 const platform = process.env.PACK_PLATFORM || process.platform;
 const arch = process.env.PACK_ARCH || process.arch;
 const version = require('../package.json').version;
+const coreVersion = resolveCentauraiCoreVersion(projectRoot);
 
 // Normalize platform/arch names for tarball filename
 const platformMap = { darwin: 'darwin', linux: 'linux', win32: 'win' };
@@ -30,7 +31,7 @@ prepareCentauraiCore({
   projectRoot,
   platform,
   arch,
-  version: resolveCentauraiCoreVersion(projectRoot),
+  version: coreVersion,
 });
 
 // 2. Create staging dir
@@ -65,6 +66,7 @@ console.log(`  → ${executablePath}`);
 // `centaurai-web version` match the tarball filename.
 const srcPkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'packages/web-cli/package.json'), 'utf8'));
 srcPkg.version = version;
+srcPkg.centauraiCoreVersion = coreVersion;
 fs.writeFileSync(path.join(tarballContentDir, 'package.json'), JSON.stringify(srcPkg, null, 2) + '\n');
 
 // 6. Copy static files (SPA) from desktop renderer build output

@@ -17,7 +17,7 @@ import {
   resolveConversationType,
   resolveTeamAgentType,
   AgentOptionLabel,
-  cliAgentToOption,
+  assistantToOption,
 } from './agentSelectUtils';
 import type { TeamAgentOption } from './agentSelectUtils';
 import { resolveDefaultTeamAgentModel } from './teamCreateModelResolver';
@@ -60,6 +60,9 @@ const AgentMultiSelectRow: React.FC<{
     style={isSelected ? { boxShadow: 'inset 0 0 0 1px var(--aou-6)' } : undefined}
     onClick={onToggle}
     data-testid={`team-create-agent-option-${agentKey(agent)}`}
+    role='checkbox'
+    aria-checked={isSelected}
+    data-selected={isSelected ? 'true' : 'false'}
   >
     <div
       className='h-16px w-16px flex-shrink-0 rounded-4px flex items-center justify-center transition-all'
@@ -114,7 +117,7 @@ const AgentMultiSelectRow: React.FC<{
 const TeamCreateModal: React.FC<Props> = ({ visible, onClose, onCreated }) => {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const { cliAgents } = useConversationAgents();
+  const { presetAssistants } = useConversationAgents();
   const { providers, getAvailableModels } = useModelProviderList();
   // The 智囊团's name (a team, not a single discussion — the topic is set later in the room).
   const [name, setName] = useState('');
@@ -149,10 +152,12 @@ const TeamCreateModal: React.FC<Props> = ({ visible, onClose, onCreated }) => {
   // On submit, team-capable backends form the aioncore team (first = moderator); the
   // rest (openclaw/hermes + every 直连模型专家) join via the renderer-orchestrated extras.
   const allAgents = useMemo(() => {
-    const backends = cliAgents.map(cliAgentToOption);
+    const assistants = presetAssistants
+      .filter((assistant) => assistant.team_selectable)
+      .map((assistant) => assistantToOption(assistant));
     const modelExperts = buildModelExpertOptions(providers, getAvailableModels);
-    return [...backends, ...modelExperts];
-  }, [cliAgents, providers, getAvailableModels]);
+    return [...assistants, ...modelExperts];
+  }, [presetAssistants, providers, getAvailableModels]);
 
   const filteredAgents = useMemo(() => {
     const q = search.trim().toLowerCase();

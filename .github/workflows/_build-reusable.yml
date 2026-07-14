@@ -74,7 +74,7 @@ jobs:
         run: bunx tsc --noEmit
 
       - name: Run unit tests
-        run: bunx vitest run
+        run: bun run test
 
   build:
     name: Build ${{ matrix.platform }}
@@ -318,7 +318,8 @@ jobs:
         env:
           # Exact release tag is pinned in repo-root package.json (centauraiCoreVersion).
           CENTAURAI_CORE_ARCH: ${{ matrix.arch }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT is required because centaurai-core is a separate private repository.
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build with electron-builder (Windows)

@@ -39,14 +39,20 @@ function parseChecksumFile(text, assetName) {
   return matches[0][1].toLowerCase();
 }
 
-function authCurlArgs(token) {
-  return token ? ['-H', `Authorization: Bearer ${token}`] : [];
+function authCurlArgs(token, accept = '') {
+  const args = token ? ['-H', `Authorization: Bearer ${token}`] : [];
+  if (accept) args.push('-H', `Accept: ${accept}`);
+  return args;
 }
 
-function downloadFile(url, outputPath, token = '') {
+function downloadFile(url, outputPath, token = '', options = {}) {
   console.log(`  Downloading ${url}`);
+  const accept = options.githubReleaseAsset ? 'application/octet-stream' : '';
   if (process.platform === 'win32') {
-    const headers = token ? ` -Headers @{Authorization='Bearer ${token.replace(/'/g, "''")}'}` : '';
+    const headerEntries = [];
+    if (token) headerEntries.push(`Authorization='Bearer ${token.replace(/'/g, "''")}'`);
+    if (accept) headerEntries.push(`Accept='${accept}'`);
+    const headers = headerEntries.length > 0 ? ` -Headers @{${headerEntries.join(';')}}` : '';
     const command = `$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '${url.replace(/'/g, "''")}'${headers} -OutFile '${outputPath.replace(/'/g, "''")}'`;
     childProcess.execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], {
       timeout: 180000,
@@ -55,7 +61,7 @@ function downloadFile(url, outputPath, token = '') {
   }
   childProcess.execFileSync(
     'curl',
-    ['-L', '--fail', '--silent', '--show-error', ...authCurlArgs(token), '-o', outputPath, url],
+    ['-L', '--fail', '--silent', '--show-error', ...authCurlArgs(token, accept), '-o', outputPath, url],
     { timeout: 180000 }
   );
 }
@@ -77,6 +83,19 @@ function fetchJson(url, token = '') {
     { encoding: 'utf8', timeout: 30000 }
   );
   return JSON.parse(output);
+}
+
+function resolveReleaseAssetApiUrl(tag, assetName, token) {
+  if (!token) return '';
+  const apiUrl = `https://api.github.com/repos/${CORE_ARTIFACT_CONFIG.repository}/releases/tags/${encodeURIComponent(tag)}`;
+  const release = fetchJson(apiUrl, token);
+  const matches = Array.isArray(release?.assets)
+    ? release.assets.filter((asset) => asset?.name === assetName && typeof asset?.url === 'string')
+    : [];
+  if (matches.length !== 1) {
+    throw new Error(`Release ${tag} must contain exactly one asset named ${assetName}`);
+  }
+  return matches[0].url;
 }
 
 function resolveReleaseCommit(tag, token = '') {
@@ -216,6 +235,7 @@ function prepareCentauraiCore(options) {
   const deps = {
     downloadFile,
     extractArchive,
+    resolveReleaseAssetApiUrl,
     resolveReleaseCommit,
     prepareManagedResources,
     execFileSync: childProcess.execFileSync,
@@ -227,8 +247,13 @@ function prepareCentauraiCore(options) {
   ensureDirectory(tempDir);
 
   try {
-    deps.downloadFile(artifactUrl, archivePath, token);
-    deps.downloadFile(checksumUrl, checksumPath, token);
+    const artifactDownloadUrl = token ? deps.resolveReleaseAssetApiUrl(tag, assetName, token) : artifactUrl;
+    const checksumDownloadUrl = token
+      ? deps.resolveReleaseAssetApiUrl(tag, CORE_ARTIFACT_CONFIG.checksumAsset, token)
+      : checksumUrl;
+    const downloadOptions = { githubReleaseAsset: Boolean(token) };
+    deps.downloadFile(artifactDownloadUrl, archivePath, token, downloadOptions);
+    deps.downloadFile(checksumDownloadUrl, checksumPath, token, downloadOptions);
     const expectedSha256 = parseChecksumFile(fs.readFileSync(checksumPath, 'utf8'), assetName);
     const artifactSha256 = calculateSha256(archivePath);
     if (artifactSha256 !== expectedSha256) {
@@ -304,5 +329,6 @@ module.exports = {
   findBinaryInDir,
   parseChecksumFile,
   prepareCentauraiCore,
+  resolveReleaseAssetApiUrl,
   verifyManagedResources,
 };

@@ -14,7 +14,10 @@
  * works (unlike a plain-HTTP LAN browser tab). See httpBridge `__backendHost`.
  */
 
-import { Bonjour, type Service } from 'bonjour-service';
+import { Bonjour } from 'bonjour-service';
+import type { Service } from 'bonjour-service';
+
+type BonjourService = InstanceType<typeof Service>;
 
 export const CENTAUR_SERVICE_TYPE = 'centaurai';
 export const CENTAUR_SERVICE_PROTOCOL = 'tcp' as const;
@@ -103,11 +106,11 @@ export function discoverServers(onUpdate: (servers: DiscoveredServer[]) => void)
   const instance = new Bonjour();
   const byKey = new Map<string, DiscoveredServer>();
 
-  const keyOf = (s: Service) => `${s.name}:${s.port}`;
+  const keyOf = (s: BonjourService) => `${s.name}:${s.port}`;
   const emit = () => onUpdate([...byKey.values()]);
 
   const browser = instance.find({ type: CENTAUR_SERVICE_TYPE, protocol: CENTAUR_SERVICE_PROTOCOL });
-  browser.on('up', (s: Service) => {
+  browser.on('up', (s: BonjourService) => {
     byKey.set(keyOf(s), {
       name: s.name,
       host: pickHost(s.addresses),
@@ -118,7 +121,7 @@ export function discoverServers(onUpdate: (servers: DiscoveredServer[]) => void)
     });
     emit();
   });
-  browser.on('down', (s: Service) => {
+  browser.on('down', (s: BonjourService) => {
     byKey.delete(keyOf(s));
     emit();
   });

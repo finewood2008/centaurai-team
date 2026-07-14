@@ -6,7 +6,12 @@
  * Cleanup uses invokeBridge (test data teardown is permitted).
  */
 import { test, expect } from '../../fixtures';
-import { TEAM_SUPPORTED_BACKENDS, cleanupTeamsByName } from '../../helpers';
+import {
+  TEAM_SUPPORTED_BACKENDS,
+  cleanupTeamsByName,
+  ensureTeamAgentOptionSelected,
+  submitTeamCreation,
+} from '../../helpers';
 
 const TEAM_NAME = 'E2E Test Team 001';
 
@@ -18,8 +23,8 @@ test.describe('Team Create - Full UI Flow', () => {
     }
 
     // Step 1: Wait for Sider Teams section to appear
-    const teamSection = page.locator('text=Teams').or(page.locator('text=团队'));
-    await expect(teamSection.first()).toBeVisible({ timeout: 15_000 });
+    const teamSection = page.locator('[data-testid="team-section-toggle"]');
+    await expect(teamSection).toBeVisible({ timeout: 15_000 });
 
     await page.screenshot({ path: 'tests/e2e/results/team-ui-01-sider.png' });
 
@@ -29,25 +34,25 @@ test.describe('Team Create - Full UI Flow', () => {
     await createBtn.click();
 
     // Step 3: Verify modal opened
-    const modal = page.locator('.arco-modal').last();
+    const modal = page.locator('.team-create-modal');
     await expect(modal).toBeVisible({ timeout: 5_000 });
 
-    const modalTitle = modal.locator('h3').filter({ hasText: /Create Team|创建团队/ });
+    const modalTitle = modal.locator('h3');
     await expect(modalTitle).toBeVisible({ timeout: 5_000 });
 
     await page.screenshot({ path: 'tests/e2e/results/team-ui-02-modal.png' });
 
     // Step 4: Fill team name
-    const nameInput = modal.getByRole('textbox').first();
+    const nameInput = modal.locator('[data-testid="team-create-name-input"]');
     await expect(nameInput).toBeVisible();
     await nameInput.fill(TEAM_NAME);
     await expect(nameInput).toHaveValue(TEAM_NAME);
 
-    // Step 5: Open leader dropdown
-    const leaderSelect = modal.locator('[data-testid="team-create-leader-select"]');
-    const hasLeaderSelect = await leaderSelect.isVisible({ timeout: 3_000 }).catch(() => false);
+    // Step 5: The current multi-select renders agent rows directly in the modal.
+    const firstOption = modal.locator('[data-testid^="team-create-agent-option-"]').first();
+    const hasAgentOption = await firstOption.isVisible({ timeout: 3_000 }).catch(() => false);
 
-    if (!hasLeaderSelect) {
+    if (!hasAgentOption) {
       // No supported agents installed — cancel and skip
       const cancelBtn = modal
         .locator('.arco-btn')
@@ -59,14 +64,11 @@ test.describe('Team Create - Full UI Flow', () => {
       return;
     }
 
-    await leaderSelect.click();
-
-    await page.screenshot({ path: 'tests/e2e/results/team-ui-03-dropdown.png' });
+    await page.screenshot({ path: 'tests/e2e/results/team-ui-03-agents.png' });
 
     // Step 6: Select first available agent option (options are portaled to document.body)
-    const firstOption = page.locator('[data-testid^="team-create-agent-option-"]').first();
     await expect(firstOption).toBeVisible({ timeout: 5_000 });
-    await firstOption.click();
+    await ensureTeamAgentOptionSelected(firstOption);
 
     // Step 7: Verify Create button becomes enabled, then click
     const confirmBtn = modal.locator('.arco-btn-primary');
@@ -74,13 +76,7 @@ test.describe('Team Create - Full UI Flow', () => {
 
     await page.screenshot({ path: 'tests/e2e/results/team-ui-04-filled.png' });
 
-    await confirmBtn.click();
-
-    // Step 8: Wait for navigation to /team/{id}
-    await page.waitForURL(/\/team\//, { timeout: 15_000 });
-
-    // Modal must be closed after navigation
-    await expect(modal).toBeHidden({ timeout: 5_000 });
+    await submitTeamCreation(page, modal, confirmBtn);
 
     await page.screenshot({ path: 'tests/e2e/results/team-ui-05-created.png' });
 

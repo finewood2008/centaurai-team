@@ -13,6 +13,13 @@ export function getDevAppName(): string {
   return isMultiInstance ? 'CentaurAI-Dev-2' : 'CentaurAI-Dev';
 }
 
+/** Resolve the development userData directory, with an isolated E2E-only override. */
+export function getDevUserDataPath(defaultUserDataPath: string): string {
+  const e2eOverride = process.env.AIONUI_E2E_TEST === '1' ? process.env.AIONUI_E2E_USER_DATA_DIR?.trim() : '';
+  if (e2eOverride && path.isAbsolute(e2eOverride)) return e2eOverride;
+  return path.join(path.dirname(defaultUserDataPath), getDevAppName());
+}
+
 export function registerPlatformServices(services: IPlatformServices): void {
   _services = services;
 }
@@ -42,7 +49,7 @@ export function getPlatformServices(): IPlatformServices {
         if (!app.isPackaged) {
           const devAppName = getDevAppName();
           app.setName(devAppName);
-          app.setPath('userData', path.join(path.dirname(app.getPath('userData')), devAppName));
+          app.setPath('userData', getDevUserDataPath(app.getPath('userData')));
         }
         // Typed as IPlatformPaths so tsc enforces completeness: any new method
         // added to the interface will cause a compile error here if omitted below.

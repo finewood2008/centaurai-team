@@ -9,6 +9,12 @@
 
 export type AssistantSource = 'builtin' | 'user' | 'extension' | 'generated';
 
+export interface AssistantAgent {
+  type: string;
+  source: string;
+  acp_backend?: string;
+}
+
 export interface Assistant {
   id: string;
   source: AssistantSource;
@@ -19,6 +25,15 @@ export interface Assistant {
   avatar?: string;
   enabled: boolean;
   sort_order: number;
+  /** Stable runtime binding exposed by CentaurAI Core v0.2.2+. */
+  agent_id?: string;
+  agent?: AssistantAgent;
+  agent_status?: string;
+  agent_status_message?: string;
+  /** Core-authoritative eligibility for Team creation. */
+  team_selectable?: boolean;
+  team_block_reason?: string;
+  deletable?: boolean;
   preset_agent_type: string;
   enabled_skills: string[];
   custom_skill_names: string[];

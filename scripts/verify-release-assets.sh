@@ -5,7 +5,7 @@ set -euo pipefail
 OUTPUT_DIR="${1:-release-assets}"
 ERRORS=0
 
-for f in latest.yml latest-mac.yml latest-linux.yml latest-linux-arm64.yml; do
+for f in latest-mac.yml latest-linux.yml latest-linux-arm64.yml; do
   if [ ! -f "$OUTPUT_DIR/$f" ]; then
     echo "FAIL: missing canonical metadata: $f"
     ERRORS=$((ERRORS + 1))
@@ -51,12 +51,11 @@ assert_metadata_points_to_existing_file() {
   echo "PASS: $metadata_name -> $ref_file"
 }
 
-assert_metadata_points_to_existing_file "latest.yml" "(win-x64|win32-x64|x64)"
 assert_metadata_points_to_existing_file "latest-mac.yml" "(mac-x64|darwin-x64|x64)"
 assert_metadata_points_to_existing_file "latest-linux.yml" "(linux|AppImage|deb)"
 assert_metadata_points_to_existing_file "latest-linux-arm64.yml" "(arm64|aarch64)"
 
-for f in latest-win-arm64.yml latest-arm64-mac.yml; do
+for f in latest-arm64-mac.yml; do
   if [ ! -f "$OUTPUT_DIR/$f" ]; then
     echo "FAIL: missing arch-specific updater metadata: $f"
     ERRORS=$((ERRORS + 1))
@@ -65,7 +64,7 @@ for f in latest-win-arm64.yml latest-arm64-mac.yml; do
   fi
 done
 
-for f in CentaurAI-1.0.0-win-x64.exe CentaurAI-1.0.0-win-arm64.exe CentaurAI-1.0.0-mac-x64.dmg CentaurAI-1.0.0-mac-arm64.dmg CentaurAI-1.0.0-linux-x64.deb CentaurAI-1.0.0-linux-arm64.deb; do
+for f in CentaurAI-1.0.0-mac-x64.dmg CentaurAI-1.0.0-mac-arm64.dmg CentaurAI-1.0.0-linux-x64.deb CentaurAI-1.0.0-linux-arm64.deb; do
   if [ ! -f "$OUTPUT_DIR/$f" ]; then
     echo "FAIL: missing distributable: $f"
     ERRORS=$((ERRORS + 1))
@@ -75,7 +74,7 @@ for f in CentaurAI-1.0.0-win-x64.exe CentaurAI-1.0.0-win-arm64.exe CentaurAI-1.0
 done
 
 # Web-CLI tarballs + checksums
-for plat in darwin-arm64 darwin-x86_64 linux-arm64 linux-x86_64 win-x86_64; do
+for plat in darwin-arm64 darwin-x86_64 linux-arm64 linux-x86_64; do
   tarball="centaurai-web-1.0.0-${plat}.tar.gz"
   for f in "$tarball" "${tarball}.sha256"; do
     if [ ! -f "$OUTPUT_DIR/$f" ]; then

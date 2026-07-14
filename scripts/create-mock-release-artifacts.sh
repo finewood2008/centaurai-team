@@ -5,38 +5,10 @@ set -euo pipefail
 ARTIFACTS_DIR="${1:-build-artifacts}"
 
 rm -rf "$ARTIFACTS_DIR"
-mkdir -p "$ARTIFACTS_DIR/windows-build-x64"
-mkdir -p "$ARTIFACTS_DIR/windows-build-arm64"
 mkdir -p "$ARTIFACTS_DIR/macos-build-x64"
 mkdir -p "$ARTIFACTS_DIR/macos-build-arm64"
 mkdir -p "$ARTIFACTS_DIR/linux-build-x64"
 mkdir -p "$ARTIFACTS_DIR/linux-build-arm64"
-
-# Windows x64
-touch "$ARTIFACTS_DIR/windows-build-x64/CentaurAI-1.0.0-win-x64.exe"
-cat > "$ARTIFACTS_DIR/windows-build-x64/latest.yml" <<'EOF'
-version: 1.0.0
-files:
-  - url: CentaurAI-1.0.0-win-x64.exe
-    sha512: fake-sha512-x64
-    size: 100000
-path: CentaurAI-1.0.0-win-x64.exe
-sha512: fake-sha512-x64
-releaseDate: '2025-01-01'
-EOF
-
-# Windows arm64
-touch "$ARTIFACTS_DIR/windows-build-arm64/CentaurAI-1.0.0-win-arm64.exe"
-cat > "$ARTIFACTS_DIR/windows-build-arm64/latest.yml" <<'EOF'
-version: 1.0.0
-files:
-  - url: CentaurAI-1.0.0-win-arm64.exe
-    sha512: fake-sha512-arm64
-    size: 100000
-path: CentaurAI-1.0.0-win-arm64.exe
-sha512: fake-sha512-arm64
-releaseDate: '2025-01-01'
-EOF
 
 # macOS x64
 touch "$ARTIFACTS_DIR/macos-build-x64/CentaurAI-1.0.0-mac-x64.dmg"
@@ -80,13 +52,12 @@ files:
     size: 300000
 EOF
 
-# Web-CLI tarballs (5 platforms)
+# Web-CLI tarballs (4 platforms)
 WEB_PLATFORMS=(
   "darwin-arm64"
   "darwin-x86_64"
   "linux-arm64"
   "linux-x86_64"
-  "win-x86_64"
 )
 
 for plat in "${WEB_PLATFORMS[@]}"; do

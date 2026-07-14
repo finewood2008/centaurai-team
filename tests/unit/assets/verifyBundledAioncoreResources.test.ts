@@ -24,9 +24,9 @@ function validManifest(platform: string, arch: string, binaryName: string, fallb
   return JSON.stringify({
     service: 'centaurai-core',
     repository: 'finewood2008/centaurai-core',
-    tag: 'v0.1.47',
+    tag: 'v0.2.3',
     commit: 'a'.repeat(40),
-    artifactUrl: `https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-${target}`,
+    artifactUrl: `https://github.com/finewood2008/centaurai-core/releases/download/v0.2.3/centaurai-core-v0.2.3-${target}`,
     sha256: 'b'.repeat(64),
     binaryName,
     fallbackUsed,
@@ -77,7 +77,7 @@ describe('verifyBundledCentauraiCoreResources', () => {
     });
     expect(result.runtimeKey).toBe('win32-x64');
     expect(result.missing).toEqual([]);
-    expect(result.manifest).toMatchObject({ repository: 'finewood2008/centaurai-core', tag: 'v0.1.47' });
+    expect(result.manifest).toMatchObject({ repository: 'finewood2008/centaurai-core', tag: 'v0.2.3' });
   });
 
   it('reports missing managed Node runtime executable', () => {

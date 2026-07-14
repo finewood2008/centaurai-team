@@ -9,6 +9,8 @@ const tempRoots = [];
 
 afterEach(() => {
   delete process.env.CENTAURAI_CORE_RELEASE_COMMIT;
+  delete process.env.GH_TOKEN;
+  delete process.env.GITHUB_TOKEN;
   for (const tempRoot of tempRoots.splice(0)) fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -39,7 +41,7 @@ function fixtureDeps({ sourceBinaryName = 'centaurai-core', checksum = 'valid', 
   return {
     downloadFile(url, outputPath) {
       if (url.endsWith('centaurai-core-checksums.txt')) {
-        const archiveName = 'centaurai-core-v0.1.47-x86_64-unknown-linux-gnu.tar.gz';
+        const archiveName = 'centaurai-core-v0.2.3-x86_64-unknown-linux-gnu.tar.gz';
         const archivePath = path.join(path.dirname(outputPath), archiveName);
         const digest =
           checksum === 'valid'
@@ -56,8 +58,11 @@ function fixtureDeps({ sourceBinaryName = 'centaurai-core', checksum = 'valid', 
     resolveReleaseCommit() {
       return 'a'.repeat(40);
     },
+    resolveReleaseAssetApiUrl(_tag, assetName) {
+      return `https://api.github.test/releases/assets/${assetName}`;
+    },
     execFileSync() {
-      return 'centaurai-core 0.1.47\n';
+      return 'centaurai-core 0.2.3\n';
     },
     prepareManagedResources(_binaryPath, stageDir) {
       const bundleOut = path.join(stageDir, 'managed-resources');
@@ -75,19 +80,19 @@ describe('prepareCentauraiCore', () => {
       projectRoot,
       platform: 'linux',
       arch: 'x64',
-      version: 'v0.1.47',
+      version: 'v0.2.3',
       deps: fixtureDeps(),
     });
 
     expect(result.manifest).toMatchObject({
       repository: 'finewood2008/centaurai-core',
-      tag: 'v0.1.47',
+      tag: 'v0.2.3',
       commit: 'a'.repeat(40),
       binaryName: 'centaurai-core',
       sourceBinaryName: 'centaurai-core',
       fallbackUsed: false,
       artifactUrl:
-        'https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-x86_64-unknown-linux-gnu.tar.gz',
+        'https://github.com/finewood2008/centaurai-core/releases/download/v0.2.3/centaurai-core-v0.2.3-x86_64-unknown-linux-gnu.tar.gz',
       sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     expect(fs.existsSync(path.join(result.dir, 'centaurai-core'))).toBe(true);
@@ -101,7 +106,7 @@ describe('prepareCentauraiCore', () => {
         projectRoot,
         platform: 'linux',
         arch: 'x64',
-        version: 'v0.1.47',
+        version: 'v0.2.3',
         deps: fixtureDeps({ checksum: 'invalid' }),
       })
     ).toThrow('Checksum mismatch');
@@ -115,7 +120,7 @@ describe('prepareCentauraiCore', () => {
         projectRoot,
         platform: 'linux',
         arch: 'x64',
-        version: 'v0.1.47',
+        version: 'v0.2.3',
         deps: fixtureDeps({ managedResources: false }),
       })
     ).toThrow('Managed resources are incomplete');
@@ -127,7 +132,7 @@ describe('prepareCentauraiCore', () => {
       projectRoot,
       platform: 'linux',
       arch: 'x64',
-      version: 'v0.1.47',
+      version: 'v0.2.3',
       deps: fixtureDeps({ sourceBinaryName: 'aioncore' }),
     });
     expect(result.manifest).toMatchObject({
@@ -143,6 +148,25 @@ describe('prepareCentauraiCore', () => {
       prepareCentauraiCore({ projectRoot: makeRoot(), platform: 'linux', arch: 'x64', version: 'latest' })
     ).toThrow('exact v-prefixed release tag');
   });
+
+  it('uses the authenticated release asset API for a private Core repository', () => {
+    process.env.GH_TOKEN = 'test-token';
+    const projectRoot = makeRoot();
+    const downloads = [];
+    const deps = fixtureDeps();
+    const fixtureDownload = deps.downloadFile;
+    deps.downloadFile = (url, outputPath, token, options) => {
+      downloads.push({ url, token, options });
+      fixtureDownload(url, outputPath);
+    };
+
+    prepareCentauraiCore({ projectRoot, platform: 'linux', arch: 'x64', version: 'v0.2.3', deps });
+
+    expect(downloads).toHaveLength(2);
+    expect(downloads.every(({ url }) => url.startsWith('https://api.github.test/releases/assets/'))).toBe(true);
+    expect(downloads.every(({ token }) => token === 'test-token')).toBe(true);
+    expect(downloads.every(({ options }) => options.githubReleaseAsset === true)).toBe(true);
+  });
 });
 
 describe('downloader helpers', () => {
@@ -153,7 +177,7 @@ describe('downloader helpers', () => {
   });
 
   it('requires exactly one matching checksum entry', () => {
-    const asset = 'centaurai-core-v0.1.47-x86_64-unknown-linux-gnu.tar.gz';
+    const asset = 'centaurai-core-v0.2.3-x86_64-unknown-linux-gnu.tar.gz';
     expect(parseChecksumFile(`${'a'.repeat(64)}  ${asset}\n`, asset)).toBe('a'.repeat(64));
     expect(() => parseChecksumFile(`${'a'.repeat(64)}  another.tar.gz\n`, asset)).toThrow('exactly one entry');
   });

@@ -28,6 +28,7 @@ on:
 
 env:
   BUN_INSTALL_REGISTRY: 'https://registry.npmjs.org/'
+  NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
   code-quality:
@@ -66,7 +67,7 @@ jobs:
         run: bunx tsc --noEmit
 
       - name: Run unit tests
-        run: bunx vitest run
+        run: bun run test
 
   pack-web-cli:
     name: Pack web-cli ${{ matrix.platform }}-${{ matrix.arch }}
@@ -81,7 +82,6 @@ jobs:
           - { platform: darwin, arch: x64, os: macos-14 }
           - { platform: linux, arch: x64, os: ubuntu-latest }
           - { platform: linux, arch: arm64, os: ubuntu-24.04-arm }
-          - { platform: win32, arch: x64, os: windows-2022 }
 
     steps:
       - name: Checkout code
@@ -119,7 +119,9 @@ jobs:
           PACK_PLATFORM: ${{ matrix.platform }}
           PACK_ARCH: ${{ matrix.arch }}
           # Exact release tag is pinned in repo-root package.json (centauraiCoreVersion).
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT is required because centaurai-core is a separate private repository.
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v6

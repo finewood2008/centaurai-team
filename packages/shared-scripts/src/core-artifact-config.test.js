@@ -10,7 +10,7 @@ const {
 describe('CentaurAI Core artifact contract', () => {
   it('pins the fork repository and exact release', () => {
     expect(CORE_ARTIFACT_CONFIG.repository).toBe('finewood2008/centaurai-core');
-    expect(CORE_ARTIFACT_CONFIG.version).toBe('v0.1.47');
+    expect(CORE_ARTIFACT_CONFIG.version).toBe('v0.2.3');
     expect(() => assertExactReleaseTag('latest')).toThrow('exact v-prefixed release tag');
   });
 
@@ -23,9 +23,9 @@ describe('CentaurAI Core artifact contract', () => {
     ['win32', 'arm64', 'aarch64-pc-windows-msvc', '.zip'],
   ])('maps %s-%s to its release asset', (platform, arch, releaseTarget, extension) => {
     expect(getTarget(platform, arch)).toMatchObject({ releaseTarget, archiveExtension: extension });
-    expect(getAssetName(platform, arch)).toBe(`centaurai-core-v0.1.47-${releaseTarget}${extension}`);
+    expect(getAssetName(platform, arch)).toBe(`centaurai-core-v0.2.3-${releaseTarget}${extension}`);
     expect(getArtifactUrl(platform, arch)).toBe(
-      `https://github.com/finewood2008/centaurai-core/releases/download/v0.1.47/centaurai-core-v0.1.47-${releaseTarget}${extension}`
+      `https://github.com/finewood2008/centaurai-core/releases/download/v0.2.3/centaurai-core-v0.2.3-${releaseTarget}${extension}`
     );
   });
 

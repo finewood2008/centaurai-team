@@ -31,40 +31,53 @@ export async function createTeam(page: Page, name: string, leaderType?: string):
   await createBtn.waitFor({ state: 'visible', timeout: 10_000 });
   await createBtn.click();
 
-  const modal = page.locator('.arco-modal').last();
+  const modal = page.locator('.team-create-modal');
   await modal.waitFor({ state: 'visible', timeout: 5_000 });
 
-  const nameInput = modal.getByRole('textbox').first();
+  const nameInput = modal.locator('[data-testid="team-create-name-input"]');
   await nameInput.fill(name);
-
-  const leaderSelect = modal.locator('[data-testid="team-create-leader-select"]');
-  const hasLeaderSelect = await leaderSelect.isVisible({ timeout: 3_000 }).catch(() => false);
-  if (!hasLeaderSelect) {
-    await closeModal(page, modal);
-    throw new Error('No supported agents installed — skip this test');
-  }
-  await leaderSelect.click();
 
   const option = await pickLeaderOption(page, leaderType);
   if (!option) {
-    await page.keyboard.press('Escape').catch(() => {});
     await closeModal(page, modal);
     throw new Error(`No agent option matched leader type "${leaderType ?? 'any'}" — skip this test`);
   }
-  await option.click();
+  await ensureTeamAgentOptionSelected(option);
 
   const confirmBtn = modal.locator('.arco-btn-primary');
   await expect(confirmBtn).toBeEnabled({ timeout: 5_000 });
-  await confirmBtn.click();
+  const teamId = await submitTeamCreation(page, modal, confirmBtn);
 
-  await page.waitForURL(/\/team\//, { timeout: 15_000 });
+  // onCreated refreshes the sidebar asynchronously. Wait for that refresh to
+  // finish before callers hover, collapse, or otherwise act on the new row.
+  await expect(page.locator(`[data-testid="team-sider-item-${teamId}"]`)).toBeVisible({ timeout: 10_000 });
+
+  return teamId;
+}
+
+/** Submit an open TeamCreateModal and wait for a genuinely new team route. */
+export async function submitTeamCreation(page: Page, modal: Locator, confirmBtn: Locator): Promise<string> {
+  const previousHash = await page.evaluate(() => window.location.hash);
+  await confirmBtn.click();
+  await expect(modal).toBeHidden({ timeout: 15_000 });
+  await page.waitForFunction(
+    (previous) => window.location.hash !== previous && /#\/team\/[^/?#]+/.test(window.location.hash),
+    previousHash,
+    { timeout: 15_000 }
+  );
 
   const hash = await page.evaluate(() => window.location.hash);
   const match = hash.match(/#\/team\/([^/?#]+)/);
-  if (!match) {
-    throw new Error(`Could not extract teamId from URL hash: ${hash}`);
-  }
+  if (!match) throw new Error(`Could not extract teamId from URL hash: ${hash}`);
   return match[1];
+}
+
+/** Select an agent row without accidentally toggling a restored last-used selection off. */
+export async function ensureTeamAgentOptionSelected(option: Locator): Promise<void> {
+  if ((await option.getAttribute('aria-checked')) !== 'true') {
+    await option.click();
+  }
+  await expect(option).toHaveAttribute('aria-checked', 'true');
 }
 
 async function pickLeaderOption(page: Page, leaderType?: string): Promise<Locator | null> {
@@ -97,11 +110,7 @@ async function closeModal(page: Page, modal: Locator): Promise<void> {
   if ((await cancel.count().catch(() => 0)) > 0) {
     await cancel.click({ force: true }).catch(() => {});
   }
-  await page
-    .locator('.arco-modal')
-    .last()
-    .waitFor({ state: 'hidden', timeout: 5_000 })
-    .catch(() => {});
+  await modal.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
 }
 
 /**

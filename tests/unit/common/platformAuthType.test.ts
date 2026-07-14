@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { AuthType } from '@office-ai/aioncli-core';
+import { AuthType } from '@/common/api/AuthType';
 import { getAuthTypeFromPlatform, getProviderAuthType } from '@/common/utils/platformAuthType';
 
 vi.mock('@/common/utils/platformConstants', () => ({

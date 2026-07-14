@@ -87,10 +87,8 @@ bun start
 | `bun run test:coverage`      | Run tests with coverage report                    |
 | `bun run test:contract`      | Run contract tests                                |
 | `bun run test:integration`   | Run integration tests                             |
-| `bun run test:bun`           | Run Bun-specific database driver tests            |
 | `bun run test:e2e`           | Run end-to-end tests (Playwright)                 |
 | `bun run test:packaged:i18n` | Run i18n integration tests against packaged build |
-| `bun run test:packaged:bun`  | Run Bun packaged integration tests                |
 
 ### Debug
 

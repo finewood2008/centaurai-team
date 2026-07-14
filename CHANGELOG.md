@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.6.0](https://github.com/finewood2008/centaurai-team/compare/v2.5.0...v2.6.0) (2026-07-14)
+
+### Highlights
+
+- Migrated the Team runtime to CentaurAI Core and pinned the reproducible `v0.2.3` release.
+- Added team knowledge-base workspaces, local vector retrieval, NAS indexing, and generated-artifact discovery.
+- Expanded multi-agent roundtable meetings, expert visibility, capacity controls, health grouping, and launch gates.
+- Hardened LAN/WebUI authentication, tenant isolation, remote-access recovery, content previews, and image-workbench proxying.
+- Unified provider and local-model settings, fixed secret-preserving updates, reliable model-selector closing, Ollama disabling, and vector database settings.
+- Added explicit development/stable release channels: development builds show a visible badge while formal builds remain unmarked.
+
+### Release Engineering
+
+- Private CentaurAI Core assets are downloaded through the authenticated GitHub Release Asset API.
+- Increased Web CLI build memory and aligned desktop/Web CLI packaging with the shared private-Core credential.
+- Published desktop and Web CLI artifacts for Linux and macOS only; Windows builds are not part of 2.6.
+
+---
+
 ## [2.1.14](https://github.com/iOfficeAI/AionUi/compare/v2.1.13...v2.1.14) (2026-06-08)
 
 ### Desktop
