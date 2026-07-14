@@ -30,6 +30,7 @@ const UNTRUSTED_CONTEXT_END = '<<<END_UNTRUSTED_KNOWLEDGE_CONTEXT>>>';
 const shouldUseDirectVectorDb = (): boolean => isElectronDesktop() && !isRemoteClientBridgeMode();
 
 const clip = (value: unknown, maxLength: number): string => {
+  // oxlint-disable-next-line no-control-regex -- Untrusted knowledge text must not retain null bytes.
   const text = String(value ?? '').replace(/\0/g, '');
   return text.length > maxLength ? `${text.slice(0, maxLength)}…` : text;
 };

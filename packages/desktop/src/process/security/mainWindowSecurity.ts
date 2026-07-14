@@ -59,6 +59,7 @@ export function normalizeDistributedServerTarget(
   if (
     !rawHost ||
     rawHost.length > 253 ||
+    // oxlint-disable-next-line no-control-regex -- Host validation intentionally rejects ASCII controls.
     /[\u0000-\u0020/\\?#@]/.test(rawHost) ||
     !Number.isInteger(port) ||
     port < 1 ||

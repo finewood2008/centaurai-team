@@ -88,6 +88,7 @@ function isRecord(value: unknown): value is JsonRecord {
 function validOwner(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
+  // oxlint-disable-next-line no-control-regex -- Tenant identifiers intentionally reject ASCII controls.
   if (!normalized || normalized.length > MAX_OWNER_CHARS || /[\u0000-\u001f\u007f]/.test(normalized)) return null;
   return normalized;
 }
@@ -95,6 +96,7 @@ function validOwner(value: unknown): string | null {
 function validConversationId(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
+  // oxlint-disable-next-line no-control-regex -- Conversation identifiers intentionally reject ASCII controls.
   if (!normalized || normalized.length > MAX_CONVERSATION_ID_CHARS || /[\u0000-\u001f\u007f/\\]/.test(normalized)) {
     return null;
   }
@@ -153,6 +155,7 @@ function replaceEnvelopeData(value: unknown, data: unknown): unknown {
 function safeString(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
+  // oxlint-disable-next-line no-control-regex -- Stored tenant metadata intentionally rejects ASCII controls.
   return normalized && normalized.length <= max && !/[\u0000-\u001f\u007f]/.test(normalized) ? normalized : undefined;
 }
 
