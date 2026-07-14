@@ -40,6 +40,7 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
 }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [dropdownVisible, setDropdownVisible] = React.useState(false);
   const defaultModelLabel = t('common.defaultModel');
 
   // 获取模型配置数据（包含健康状态）
@@ -90,7 +91,9 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
   if (isGeminiMode) {
     return (
       <Dropdown
-        trigger='hover'
+        trigger='click'
+        popupVisible={dropdownVisible}
+        onVisibleChange={setDropdownVisible}
         droplist={
           <Menu selectedKeys={current_model ? [current_model.id + current_model.use_model] : []}>
             {!enabledModelList || enabledModelList.length === 0
@@ -105,7 +108,10 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
                   <Menu.Item
                     key='add-model'
                     className='text-12px text-t-secondary'
-                    onClick={() => navigate('/settings/model')}
+                    onClick={() => {
+                      setDropdownVisible(false);
+                      navigate('/settings/model');
+                    }}
                   >
                     <Plus theme='outline' size='12' />
                     {t('settings.addModel')}
@@ -135,6 +141,7 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
                                 current_model?.id + current_model?.use_model === provider.id + modelName ? '!bg-2' : ''
                               }
                               onClick={() => {
+                                setDropdownVisible(false);
                                 setCurrentModel({ ...provider, use_model: modelName }).catch((error) => {
                                   console.error('Failed to set current model:', error);
                                 });
@@ -155,7 +162,10 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
                   <Menu.Item
                     key='add-model'
                     className='text-12px text-t-secondary'
-                    onClick={() => navigate('/settings/model')}
+                    onClick={() => {
+                      setDropdownVisible(false);
+                      navigate('/settings/model');
+                    }}
                   >
                     <Plus theme='outline' size='12' />
                     {t('settings.addModel')}
@@ -186,6 +196,8 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
       return (
         <Dropdown
           trigger='click'
+          popupVisible={dropdownVisible}
+          onVisibleChange={setDropdownVisible}
           droplist={
             <Menu selectedKeys={selectedAcpModel ? [selectedAcpModel] : []}>
               {currentAcpCachedModelInfo.available_models.map((model) => {
@@ -203,7 +215,10 @@ const GuidModelSelector: React.FC<GuidModelSelectorProps> = ({
                   <Menu.Item
                     key={model.id}
                     className={model.id === selectedAcpModel ? '!bg-2' : ''}
-                    onClick={() => setSelectedAcpModel(model.id)}
+                    onClick={() => {
+                      setDropdownVisible(false);
+                      setSelectedAcpModel(model.id);
+                    }}
                   >
                     <div className='flex items-center gap-8px w-full'>
                       {healthStatus !== 'unknown' && (

@@ -172,14 +172,24 @@ test.describe('Aionrs Chat - Model Selection (P0 + P1)', () => {
       await modelSelector.click();
       await page.waitForTimeout(500);
 
-      // Screenshot 03: model selector open
-      await takeScreenshot(page, `chat-aionrs/tc-a-07/03-model-selector-open.png`);
-
       const secondModelOption = page.locator(
         `[data-testid="aionrs-model-option-${preconditions.models!.modelB.useModel}"]`
       );
       await secondModelOption.waitFor({ state: 'visible', timeout: 5000 });
+
+      // The trigger must close the controlled model picker on the second click.
+      await modelSelector.click();
+      await expect(secondModelOption).toBeHidden({ timeout: 5000 });
+
+      // Reopen it to verify selecting an option closes it as well.
+      await modelSelector.click();
+      await secondModelOption.waitFor({ state: 'visible', timeout: 5000 });
+
+      // Screenshot 03: model selector open
+      await takeScreenshot(page, `chat-aionrs/tc-a-07/03-model-selector-open.png`);
+
       await secondModelOption.click();
+      await expect(secondModelOption).toBeHidden({ timeout: 5000 });
       await page.waitForTimeout(1000);
 
       // Step 6: Send second message

@@ -17,6 +17,7 @@ const GoogleModelSelector: React.FC<{
   variant?: 'header' | 'settings';
 }> = ({ selection, disabled = false, label: customLabel, variant = 'header' }) => {
   const { t } = useTranslation();
+  const [dropdownVisible, setDropdownVisible] = React.useState(false);
   const { isOpen: isPreviewOpen } = usePreviewContext();
   const layout = useLayoutContext();
   const compact = variant === 'header' && (isPreviewOpen || layout?.isMobile);
@@ -100,6 +101,8 @@ const GoogleModelSelector: React.FC<{
   return (
     <Dropdown
       trigger='click'
+      popupVisible={dropdownVisible}
+      onVisibleChange={setDropdownVisible}
       position={variant === 'settings' ? 'br' : undefined}
       droplist={
         <Menu>
@@ -112,7 +115,10 @@ const GoogleModelSelector: React.FC<{
                 {models.map((modelName) => (
                   <Menu.Item
                     key={`${provider.id}-${modelName}`}
-                    onClick={() => void handleSelectModel(provider, modelName)}
+                    onClick={() => {
+                      setDropdownVisible(false);
+                      void handleSelectModel(provider, modelName);
+                    }}
                   >
                     <div className='flex items-center gap-8px w-full'>
                       <span>{modelName}</span>

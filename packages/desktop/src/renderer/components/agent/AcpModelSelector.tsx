@@ -11,7 +11,7 @@ import { getModelDisplayLabel } from '@/renderer/utils/model/agentLogo';
 import { iconColors } from '@/renderer/styles/colors';
 import { Button, Dropdown, Menu, Message, Tooltip } from '@arco-design/web-react';
 import { Brain, Down } from '@icon-park/react';
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import MarqueePillLabel from './MarqueePillLabel';
 
@@ -34,6 +34,7 @@ const AcpModelSelector: React.FC<{
   waitForWarmup?: boolean;
 }> = ({ conversation_id, backend, initialModelId, waitForWarmup = false }) => {
   const { t } = useTranslation();
+  const [dropdownVisible, setDropdownVisible] = useState(false);
   const layout = useLayoutContext();
   const isMobileHeaderCompact = Boolean(layout?.isMobile);
   const prepareRuntime = useCallback(() => warmupConversation(conversation_id), [conversation_id]);
@@ -102,6 +103,8 @@ const AcpModelSelector: React.FC<{
   return (
     <Dropdown
       trigger='click'
+      popupVisible={dropdownVisible}
+      onVisibleChange={setDropdownVisible}
       // Mobile: portal the popup to <body> so it escapes the titlebar slot.
       // Desktop: leave default container so click events reach Menu.Item normally.
       {...(isMobileHeaderCompact ? { getPopupContainer: () => document.body } : {})}
@@ -111,7 +114,10 @@ const AcpModelSelector: React.FC<{
             <Menu.Item
               key={model.id}
               className={model.id === model_info.current_model_id ? 'bg-2!' : ''}
-              onClick={() => selectModel(model.id)}
+              onClick={() => {
+                setDropdownVisible(false);
+                void selectModel(model.id);
+              }}
             >
               <div className='flex items-center gap-8px w-full'>
                 <span>{model.label || model.id}</span>

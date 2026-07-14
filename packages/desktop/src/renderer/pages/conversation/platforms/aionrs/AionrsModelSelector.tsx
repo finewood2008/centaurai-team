@@ -20,6 +20,7 @@ const AionrsModelSelector: React.FC<{
   disabled?: boolean;
 }> = ({ selection, disabled = false }) => {
   const { t } = useTranslation();
+  const [dropdownVisible, setDropdownVisible] = React.useState(false);
   const { isOpen: isPreviewOpen } = usePreviewContext();
   const layout = useLayoutContext();
   const compact = isPreviewOpen || layout?.isMobile;
@@ -64,6 +65,8 @@ const AionrsModelSelector: React.FC<{
   return (
     <Dropdown
       trigger='click'
+      popupVisible={dropdownVisible}
+      onVisibleChange={setDropdownVisible}
       // Mobile: portal the popup to <body> so it escapes the titlebar slot.
       // Desktop: leave default container so click events reach Menu.Item normally.
       {...(isMobileHeaderCompact ? { getPopupContainer: () => document.body } : {})}
@@ -80,7 +83,10 @@ const AionrsModelSelector: React.FC<{
                     key={`${provider.id}-${modelName}`}
                     data-testid={`aionrs-model-option-${modelName}`}
                     className={current_model?.id + current_model?.use_model === provider.id + modelName ? '!bg-2' : ''}
-                    onClick={() => void handleSelectModel(provider, modelName)}
+                    onClick={() => {
+                      setDropdownVisible(false);
+                      void handleSelectModel(provider, modelName);
+                    }}
                   >
                     <div className='flex items-center gap-8px w-full'>
                       <span>{modelName}</span>
