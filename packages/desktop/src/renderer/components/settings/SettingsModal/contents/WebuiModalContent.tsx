@@ -318,11 +318,8 @@ const WebuiModalContent: React.FC = () => {
     if (wasRunning) {
       setStartLoading(true);
       try {
-        // 1. 先停止服务器 / First stop the server
-        await webui.stop.invoke();
-
-        // Await the real result — a 3s race fallback used to mask backend
-        // failures as success (see handleToggle).
+        // The main process owns the serialized stop/rebind operation and rolls
+        // back to the previous listener if the requested binding cannot start.
         const startResult = await webui.start.invoke({ port, allowRemote: checked });
 
         const responseIP = startResult.lanIP;
@@ -345,8 +342,10 @@ const WebuiModalContent: React.FC = () => {
         await configService.set(DESKTOP_WEBUI_ALLOW_REMOTE_KEY, checked);
         Message.success(t('settings.webui.restartSuccess'));
       } catch (error) {
-        // 回滚 UI 状态 / Rollback UI state
+        // Reload the main-process snapshot: it may have restored the previous
+        // listener, or both the requested start and rollback may have failed.
         setAllowRemotePreference(previousAllowRemote);
+        await loadStatus();
         console.error('[WebuiModal] Restart error:', error);
         Message.error(t('settings.webui.operationFailed'));
       } finally {

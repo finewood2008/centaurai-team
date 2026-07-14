@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  getDesktopWebUIStatus,
+  requestDesktopWebUIRestore,
   resolveImageWorkbenchConfig,
   resolveVectorEndpoint,
   restoreDesktopWebUIFromPreferences,
+  startDesktopWebUI,
+  stopDesktopWebUI,
 } from '@/process/utils/webuiConfig';
 import { DEFAULT_VECTOR_DB_ENDPOINT } from '@/common/config/constants';
 
@@ -53,15 +57,19 @@ const ENABLED_REMOTE = {
 };
 
 describe('restoreDesktopWebUIFromPreferences', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await stopDesktopWebUI();
     httpRequestMock.mockReset();
     startWebHostMock.mockReset();
     startWebHostMock.mockResolvedValue(okHandle);
+    okHandle.stop.mockReset();
+    okHandle.stop.mockResolvedValue(undefined);
     (globalThis as { __backendPort?: number }).__backendPort = 51441;
     vi.useFakeTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopDesktopWebUI();
     vi.useRealTimers();
     delete (globalThis as { __backendPort?: number }).__backendPort;
   });
@@ -119,6 +127,73 @@ describe('restoreDesktopWebUIFromPreferences', () => {
     await restoreDesktopWebUIFromPreferences();
 
     expect(startWebHostMock).not.toHaveBeenCalled();
+  });
+
+  it('does not restart a healthy listener when restore is requested again', async () => {
+    httpRequestMock.mockResolvedValue(ENABLED_REMOTE);
+
+    await restoreDesktopWebUIFromPreferences();
+    await restoreDesktopWebUIFromPreferences();
+
+    expect(startWebHostMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts after a late backend-ready request follows an exhausted startup wait', async () => {
+    httpRequestMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const initialRequest = requestDesktopWebUIRestore();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await initialRequest;
+    expect(startWebHostMock).not.toHaveBeenCalled();
+
+    httpRequestMock.mockReset();
+    httpRequestMock.mockResolvedValue(ENABLED_REMOTE);
+    await requestDesktopWebUIRestore();
+
+    expect(startWebHostMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('startDesktopWebUI', () => {
+  beforeEach(async () => {
+    await stopDesktopWebUI();
+    httpRequestMock.mockReset();
+    httpRequestMock.mockResolvedValue({});
+    startWebHostMock.mockReset();
+    (globalThis as { __backendPort?: number }).__backendPort = 51441;
+  });
+
+  afterEach(async () => {
+    await stopDesktopWebUI();
+    delete (globalThis as { __backendPort?: number }).__backendPort;
+  });
+
+  it('restores the previous listener when a binding change fails', async () => {
+    const previousHandle = { ...okHandle, stop: vi.fn().mockResolvedValue(undefined) };
+    const restoredHandle = { ...okHandle, stop: vi.fn().mockResolvedValue(undefined) };
+    startWebHostMock
+      .mockResolvedValueOnce(previousHandle)
+      .mockRejectedValueOnce(new Error('EADDRINUSE'))
+      .mockResolvedValueOnce(restoredHandle);
+
+    await startDesktopWebUI({ port: 25808, allowRemote: true });
+    await expect(startDesktopWebUI({ port: 25808, allowRemote: false })).rejects.toThrow('EADDRINUSE');
+
+    expect(getDesktopWebUIStatus()).toMatchObject({ running: true, port: 25808, allowRemote: true });
+    expect(startWebHostMock.mock.calls.map(([options]) => options.allowRemote)).toEqual([true, false, true]);
+  });
+
+  it('reports a stopped service when both the requested start and rollback fail', async () => {
+    const previousHandle = { ...okHandle, stop: vi.fn().mockResolvedValue(undefined) };
+    startWebHostMock
+      .mockResolvedValueOnce(previousHandle)
+      .mockRejectedValueOnce(new Error('new binding failed'))
+      .mockRejectedValueOnce(new Error('rollback failed'));
+
+    await startDesktopWebUI({ port: 25808, allowRemote: true });
+    await expect(startDesktopWebUI({ port: 25808, allowRemote: false })).rejects.toThrow('new binding failed');
+
+    expect(getDesktopWebUIStatus()).toMatchObject({ running: false, allowRemote: false });
   });
 });
 

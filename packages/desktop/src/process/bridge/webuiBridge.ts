@@ -239,12 +239,19 @@ export function initWebuiBridge(): void {
 
   ipcBridge.webui.start.provider(async (params) => {
     await maybeSeedInitialPassword();
-    const handle = await startDesktopWebUI({
-      port: params?.port,
-      allowRemote: params?.allowRemote,
-    });
-    await announceDesktopWebUIStarted(handle);
-    return handle;
+    try {
+      const handle = await startDesktopWebUI({
+        port: params?.port,
+        allowRemote: params?.allowRemote,
+      });
+      await announceDesktopWebUIStarted(handle);
+      return handle;
+    } catch (error) {
+      // A failed rebind may also fail its listener rollback. Do not leave a
+      // stale LAN discovery advertisement pointing at a stopped WebUI.
+      if (!getDesktopWebUIStatus().running) await stopAdvertising();
+      throw error;
+    }
   });
 
   ipcBridge.webui.stop.provider(async () => {
