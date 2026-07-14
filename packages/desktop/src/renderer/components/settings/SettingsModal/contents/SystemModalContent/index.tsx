@@ -11,6 +11,11 @@ import { configService } from '@/common/config/configService';
 import AionScrollArea from '@/renderer/components/base/AionScrollArea';
 import FeedbackButton from '@/renderer/components/base/FeedbackButton';
 import LanguageSwitcher from '@/renderer/components/settings/LanguageSwitcher';
+import {
+  fetchVectorDatabaseStatus,
+  type VectorDatabaseCapabilities,
+  type VectorDatabaseStats,
+} from '@/renderer/services/vectorDatabaseStatus';
 import { iconColors } from '@/renderer/styles/colors';
 import { isElectronDesktop } from '@/renderer/utils/platform';
 import {
@@ -77,13 +82,8 @@ const SystemModalContent: React.FC = () => {
   const [vectorDBStatus, setVectorDBStatus] = useState<{
     ok: boolean;
     error?: string;
-    caps?: { text_model?: string; reranker?: boolean; visual?: boolean; ocr?: boolean; hybrid_bm25?: boolean };
-    stats?: {
-      total_documents?: number;
-      total_chunks?: number;
-      visual_indexed_images?: number;
-      image_documents?: number;
-    };
+    caps?: VectorDatabaseCapabilities;
+    stats?: VectorDatabaseStats;
   } | null>(null);
 
   useEffect(() => {
@@ -347,12 +347,9 @@ const SystemModalContent: React.FC = () => {
     setVectorDBTesting(true);
     setVectorDBStatus(null);
     try {
-      const resp = await fetch(`${vectorDBEndpoint}/api/health`);
-      const data = await resp.json();
-      if (data.status === 'ok') {
-        const statsResp = await fetch(`${vectorDBEndpoint}/api/stats`);
-        const stats = await statsResp.json();
-        setVectorDBStatus({ ok: true, caps: data.capabilities ?? {}, stats });
+      const result = await fetchVectorDatabaseStatus(vectorDBEndpoint);
+      if (result.status === 'ok') {
+        setVectorDBStatus({ ok: true, caps: result.capabilities ?? {}, stats: result.stats });
       } else {
         setVectorDBStatus({ ok: false, error: '服务异常' });
       }

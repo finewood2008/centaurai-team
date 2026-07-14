@@ -72,6 +72,16 @@ describe('local vector custom protocol', () => {
     expect(captured[0].body.toString('utf8')).toContain('hello knowledge');
   });
 
+  it.each(['/api/health', '/api/stats'])('allows the read-only status route %s', async (path) => {
+    const handler = createLocalVectorProtocolHandler(async () => endpoint);
+
+    const response = await handler(new Request(`centaur-vector://local${path}`));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(captured[0]).toMatchObject({ method: 'GET', url: path });
+  });
+
   it('makes active upstream content inert and strips non-allowlisted headers', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response('<svg><script>globalThis.pwned=true</script></svg>', {
@@ -104,7 +114,8 @@ describe('local vector custom protocol', () => {
       new Request('centaur-vector://local/api/documents/a/b', { method: 'DELETE' }),
     ];
 
-    for (const request of requests) expect((await handler(request)).status).toBe(403);
+    const responses = await Promise.all(requests.map((request) => handler(request)));
+    for (const response of responses) expect(response.status).toBe(403);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

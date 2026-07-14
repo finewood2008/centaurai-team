@@ -2422,6 +2422,34 @@ async function handleVectorDocuments(
   }
 }
 
+/** Return vector DB health and collection statistics without exposing its loopback origin. */
+async function handleVectorStatus(
+  req: IncomingMessage,
+  res: ServerResponse,
+  identity: AuthGateIdentity,
+  allowedEndpoint: TrustedVectorEndpoint
+): Promise<void> {
+  const endpoint = endpointFromRequest(req, undefined, allowedEndpoint);
+  if (!endpoint) {
+    sendJsonResponse(res, 400, { error: 'INVALID_ENDPOINT' });
+    return;
+  }
+
+  try {
+    const [health, stats] = await Promise.all([
+      vectorJson(endpoint, '/api/health', { identity }),
+      vectorJson(endpoint, '/api/stats', { identity }),
+    ]);
+    if (health.status < 200 || health.status >= 300 || stats.status < 200 || stats.status >= 300) {
+      sendJsonResponse(res, 502, { error: 'VECTOR_DB_UNHEALTHY' });
+      return;
+    }
+    sendJsonResponse(res, 200, { health: health.body, stats: stats.body });
+  } catch (error) {
+    sendVectorProxyError(res, error);
+  }
+}
+
 /** Proxy a knowledge-base image thumbnail to the local vector DB's /api/image. */
 async function handleVectorImage(
   req: IncomingMessage,
@@ -2931,6 +2959,17 @@ export async function startStaticServer(opts: StaticServerOptions): Promise<Stat
           return;
         }
         await handleVectorDocuments(req, res, identity, vectorEndpoint);
+        return;
+      }
+
+      // /api/vector-status — health/capability summary for the settings page.
+      if (req.url.startsWith('/api/vector-status') && req.method === 'GET') {
+        const identity = await resolveRequestIdentity(gate, req, opts.backendPort, requireAuth);
+        if (!identity) {
+          sendJsonResponse(res, 401, { success: false, error: 'UNAUTHENTICATED' });
+          return;
+        }
+        await handleVectorStatus(req, res, identity, vectorEndpoint);
         return;
       }
 

@@ -114,10 +114,21 @@ export function fetchWithWebuiAuth(input: RequestInfo | URL, init: RequestInit =
   for (const [name, value] of Object.entries(getWebuiGateHeaders())) {
     if (!headers.has(name)) headers.set(name, value);
   }
+  let credentials: RequestCredentials = 'omit';
+  if (init.credentials) {
+    credentials = init.credentials;
+  } else if (typeof window !== 'undefined' && window.location?.href) {
+    try {
+      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      credentials = new URL(rawUrl, window.location.href).origin === window.location.origin ? 'include' : 'omit';
+    } catch {
+      credentials = 'omit';
+    }
+  }
   return fetch(input, {
     ...init,
     headers,
-    credentials: init.credentials ?? 'include',
+    credentials,
   });
 }
 

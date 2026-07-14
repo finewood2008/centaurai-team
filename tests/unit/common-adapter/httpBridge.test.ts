@@ -138,12 +138,13 @@ describe('httpBridge', () => {
   });
 
   describe('fetchWithWebuiAuth', () => {
-    it('adds distributed gate authentication and credentials to raw WebHost requests', async () => {
+    it('adds distributed gate authentication without credentialed cross-origin CORS', async () => {
       const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
       vi.stubGlobal('window', {
         __clientMode: true,
         __backendHost: '192.168.1.25',
         __backendPort: 25808,
+        location: { href: 'http://127.0.0.1:5173/', origin: 'http://127.0.0.1:5173' },
         localStorage: {
           getItem: vi.fn(() => 'gate-token'),
           setItem: vi.fn(),
@@ -159,9 +160,38 @@ describe('httpBridge', () => {
       });
 
       const init = fetchSpy.mock.calls[0][1] as RequestInit;
-      expect(init.credentials).toBe('include');
+      expect(init.credentials).toBe('omit');
       expect(new Headers(init.headers).get('X-WebUI-Gate-Token')).toBe('gate-token');
       expect(new Headers(init.headers).get('Content-Type')).toBe('application/json');
+    });
+
+    it('includes the HttpOnly session cookie for same-origin browser WebUI requests', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal('window', {
+        location: { href: 'http://192.168.1.25:25808/', origin: 'http://192.168.1.25:25808' },
+        localStorage: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+      });
+      vi.stubGlobal('document', {});
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await fetchWithWebuiAuth('/api/vector-status');
+
+      expect((fetchSpy.mock.calls[0][1] as RequestInit).credentials).toBe('include');
+    });
+
+    it('omits credentials when Electron calls its loopback Core', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal('window', {
+        __backendPort: 51442,
+        location: { href: 'http://127.0.0.1:5173/', origin: 'http://127.0.0.1:5173' },
+        localStorage: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() },
+      });
+      vi.stubGlobal('document', {});
+      vi.stubGlobal('fetch', fetchSpy);
+
+      await fetchWithWebuiAuth('http://127.0.0.1:51442/api/settings/client');
+
+      expect((fetchSpy.mock.calls[0][1] as RequestInit).credentials).toBe('omit');
     });
 
     it('never persists the gate bearer in browser WebUI script-readable storage', () => {

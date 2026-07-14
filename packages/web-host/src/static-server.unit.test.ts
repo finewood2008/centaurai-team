@@ -1392,6 +1392,40 @@ describe('static-server', () => {
     await vectorDb.close();
   });
 
+  it('GET /api/vector-status proxies health and stats from the configured vector DB', async () => {
+    const backend = await startMockBackend((_req, res) => res.end('backend'));
+    stopBackend = backend.close;
+    const seenPaths: string[] = [];
+    const vectorDb = await startMockBackend((req, res) => {
+      seenPaths.push(req.url || '');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.url === '/api/health') {
+        res.end(JSON.stringify({ status: 'ok', capabilities: { text_model: 'bge-small-zh' } }));
+        return;
+      }
+      res.end(JSON.stringify({ total_documents: 3, total_chunks: 12 }));
+    });
+
+    try {
+      handle = await startStaticServer({
+        staticDir,
+        backendPort: backend.port,
+        port: 0,
+        vectorEndpoint: `http://127.0.0.1:${vectorDb.port}`,
+      });
+      const response = await fetch(`${handle.localUrl}/api/vector-status`);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        health: { status: 'ok', capabilities: { text_model: 'bge-small-zh' } },
+        stats: { total_documents: 3, total_chunks: 12 },
+      });
+      expect(seenPaths.toSorted()).toEqual(['/api/health', '/api/stats']);
+    } finally {
+      await vectorDb.close();
+    }
+  });
+
   it('serves active vector thumbnails as inert text on the authenticated origin', async () => {
     const backend = await startMockBackend((_req, res) => res.end('nope'));
     stopBackend = backend.close;

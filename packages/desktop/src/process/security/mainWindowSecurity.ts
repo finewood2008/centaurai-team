@@ -115,7 +115,14 @@ export function isAllowedImageWorkbenchBackendRequest(method: string, pathname: 
 
 /** Strict surface exposed by the Electron-only local vector protocol. */
 export function isAllowedLocalVectorProxyRequest(method: string, pathname: string): boolean {
-  if (method === 'GET' && (pathname === '/api/documents' || pathname === '/api/image')) return true;
+  if (
+    method === 'GET' &&
+    (pathname === '/api/health' ||
+      pathname === '/api/stats' ||
+      pathname === '/api/documents' ||
+      pathname === '/api/image')
+  )
+    return true;
   if (method === 'POST' && (pathname === '/api/search' || pathname === '/api/upload')) return true;
   return method === 'DELETE' && /^\/api\/documents\/[^/]+$/.test(pathname);
 }
