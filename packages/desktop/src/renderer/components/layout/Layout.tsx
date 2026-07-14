@@ -5,15 +5,16 @@
  */
 
 import { ipcBridge } from '@/common';
-import { TEAM_MODE_ENABLED, IS_DECISION, IS_TEAM } from '@/common/config/constants';
+import { TEAM_MODE_ENABLED, IS_DECISION, IS_TEAM, SHOW_DEVELOPMENT_BUILD_BADGE } from '@/common/config/constants';
 import PwaPullToRefresh from '@/renderer/components/layout/PwaPullToRefresh';
 import MobileTabBar from '@/renderer/components/layout/MobileTabBar';
 import Titlebar from '@/renderer/components/layout/Titlebar';
 import ToolboxPage from '@/renderer/pages/toolbox/ToolboxPage';
 import { PreviewHost } from '@/renderer/pages/conversation/Preview';
-import { Layout as ArcoLayout } from '@arco-design/web-react';
+import { Layout as ArcoLayout, Tag } from '@arco-design/web-react';
 import classNames from 'classnames';
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { LayoutContext } from '@renderer/hooks/context/LayoutContext';
 import { NavigationHistoryProvider } from '@renderer/hooks/context/NavigationHistoryContext';
@@ -113,6 +114,7 @@ const Layout: React.FC<{
     typeof window === 'undefined' ? 390 : window.innerWidth
   );
   const [shouldMountUpdateModal, setShouldMountUpdateModal] = useState(false);
+  const { t } = useTranslation();
   const { onClick } = useDebug();
   const { contextHolder: directorySelectionContextHolder } = useDirectorySelection();
   useDeepLink();
@@ -358,7 +360,14 @@ const Layout: React.FC<{
                   <span className='text-12px text-t-secondary'>
                     半人马AI{IS_DECISION ? '-超级AI参谋团' : IS_TEAM ? '团队工作台' : ''}
                   </span>
-                  <span className='text-16px text-t-primary font-semibold'>CentaurAI</span>
+                  <div className='flex items-center gap-6px'>
+                    <span className='text-16px text-t-primary font-semibold'>CentaurAI</span>
+                    {SHOW_DEVELOPMENT_BUILD_BADGE && (
+                      <Tag color='orange' size='small' className='!text-10px !leading-16px !px-4px !py-0'>
+                        {t('common.developmentBuild')}
+                      </Tag>
+                    )}
+                  </div>
                 </div>
                 {isMobile && !collapsed && (
                   <button

@@ -90,6 +90,36 @@ export const EDITION: Edition = typeof __EDITION__ !== 'undefined' ? normalizeEd
 export const IS_DECISION = EDITION === 'decision';
 export const IS_TEAM = EDITION === 'team';
 
+// ===== Release channel (build-time source branch) =====
+//
+// Development artifacts must stay visually distinguishable from promoted
+// production builds even though both use NODE_ENV=production. The Vite config
+// derives this value from the source branch (`team` is stable; every other
+// branch is development), while CI may override it explicitly.
+export type ReleaseChannel = 'stable' | 'development';
+
+declare const __RELEASE_CHANNEL__: string | undefined;
+
+export function normalizeReleaseChannel(value: string | undefined): ReleaseChannel {
+  return value === 'development' || value === 'dev' ? 'development' : 'stable';
+}
+
+const ENV_RELEASE_CHANNEL = normalizeReleaseChannel(
+  typeof process !== 'undefined'
+    ? (process.env.CENTAURAI_RELEASE_CHANNEL ?? process.env.AIONUI_RELEASE_CHANNEL)
+    : undefined
+);
+
+export const RELEASE_CHANNEL: ReleaseChannel =
+  typeof __RELEASE_CHANNEL__ !== 'undefined' ? normalizeReleaseChannel(__RELEASE_CHANNEL__) : ENV_RELEASE_CHANNEL;
+export const IS_DEVELOPMENT_BUILD = RELEASE_CHANNEL === 'development';
+
+export function shouldShowDevelopmentBuildBadge(edition: Edition, releaseChannel: ReleaseChannel): boolean {
+  return edition === 'team' && releaseChannel === 'development';
+}
+
+export const SHOW_DEVELOPMENT_BUILD_BADGE = shouldShowDevelopmentBuildBadge(EDITION, RELEASE_CHANNEL);
+
 // Capability flags — derived so feature gates never special-case all three editions.
 // 'full' enables everything; each edition subtracts.
 /** 智囊团 (multi-agent decision room): present in full + decision; removed in team. */

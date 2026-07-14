@@ -14,7 +14,7 @@ on:
         default: false
   pull_request:
     types: [opened, synchronize, edited, closed, ready_for_review]
-    branches: [main, dev]
+    branches: [team, dev/team]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'

@@ -31,6 +31,10 @@ env:
   # decision/team downstream repos set CENTAURAI_EDITION=decision|team,
   # which selects the matching electron-builder config + bakes the Vite __EDITION__.
   CENTAURAI_EDITION: ${{ vars.CENTAURAI_EDITION || vars.AIONUI_EDITION }}
+  # Manual builds may check out a different branch from the workflow ref, so pass
+  # the release channel explicitly. Tags and the `team` branch are production;
+  # `dev/team` and feature branches remain visibly marked as development builds.
+  CENTAURAI_RELEASE_CHANNEL: ${{ ((github.ref_type == 'tag' && !contains(github.ref_name, '-dev-')) || inputs.ref == 'team' || (inputs.ref == '' && github.ref_name == 'team')) && 'stable' || 'development' }}
 
 jobs:
   code-quality:

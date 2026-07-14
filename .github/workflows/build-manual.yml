@@ -10,7 +10,7 @@ on:
       branch:
         description: 'Branch to build from'
         required: true
-        default: 'main'
+        default: 'dev/team'
         type: string
       platform:
         description: 'Platform to build'

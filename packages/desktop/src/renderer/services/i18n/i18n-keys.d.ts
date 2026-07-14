@@ -220,6 +220,7 @@ export type I18nKey =
   | 'common.delete'
   | 'common.deleteFailed'
   | 'common.deleteSuccess'
+  | 'common.developmentBuild'
   | 'common.disabled'
   | 'common.download'
   | 'common.edit'

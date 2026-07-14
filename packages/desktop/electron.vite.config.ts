@@ -96,6 +96,33 @@ const buildEdition = process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION
 const multiInstance = process.env.CENTAURAI_MULTI_INSTANCE ?? process.env.AIONUI_MULTI_INSTANCE ?? '';
 const devBackendTarget = `http://127.0.0.1:${devBackendPort}`;
 
+type ReleaseChannel = 'stable' | 'development';
+
+function resolveBuildReleaseChannel(): ReleaseChannel {
+  const explicitChannel = process.env.CENTAURAI_RELEASE_CHANNEL ?? process.env.AIONUI_RELEASE_CHANNEL;
+  if (explicitChannel === 'development' || explicitChannel === 'dev') return 'development';
+  if (explicitChannel === 'stable' || explicitChannel === 'production') return 'stable';
+  if (process.env.GITHUB_REF_TYPE === 'tag') {
+    return process.env.GITHUB_REF_NAME?.includes('-dev-') ? 'development' : 'stable';
+  }
+
+  let sourceBranch = process.env.GITHUB_HEAD_REF ?? process.env.GITHUB_REF_NAME ?? process.env.CI_COMMIT_REF_NAME ?? '';
+  if (!sourceBranch) {
+    try {
+      sourceBranch = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
+    } catch {
+      // Source archives and detached local checkouts have no branch metadata.
+    }
+  }
+
+  // Fail closed when the branch cannot be determined: an unlabelled artifact is
+  // safer than accidentally branding a production release as development.
+  if (!sourceBranch || sourceBranch === 'team') return 'stable';
+  return 'development';
+}
+
+const buildReleaseChannel = resolveBuildReleaseChannel();
+
 const mainAliases = {
   '@': desktopSrcRoot,
   '@common': resolve('packages/desktop/src/common'),
@@ -194,6 +221,7 @@ export default defineConfig(({ mode }) => {
         __EDITION__: JSON.stringify(
           buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'
         ),
+        __RELEASE_CHANNEL__: JSON.stringify(buildReleaseChannel),
       },
     },
 
@@ -375,6 +403,7 @@ export default defineConfig(({ mode }) => {
         __EDITION__: JSON.stringify(
           buildEdition === 'decision' ? 'decision' : buildEdition === 'team' ? 'team' : 'full'
         ),
+        __RELEASE_CHANNEL__: JSON.stringify(buildReleaseChannel),
         global: 'globalThis',
       },
       optimizeDeps: {

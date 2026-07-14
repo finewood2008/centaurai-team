@@ -27,6 +27,24 @@ const DMG_RETRY_DELAY_SEC = 30;
 // Incremental build: hash of source files to detect changes
 const INCREMENTAL_CACHE_FILE = 'out/.build-hash';
 
+function resolveReleaseChannel() {
+  const explicitChannel = process.env.CENTAURAI_RELEASE_CHANNEL ?? process.env.AIONUI_RELEASE_CHANNEL;
+  if (explicitChannel === 'development' || explicitChannel === 'dev') return 'development';
+  if (explicitChannel === 'stable' || explicitChannel === 'production') return 'stable';
+  if (process.env.GITHUB_REF_TYPE === 'tag') {
+    return process.env.GITHUB_REF_NAME?.includes('-dev-') ? 'development' : 'stable';
+  }
+
+  let sourceBranch = process.env.GITHUB_HEAD_REF ?? process.env.GITHUB_REF_NAME ?? process.env.CI_COMMIT_REF_NAME ?? '';
+  if (!sourceBranch) {
+    try {
+      sourceBranch = execSync('git branch --show-current', { encoding: 'utf8' }).trim();
+    } catch {}
+  }
+
+  return sourceBranch && sourceBranch !== 'team' ? 'development' : 'stable';
+}
+
 function walkFiles(dir, acc = []) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
@@ -50,6 +68,7 @@ function computeSourceHash() {
   // (previous edition's) bundle on an incremental build.
   const edition = process.env.CENTAURAI_EDITION ?? process.env.AIONUI_EDITION;
   hash.update('edition:' + (edition === 'decision' ? 'decision' : edition === 'team' ? 'team' : 'full') + '\n');
+  hash.update('release-channel:' + resolveReleaseChannel() + '\n');
   const filesToHash = [
     'package.json',
     'package-lock.json',

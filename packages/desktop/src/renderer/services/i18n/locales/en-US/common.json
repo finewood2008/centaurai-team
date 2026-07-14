@@ -110,6 +110,7 @@
   "status": "Status",
   "agentMode": "Agent Mode",
   "refreshSuccess": "Refreshed",
+  "developmentBuild": "Development",
   "import": "Import",
   "processing": "Processing...",
   "optional": "(optional)",

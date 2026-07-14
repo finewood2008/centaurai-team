@@ -110,6 +110,7 @@
   "status": "狀態",
   "agentMode": "Agent 模式",
   "refreshSuccess": "重新整理成功",
+  "developmentBuild": "開發版",
   "import": "匯入",
   "processing": "處理中...",
   "optional": "（選填）",
